@@ -1,0 +1,48 @@
+import React from 'react';
+import { IconButton } from '../actions/IconButton.jsx';
+
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
+export function Dialog({ open, onClose, title, description, children, footer, width = 480, inline = false, dismissible = true }) {
+  const panel = React.useRef(null);
+  const prev = React.useRef(null);
+  const tid = React.useId();
+  React.useEffect(() => {
+    if (!open) return;
+    prev.current = document.activeElement;
+    const t = setTimeout(() => {
+      const el = panel.current && (panel.current.querySelector('[data-autofocus]') || panel.current.querySelector(FOCUSABLE));
+      el && el.focus();
+    }, 20);
+    return () => { clearTimeout(t); prev.current && prev.current.focus && prev.current.focus(); };
+  }, [open]);
+  if (!open) return null;
+  const onKey = (e) => {
+    if (e.key === 'Escape' && dismissible) { e.stopPropagation(); onClose && onClose(); }
+    if (e.key === 'Tab' && panel.current) {
+      const f = [...panel.current.querySelectorAll(FOCUSABLE)];
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  };
+  return (
+    <div onKeyDown={onKey} style={{
+      position: inline ? 'absolute' : 'fixed', inset: 0, zIndex: 'var(--z-dialog)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+      background: 'var(--surface-overlay)', backdropFilter: 'blur(3px)', animation: 'ag-fade var(--dur-base) var(--ease-out)',
+    }} onMouseDown={(e) => { if (e.target === e.currentTarget && dismissible) onClose && onClose(); }}>
+      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={title ? tid : undefined} style={{
+        position: 'relative', width: '100%', maxWidth: width, maxHeight: '100%', overflow: 'auto',
+        background: 'var(--surface-raised)', color: 'var(--text-body)', borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-xl)',
+        padding: 28, animation: 'ag-dialog-in var(--dur-slow) var(--ease-spring)',
+      }}>
+        {dismissible && <div style={{ position: 'absolute', top: 16, right: 16 }}><IconButton icon="x" label="Close (Esc)" size="sm" onClick={onClose} /></div>}
+        {title && <h2 id={tid} style={{ font: 'var(--weight-bold) 24px/1.15 var(--font-display)', letterSpacing: '-0.02em', color: 'var(--text-strong)', paddingRight: 40 }}>{title}</h2>}
+        {description && <p style={{ marginTop: 8, fontSize: 15, color: 'var(--text-muted)' }}>{description}</p>}
+        {children && <div style={{ marginTop: 20 }}>{children}</div>}
+        {footer && <div style={{ marginTop: 24, display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>{footer}</div>}
+      </div>
+    </div>
+  );
+}

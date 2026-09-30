@@ -1,0 +1,8 @@
+:root{
+--space-0:0;--space-0-5:2px;--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;--space-10:40px;--space-12:48px;--space-16:64px;--space-20:80px;
+--radius-xs:6px;--radius-sm:10px;--radius-md:14px;--radius-lg:20px;--radius-xl:28px;--radius-pill:999px;
+--border-width:1px;--border-width-bold:1.5px;--border-width-heavy:2px;
+--control-sm:32px;--control-md:40px;--control-lg:48px;
+--hit-min:44px;
+--layout-rail:64px;--layout-sidebar:264px;--layout-content:760px;--layout-max:1280px;
+}

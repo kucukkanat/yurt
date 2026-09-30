@@ -1,0 +1,92 @@
+/* Agentic — color tokens. Base ramps first, semantic aliases second. */
+:root{
+/* Ink — warm neutral ramp */
+--ink-0:#FFFFFF;--ink-25:#FBFBF8;--ink-50:#F4F3EE;--ink-100:#EAE9E2;--ink-200:#D8D7CE;--ink-300:#B7B6AC;--ink-400:#8E8D84;--ink-500:#686760;--ink-600:#4B4B46;--ink-700:#343431;--ink-800:#232321;--ink-900:#161615;--ink-950:#0D0D0C;
+/* Cobalt — primary / user intent */
+--cobalt-50:#EEF2FF;--cobalt-100:#DDE5FF;--cobalt-200:#BACAFF;--cobalt-300:#8DA5FF;--cobalt-400:#5D7CFF;--cobalt-500:#2F55FF;--cobalt-600:#1F3FE0;--cobalt-700:#1830B3;--cobalt-800:#142687;--cobalt-900:#0F1C5C;
+/* Volt — the agent. Anything the AI is doing right now. */
+--volt-50:#FAFFE6;--volt-100:#F2FFC2;--volt-200:#E9FF8F;--volt-300:#DEFF5C;--volt-400:#D2FF2E;--volt-500:#B8EA0F;--volt-600:#8BB300;--volt-700:#5F7A00;--volt-800:#435600;--volt-900:#2B3700;
+/* Coral — the human. Needs-you moments, approvals, hand-offs. */
+--coral-50:#FFF2EE;--coral-100:#FFE1D8;--coral-200:#FFC1AF;--coral-300:#FF9B7D;--coral-400:#FF7852;--coral-500:#FF5A33;--coral-600:#E53F19;--coral-700:#B32C0C;--coral-800:#7F1F08;
+/* Status */
+--green-100:#DDF6E6;--green-500:#14A34F;--green-700:#0B6E34;
+--amber-100:#FFF1CC;--amber-500:#F2A100;--amber-700:#8F5B00;
+--red-100:#FDE2E0;--red-500:#E3302A;--red-700:#A31C17;
+
+/* Semantic — surfaces */
+--surface-page:var(--ink-25);
+--surface-card:var(--ink-0);
+--surface-sunken:var(--ink-50);
+--surface-raised:var(--ink-0);
+--surface-hover:rgba(22,22,21,.05);
+--surface-press:rgba(22,22,21,.09);
+--surface-inverse:var(--ink-900);
+--surface-overlay:rgba(13,13,12,.48);
+/* Semantic — text */
+--text-strong:var(--ink-950);
+--text-body:var(--ink-900);
+--text-muted:var(--ink-700);
+--text-subtle:var(--ink-600);
+--text-disabled:var(--ink-500);
+--text-inverse:var(--ink-25);
+--text-on-accent:#FFFFFF;
+--text-on-agent:var(--ink-950);
+--text-link:var(--cobalt-600);
+/* Semantic — borders */
+--border-subtle:var(--ink-200);
+--border-default:var(--ink-300);
+--border-strong:var(--ink-900);
+/* Semantic — roles */
+--accent:var(--cobalt-500);
+--accent-hover:var(--cobalt-600);
+--accent-press:var(--cobalt-700);
+--accent-soft:var(--cobalt-50);
+--accent-soft-ink:var(--cobalt-700);
+--agent:var(--volt-400);
+--agent-strong:var(--volt-500);
+--agent-soft:var(--volt-100);
+--agent-ink:var(--volt-800);
+--human:var(--coral-500);
+--human-soft:var(--coral-50);
+--human-ink:var(--coral-700);
+--success:var(--green-500);--success-soft:var(--green-100);--success-ink:var(--green-700);
+--warning:var(--amber-500);--warning-soft:var(--amber-100);--warning-ink:var(--amber-700);
+--danger:var(--red-500);--danger-soft:var(--red-100);--danger-ink:var(--red-700);
+--info:var(--cobalt-500);--info-soft:var(--cobalt-50);--info-ink:var(--cobalt-700);
+--focus-ring-color:var(--cobalt-500);
+}
+
+[data-theme="dark"]{
+--surface-page:var(--ink-950);
+--surface-card:var(--ink-900);
+--surface-sunken:#090908;
+--surface-raised:var(--ink-800);
+--surface-hover:rgba(251,251,248,.06);
+--surface-press:rgba(251,251,248,.11);
+--surface-inverse:var(--ink-25);
+--surface-overlay:rgba(0,0,0,.64);
+--text-strong:#FFFFFF;
+--text-body:var(--ink-100);
+--text-muted:var(--ink-200);
+--text-subtle:var(--ink-300);
+--text-disabled:var(--ink-600);
+--text-inverse:var(--ink-950);
+--text-link:var(--cobalt-300);
+--border-subtle:var(--ink-800);
+--border-default:var(--ink-700);
+--border-strong:var(--ink-100);
+--accent:var(--cobalt-400);
+--accent-hover:var(--cobalt-300);
+--accent-press:var(--cobalt-500);
+--accent-soft:rgba(93,124,255,.16);
+--accent-soft-ink:var(--cobalt-200);
+--agent-soft:rgba(210,255,46,.12);
+--agent-ink:var(--volt-300);
+--human-soft:rgba(255,90,51,.14);
+--human-ink:var(--coral-300);
+--success-soft:rgba(20,163,79,.16);--success-ink:#6FDB9B;
+--warning-soft:rgba(242,161,0,.16);--warning-ink:#FFC94D;
+--danger-soft:rgba(227,48,42,.18);--danger-ink:#FF8A85;
+--info-soft:rgba(93,124,255,.16);--info-ink:var(--cobalt-200);
+--focus-ring-color:var(--cobalt-300);
+}

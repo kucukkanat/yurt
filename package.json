@@ -1,0 +1,20 @@
+{
+  "name": "yurt",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/protocol", "packages/ui", "apps/web", "packages/bridge"],
+  "scripts": {
+    "dev": "npm run dev -w apps/web",
+    "build": "npm run build -w apps/web",
+    "bridge": "npm run dev -w packages/bridge",
+    "bridge:build": "npm run build -w packages/bridge",
+    "test": "npm run test -w packages/protocol",
+    "e2e": "playwright test",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": { "node": ">=20" }
+}
