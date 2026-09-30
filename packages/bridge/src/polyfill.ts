@@ -1,4 +1,6 @@
-// Node 20 has no global WebSocket; Trystero's Nostr strategy needs one. Bun and Node 22+ already do.
+// Always use `ws` on Node. Node 20 has no global WebSocket, and Node 22's built-in one re-fires
+// `error` when closed after a failed connect; nostr-tools closes inside `onerror`, which then
+// recurses until the stack overflows whenever a relay is unreachable.
 import WS from 'ws';
 
-if (!(globalThis as any).WebSocket) (globalThis as any).WebSocket = WS;
+(globalThis as { WebSocket?: unknown }).WebSocket = WS;

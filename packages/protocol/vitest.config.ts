@@ -5,5 +5,6 @@ export default defineConfig({
     // Inlined so each simulated device can load its own Trystero instance (own selfId and room registry).
     server: { deps: { inline: ['trystero', /@trystero-p2p/] } },
     coverage: { include: ['src/**'] },
+    setupFiles: ['test/setup.ts'],
   },
 });
