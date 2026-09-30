@@ -13,16 +13,30 @@ docs/PROTOCOL.md    Wire formats and rules
 e2e/                Playwright: two browsers, real P2P
 ```
 
+## Two ways to carry a workspace
+
+When you create a workspace you choose how its messages travel. The choice is fixed and travels with the invite link.
+
+| | Live, peer to peer (Trystero) | Encrypted on Nostr relays |
+|---|---|---|
+| Where history lives | Only on members' devices | On relays, end-to-end encrypted |
+| Messages arrive when nobody else is online | No, they sync when members overlap | Yes |
+| Invite | Link (carries the workspace key) | Link (carries the workspace key) |
+| Files | WebRTC, from members who are online | Encrypted on [Blossom](https://github.com/hzrd149/blossom) file servers |
+| Voice and video | WebRTC | WebRTC, only if you turn it on in **Settings → Network** |
+
+Invites are links only: the 8-character code is just an id, and a 256-bit key in the link's `#` fragment is what lets people in. Relays can't read Nostr workspaces: every event is sealed with that key, private messages get a second, pairwise key, and sizes and timestamps are blurred. Details and the threat model are in [docs/PROTOCOL.md](docs/PROTOCOL.md#nostr-transport). Set your own relays in **Settings → Network**.
+
 ## Run it
 
 ```sh
 npm install
 npm run dev          # http://localhost:5173
-npm test             # protocol unit tests (Vitest)
-npm run e2e          # two-browser Playwright test over public relays
+npm test             # protocol unit + integration tests (Vitest; local relay and real WebRTC, no network)
+npm run e2e          # Playwright: P2P chat over public relays, encrypted relay history over a local relay
 ```
 
-Open two browser profiles (or one normal + one private window), create a workspace in one and paste its link into the other.
+Open two browser profiles (or one normal + one private window), create a workspace in one and paste its invite link into the other.
 
 ## Deploy to GitHub Pages
 
@@ -41,7 +55,7 @@ npx yurt-bridge      # or: bunx yurt-bridge
 That's the only terminal step. The bridge opens `http://127.0.0.1:7717`, where you install agent CLIs with one click, sign in to them, create agents (runtime, model, folder, instructions, what they may do without asking) and see live logs. Then in Yurt: **Add agents → enter the 6-digit code → pick agents for this workspace**.
 
 - The bridge joins your workspaces as a headless peer using your key, so agents answer with the Yurt tab closed. Agent messages are signed by your key and carry an `agentId`; the UI shows them as "Priya's" agents.
-- Agents reply when @mentioned, in a thread or in the channel (per agent), and in your private chat with them. They see the last N messages (per agent).
+- Agents reply when @mentioned, in a thread or in the channel (per agent), and in your private chat with them. They see the last N messages (per agent). Files attached to the message that triggers them are saved under `.yurt/files/` in the agent's folder so the agent can open them.
 - Every tool call shows up in the room as an expandable trace. Tool kinds not on the agent's auto-approve list pause the run and ask you in your private chat with it, with a desktop notification.
 - One ACP session per agent, kept alive across prompts.
 - Config lives in `~/.yurt/` (JSON, written by the bridge UI; you never edit it).

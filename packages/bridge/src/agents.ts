@@ -5,6 +5,7 @@ import { AcpConnection, isAuthError, type AcpUpdate } from './acp';
 import { RUNTIMES } from './runtimes';
 import type { Config } from './config';
 import { log } from './log';
+import { saveAttachment } from './files';
 
 type Status = 'idle' | 'working' | 'waiting' | 'error';
 interface Session { conn: AcpConnection; id: string; key: string; onUpdate?: (u: AcpUpdate) => void }
@@ -97,7 +98,23 @@ export class AgentHost {
     return s;
   }
 
-  private prompt(a: AgentConfig, peer: WorkspacePeer, trigger: Msg, kind: 'dm' | 'mention'): string {
+  /** Saves the triggering message's attachments into the agent's folder; file id → path relative to it. */
+  private async deliverFiles(a: AgentConfig, peer: WorkspacePeer, trigger: Msg): Promise<Map<string, string>> {
+    const saved = new Map<string, string>();
+    for (const [i, f] of trigger.files.entries()) {
+      try {
+        const buf = await peer.fetchFile(f.id);
+        if (!buf) throw new Error('no member or file server has it');
+        saved.set(f.id, saveAttachment(a.workdir, trigger.id, trigger.files.length > 1 ? `${i + 1}-${f.name}` : f.name, buf));
+        log('info', a.name, `saved attachment ${f.name} to ${saved.get(f.id)}`);
+      } catch (e) {
+        log('warn', a.name, `couldn't save attachment ${f.name}: ${(e as Error).message}`);
+      }
+    }
+    return saved;
+  }
+
+  private prompt(a: AgentConfig, peer: WorkspacePeer, trigger: Msg, kind: 'dm' | 'mention', saved: ReadonlyMap<string, string> = new Map()): string {
     const s = peer.state;
     const me = this.me()!;
     const nameOf = (m: Msg) => (m.ag ? (s.agents.get(agentKey(m.a, m.ag))?.name || m.ag) + ' (agent)' : (s.profiles.get(m.a)?.name || 'Someone') + ' (@' + (s.profiles.get(m.a)?.handle || '?') + ')');
@@ -109,8 +126,10 @@ export class AgentHost {
     else { ids = s.channelMsgs.get(trigger.ch) || []; where = '#' + chName; }
     const cut = ids.indexOf(trigger.id);
     const recent = (cut >= 0 ? ids.slice(0, cut + 1) : ids).slice(-Math.max(1, a.contextSize));
+    // Only the triggering message's files are fetched; earlier ones are listed by name.
+    const fileLine = (m: Msg, f: Msg['files'][number]) => (m.id !== trigger.id ? f.name : saved.has(f.id) ? `${f.name} → ${saved.get(f.id)}` : `${f.name} (couldn't download)`);
     const lines = recent.map((id) => s.msgs.get(id)).filter((m): m is Msg => !!m && !m.deleted)
-      .map((m) => `[${new Date(m.ts).toISOString().slice(11, 16)}] ${nameOf(m)}: ${m.text}${m.files.length ? ' [attached: ' + m.files.map((f) => f.name).join(', ') + ']' : ''}`);
+      .map((m) => `[${new Date(m.ts).toISOString().slice(11, 16)}] ${nameOf(m)}: ${m.text}${m.files.length ? ' [attached: ' + m.files.map((f) => fileLine(m, f)).join(', ') + ']' : ''}`);
     const owner = s.profiles.get(me)?.name || 'your owner';
     return [
       `You are ${a.name} (@${a.handle}), an AI agent in the Yurt workspace "${s.name}", speaking in ${where}. ${owner} owns you and runs you on their machine.`,
@@ -146,7 +165,8 @@ export class AgentHost {
           if (u.status) { st.status = mapStatus(u.status); if (st.status !== 'running') st.ms = Date.now() - t.start; }
         }
       };
-      await s.conn.request('session/prompt', { sessionId: s.id, prompt: [{ type: 'text', text: this.prompt(a, peer, trigger, kind) }] });
+      const saved = await this.deliverFiles(a, peer, trigger);
+      await s.conn.request('session/prompt', { sessionId: s.id, prompt: [{ type: 'text', text: this.prompt(a, peer, trigger, kind, saved) }] });
       s.onUpdate = undefined;
       if (!text.trim()) text = 'Done.';
       this.setStatus(id, 'idle');

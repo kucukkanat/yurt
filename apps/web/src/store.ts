@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import {
   keyFromPhrase, newInviteCode, normalizeCode, formatCode, slug, mentions, sha256Buf, MAX_FILE_BYTES,
-  type KeyPair, type WsState, type Ev, type FileRef, type EventFields, type BridgeState,
+  parseInvite, parseRelays, newNostrTransport, newTrysteroTransport, LEGACY_TRYSTERO, uploadFile, parseServers, DEFAULT_BLOSSOM,
+  type KeyPair, type WsTransport, type WsState, type Ev, type FileRef, type EventFields, type BridgeState,
 } from '@yurt/protocol';
 import { kv, eventsDb, blobsDb } from './lib/db';
 import { connect, getPeer, allPeers, disconnect, type NetSettings } from './lib/net';
@@ -10,7 +11,7 @@ import { huddle, type HuddleView } from './lib/huddle';
 import { notify } from './lib/format';
 
 export interface Identity extends KeyPair { phrase: string; name: string; handle: string }
-export interface WsRecord { code: string; name: string; creator: string | null; lastRead: Record<string, number>; muted: string[]; joinedAt: number }
+export interface WsRecord { code: string; name: string; transport: WsTransport; creator: string | null; lastRead: Record<string, number>; muted: string[]; joinedAt: number }
 export interface Settings extends NetSettings { theme: 'dark' | 'light'; notifications: boolean }
 export interface Route { code?: string; ch?: string; thread?: string }
 export type PanelType = 'members' | 'profile' | 'thread' | 'pinned' | 'search' | null;
@@ -18,7 +19,8 @@ export interface Panel { type: PanelType; id?: string }
 export type DialogType = null | 'workspace' | 'channel' | 'invite' | 'agent' | 'bridge' | 'settings' | 'channelSettings' | 'jump';
 export interface ToastT { id: number; tone?: 'neutral' | 'success' | 'agent' | 'human' | 'danger'; title: string; description?: string; actionLabel?: string; onAction?: () => void; duration?: number }
 
-const DEFAULT_SETTINGS: Settings = { theme: 'dark', notifications: false, turn: 'default', turnUrls: '', turnUser: '', turnPass: '', relays: '' };
+// No TURN by default: a third-party relay would see who connects to whom. Opt in under Settings → Network.
+const DEFAULT_SETTINGS: Settings = { theme: 'dark', notifications: false, turn: 'off', turnUrls: '', turnUser: '', turnPass: '', relays: '', webrtc: false, blossom: '' };
 
 export function parseHash(h = location.hash): Route {
   const p = h.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
@@ -69,7 +71,7 @@ export interface AppState {
   setDialog(d: DialogType): void;
   toast(t: Omit<ToastT, 'id'>): void;
   dismiss(id: number): void;
-  createWorkspace(name: string): Promise<string>;
+  createWorkspace(name: string, transport: WsTransport['kind']): Promise<string>;
   joinWorkspace(input: string): Promise<boolean>;
   leaveWorkspace(code: string): Promise<void>;
   markRead(code: string, ch: string): void;
@@ -119,7 +121,7 @@ export const useApp = create<AppState>((set, get) => {
   const connectWs = (rec: WsRecord) => {
     const { identity, settings } = get();
     if (!identity) return;
-    const peer = connect(rec.code, identity, rec.creator, settings, {
+    const peer = connect(rec.code, identity, rec.creator, rec.transport, settings, {
       onState: (code, s, fresh) => {
         set((st) => ({ states: { ...st.states, [code]: s } }));
         const r = get().workspaces.find((w) => w.code === code);
@@ -142,10 +144,20 @@ export const useApp = create<AppState>((set, get) => {
 
   const applyTheme = (t: Settings['theme']) => { document.documentElement.dataset.theme = t; };
 
+  // An invite link carries the workspace key in its hash. Hold it in memory only and take it out of
+  // the address bar and history at once, so it never lands in synced browser history.
+  let pendingInvite: string | null = null;
   const onRoute = async () => {
     const r = parseHash();
+    if (location.hash.includes('/k/')) { pendingInvite = location.hash; history.replaceState(null, '', buildHash(r)); }
     set({ route: r, drawer: false, highlight: null, panel: r.thread ? { type: 'thread', id: r.thread } : get().panel.type === 'thread' ? { type: null } : get().panel });
-    if (r.code && get().identity && !get().workspaces.some((w) => w.code === r.code)) await get().joinWorkspace(r.code);
+    if (!r.code || !get().identity || get().workspaces.some((w) => w.code === r.code)) return;
+    const ok = await get().joinWorkspace(pendingInvite ?? location.hash);
+    pendingInvite = null;
+    if (!ok) {
+      get().toast({ tone: 'danger', title: 'This link can’t be joined', description: 'It has no workspace key. Ask a member for a fresh invite link.', duration: 10_000 });
+      get().go({});
+    }
   };
 
   return {
@@ -156,7 +168,8 @@ export const useApp = create<AppState>((set, get) => {
       const [identity, workspaces, settings] = await Promise.all([kv.get<Identity>('identity'), kv.get<WsRecord[]>('workspaces'), kv.get<Settings>('settings')]);
       const s = { ...DEFAULT_SETTINGS, ...(settings || {}) };
       applyTheme(s.theme);
-      set({ identity: identity || null, workspaces: workspaces || [], settings: s, ready: true });
+      // Records from before transports existed are Trystero workspaces.
+      set({ identity: identity || null, workspaces: (workspaces || []).map((w) => ({ ...w, transport: w.transport ?? LEGACY_TRYSTERO })), settings: s, ready: true });
       bridge.subscribe((status, state) => set({ bridgeStatus: status, bridgeState: state }));
       huddle.subscribe((v) => set({ huddle: v }));
       window.addEventListener('hashchange', onRoute);
@@ -164,7 +177,7 @@ export const useApp = create<AppState>((set, get) => {
       window.addEventListener('offline', () => set({ online: false }));
       document.addEventListener('visibilitychange', () => allPeers().forEach((p) => p.setPresence({ st: document.hidden ? 'away' : 'online' })));
       if (identity) {
-        (workspaces || []).forEach(connectWs);
+        get().workspaces.forEach(connectWs);
         bridge.autoStart({ phrase: identity.phrase, name: identity.name, handle: identity.handle });
       }
       await onRoute();
@@ -190,9 +203,17 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     async updateSettings(p) {
-      const settings = { ...get().settings, ...p };
+      const prev = get().settings;
+      const settings = { ...prev, ...p };
       set({ settings });
       await kv.set('settings', settings);
+      if (p.webrtc !== undefined && p.webrtc !== prev.webrtc) {
+        // Reconnect relay workspaces so WebRTC is added or removed right away.
+        const relayed = get().workspaces.filter((w) => w.transport.kind === 'nostr');
+        if (relayed.some((w) => w.code === get().huddle.code)) await huddle.leave();
+        relayed.forEach((w) => { disconnect(w.code); connectWs(w); });
+        set((st) => ({ tick: st.tick + 1 }));
+      }
       if (p.theme) applyTheme(p.theme);
       if (p.notifications && 'Notification' in window && Notification.permission === 'default') {
         const r = await Notification.requestPermission();
@@ -202,7 +223,7 @@ export const useApp = create<AppState>((set, get) => {
 
     async resetDevice() {
       await huddle.leave();
-      for (const w of get().workspaces) { disconnect(w.code); await eventsDb.deleteWs(w.code); }
+      for (const w of get().workspaces) { disconnect(w.code); await Promise.all([eventsDb.deleteWs(w.code), kv.del('mark:' + w.code)]); }
       await Promise.all([kv.del('identity'), kv.del('workspaces'), bridge.forget()]);
       location.hash = '#/';
       location.reload();
@@ -214,10 +235,11 @@ export const useApp = create<AppState>((set, get) => {
     toast(t) { const id = ++toastId; set((s) => ({ toasts: [...s.toasts.slice(-2), { duration: 5000, ...t, id }] })); },
     dismiss(id) { set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })); },
 
-    async createWorkspace(name) {
+    async createWorkspace(name, kind) {
       const code = newInviteCode();
       const me = get().identity!;
-      const rec: WsRecord = { code, name: name.trim(), creator: me.pub, lastRead: {}, muted: [], joinedAt: Date.now() };
+      const transport = kind === 'nostr' ? newNostrTransport(parseRelays(get().settings.relays)) : newTrysteroTransport();
+      const rec: WsRecord = { code, name: name.trim(), transport, creator: me.pub, lastRead: {}, muted: [], joinedAt: Date.now() };
       saveWs([...get().workspaces, rec]);
       connectWs(rec);
       const p = getPeer(code)!;
@@ -228,10 +250,11 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     async joinWorkspace(input) {
-      const code = normalizeCode(input);
-      if (!code) return false;
+      const inv = parseInvite(input);
+      if (!inv) return false;
+      const { code, transport } = inv;
       if (!get().workspaces.some((w) => w.code === code)) {
-        const rec: WsRecord = { code, name: formatCode(code), creator: null, lastRead: {}, muted: [], joinedAt: Date.now() };
+        const rec: WsRecord = { code, name: formatCode(code), transport, creator: null, lastRead: {}, muted: [], joinedAt: Date.now() };
         saveWs([...get().workspaces, rec]);
         connectWs(rec);
       }
@@ -242,7 +265,7 @@ export const useApp = create<AppState>((set, get) => {
     async leaveWorkspace(code) {
       if (get().huddle.code === code) await huddle.leave();
       disconnect(code);
-      await eventsDb.deleteWs(code);
+      await Promise.all([eventsDb.deleteWs(code), kv.del('mark:' + code)]);
       bridge.send({ t: 'ws.leave', code });
       saveWs(get().workspaces.filter((w) => w.code !== code));
       set((s) => { const { [code]: _x, ...states } = s.states; return { states }; });
@@ -267,15 +290,25 @@ export const useApp = create<AppState>((set, get) => {
     publish(code, f) { return getPeer(code)?.publish(f); },
 
     async send(text, files, parent) {
-      const { route, identity } = get();
+      const { route, identity, settings } = get();
       if (!route.code || !route.ch || !identity) return;
+      const relayed = get().workspaces.find((w) => w.code === route.code)?.transport.kind === 'nostr';
+      const servers = parseServers(settings.blossom);
       const refs: FileRef[] = [];
       for (const f of files) {
         if (f.size > MAX_FILE_BYTES) { get().toast({ tone: 'danger', title: f.name + ' is over 25 MB', description: 'Share a link instead.' }); continue; }
         const buf = await f.arrayBuffer();
         const id = await sha256Buf(buf);
         await blobsDb.put(id, buf);
-        refs.push({ id, name: f.name, size: f.size, type: f.type || 'application/octet-stream' });
+        const ref: FileRef = { id, name: f.name, size: f.size, type: f.type || 'application/octet-stream' };
+        if (!relayed) { refs.push(ref); continue; }
+        // Relay workspaces carry files over Blossom, sealed with a per-file key.
+        try { refs.push({ ...ref, blob: await uploadFile(servers.length ? servers : DEFAULT_BLOSSOM, new Uint8Array(buf)) }); }
+        catch (err) {
+          // Don't send a message whose attachment nobody could open.
+          get().toast({ tone: 'danger', title: 'Couldn’t upload ' + f.name, description: err instanceof Error ? err.message : String(err), duration: 10_000 });
+          return;
+        }
       }
       if (!text && !refs.length) return;
       get().publish(route.code, { t: 'msg', ch: route.ch, to: privateTarget(route.ch, identity.pub), b: { text, parent, files: refs.length ? refs : undefined } });
@@ -312,7 +345,7 @@ export const useApp = create<AppState>((set, get) => {
     setAgents(code, agentIds) {
       const rec = get().workspaces.find((w) => w.code === code);
       if (!rec) return;
-      bridge.send({ t: 'ws.join', code, name: get().states[code]?.name || rec.name, creator: rec.creator, agents: agentIds });
+      bridge.send({ t: 'ws.join', code, name: get().states[code]?.name || rec.name, transport: rec.transport, creator: rec.creator, agents: agentIds });
     },
   };
 });

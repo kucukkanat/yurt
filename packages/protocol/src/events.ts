@@ -18,8 +18,14 @@ export function eventId(e: UnsignedEv): string {
 
 export interface EventFields<B = any> { ws: string; t: EvType; b: B; ch?: string; to?: string; ag?: string; ts?: number }
 
+// State is reduced in (ts, id) order, so two events in the same millisecond could apply out of
+// order (a message before its channel). Handing out strictly increasing timestamps keeps
+// everything created on this device in causal order.
+let lastTs = 0;
+const nextTs = () => (lastTs = Math.max(Date.now(), lastTs + 1));
+
 export function makeEvent<B>(kp: KeyPair, f: EventFields<B>): Ev<B> {
-  const base: UnsignedEv<B> = { ws: f.ws, t: f.t, a: kp.pub, ts: f.ts ?? Date.now(), b: f.b };
+  const base: UnsignedEv<B> = { ws: f.ws, t: f.t, a: kp.pub, ts: f.ts ?? nextTs(), b: f.b };
   if (f.ag) base.ag = f.ag;
   if (f.ch) base.ch = f.ch;
   if (f.to) base.to = f.to;

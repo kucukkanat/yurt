@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Dialog, Button, Input, Tabs, Switch, Checkbox, Radio, Icon, Kbd, Avatar } from '@yurt/ui';
-import { formatCode, fingerprint, dmChannel, agentDmChannel, liveAgents } from '@yurt/protocol';
+import { formatCode, fingerprint, dmChannel, agentDmChannel, liveAgents, inviteHash, type WsTransport } from '@yurt/protocol';
 import { useApp } from '../store';
 import { useCurrent, roster } from '../model';
 import { bridge } from '../lib/bridge';
@@ -28,23 +28,30 @@ function copy(text: string, what: string) {
 export function CreateJoin({ onDone, initialTab = 'create' }: { onDone?: () => void; initialTab?: 'create' | 'join' }) {
   const [tab, setTab] = useState<string>(initialTab);
   const [name, setName] = useState('');
+  const [kind, setKind] = useState<WsTransport['kind']>('trystero');
   const [code, setCode] = useState('');
   const [err, setErr] = useState('');
   const app = useApp.getState();
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <Tabs items={[{ id: 'create', label: 'Start a workspace', icon: 'plus' }, { id: 'join', label: 'Join with a code', icon: 'log-in' }]} value={tab} onChange={(t) => { setTab(t); setErr(''); }} fullWidth label="Create or join" />
+      <Tabs items={[{ id: 'create', label: 'Start a workspace', icon: 'plus' }, { id: 'join', label: 'Join with a link', icon: 'log-in' }]} value={tab} onChange={(t) => { setTab(t); setErr(''); }} fullWidth label="Create or join" />
       {tab === 'create' ? (
-        <form onSubmit={async (e) => { e.preventDefault(); if (!name.trim()) return setErr('Give it a name people will recognize.'); await app.createWorkspace(name); onDone?.(); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <form onSubmit={async (e) => { e.preventDefault(); if (!name.trim()) return setErr('Give it a name people will recognize.'); await app.createWorkspace(name, kind); onDone?.(); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <Input label="Workspace name" placeholder="Northwind design" value={name} onChange={(e) => setName(e.target.value)} error={err || undefined} autoFocus data-autofocus />
+          <div role="radiogroup" aria-label="How messages travel" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Radio name="transport" value="trystero" label="Live, peer to peer" description="Messages go straight between members’ browsers and are stored nowhere else. Members need to be online together to sync." checked={kind === 'trystero'} onChange={() => setKind('trystero')} data-testid="transport-trystero" />
+            <Radio name="transport" value="nostr" label="Encrypted on Nostr relays" description="Relays keep end-to-end encrypted history, so messages arrive even when no one else is online. Relays can’t read them." checked={kind === 'nostr'} onChange={() => setKind('nostr')} data-testid="transport-nostr" />
+          </div>
           <Button type="submit" variant="primary" iconRight="arrow-right" fullWidth>Create workspace</Button>
-          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>You get an 8-character code to share. The code is also the key that encrypts connection setup.</span>
+          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>{kind === 'nostr'
+            ? 'You get an invite link that carries the workspace key. Share it privately: anyone with it can read the history.'
+            : 'You get an invite link that carries the workspace key. Share it privately: anyone with it can join.'}</span>
         </form>
       ) : (
-        <form onSubmit={async (e) => { e.preventDefault(); if (!(await app.joinWorkspace(code))) return setErr('Codes look like K7QX-2MPD. Paste the whole link if you have one.'); onDone?.(); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Input label="Invite code or link" placeholder="K7QX-2MPD" value={code} onChange={(e) => setCode(e.target.value)} error={err || undefined} autoFocus data-autofocus style={{ fontFamily: 'var(--font-mono)' }} />
+        <form onSubmit={async (e) => { e.preventDefault(); if (!(await app.joinWorkspace(code))) return setErr('Paste the whole invite link. Codes alone can’t be joined: they carry no key.'); onDone?.(); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Input label="Invite link" placeholder="https://…/#/w/K7QX2MPD/k/…" data-testid="join-link" value={code} onChange={(e) => setCode(e.target.value)} error={err || undefined} autoFocus data-autofocus style={{ fontFamily: 'var(--font-mono)' }} />
           <Button type="submit" variant="primary" iconRight="arrow-right" fullWidth>Join workspace</Button>
-          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>History syncs from members who are online now.</span>
+          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>The link carries the workspace key, so keep it private.</span>
         </form>
       )}
     </div>
@@ -75,16 +82,25 @@ function ChannelDialog({ onClose }: { onClose: () => void }) {
 function InviteDialog({ onClose }: { onClose: () => void }) {
   const { route, state, rec } = useCurrent();
   const code = route.code!;
-  const link = location.origin + location.pathname + '#/w/' + code;
+  const transport = rec?.transport;
+  const title = 'Invite to ' + (state?.name || rec?.name);
+  if (!transport?.key) return (
+    <Dialog open onClose={onClose} title={title} width={480} description="This workspace was created with a short code that anyone on the network can guess, so it can’t take new members safely.">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <span data-testid="legacy-invite" style={{ fontSize: 14, color: 'var(--text-body)' }}>Create a new workspace and invite people there. Its link carries a key that can’t be guessed.</span>
+        <div><Button variant="primary" iconLeft="plus" onClick={() => useApp.getState().setDialog('workspace')}>New workspace</Button></div>
+      </div>
+    </Dialog>
+  );
+  const link = location.origin + location.pathname + inviteHash({ code, transport: { ...transport, key: transport.key } });
+  const description = transport.kind === 'nostr'
+    ? 'This link contains the key that decrypts the workspace. Share it privately: anyone with it can read the whole history.'
+    : 'This link contains the workspace key. Share it privately: anyone with it can join and sync the history.';
   return (
-    <Dialog open onClose={onClose} title={'Invite to ' + (state?.name || rec?.name)} width={480} description="Anyone with the link or code can join and sync this workspace’s history.">
+    <Dialog open onClose={onClose} title={title} width={480} description={description}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '16px 18px', borderRadius: 20, background: 'var(--surface-sunken)', border: '1px solid var(--border-subtle)' }}>
-          <span style={{ font: '500 30px/1 var(--font-mono)', letterSpacing: '.06em', color: 'var(--text-strong)' }}>{formatCode(code)}</span>
-          <Button variant="secondary" size="sm" iconLeft="copy" onClick={() => copy(formatCode(code), 'Code')}>Copy code</Button>
-        </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <div style={{ flex: 1, minWidth: 0 }}><Input aria-label="Invite link" value={link} readOnly iconLeft="link" onFocus={(e) => e.target.select()} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}><Input aria-label="Invite link" data-testid="invite-link" value={link} readOnly iconLeft="link" onFocus={(e) => e.target.select()} /></div>
           <Button variant="primary" iconLeft="copy" onClick={() => copy(link, 'Link')}>Copy link</Button>
         </div>
       </div>
@@ -233,15 +249,18 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
         )}
         {tab === 'network' && (
           <form onSubmit={(e) => { e.preventDefault(); app.updateSettings(net); app.toast({ title: 'Network settings saved', description: 'Reload to reconnect with them.', actionLabel: 'Reload', onAction: () => location.reload() }); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <span style={{ fontSize: 14, color: 'var(--text-body)' }}>Some networks block direct connections. A TURN relay forwards encrypted traffic when that happens.</span>
-            <Radio name="turn" value="default" label="Free public relay" description="Open Relay by Metered. Rate-limited, fine for small teams." checked={net.turn === 'default'} onChange={() => setNet({ ...net, turn: 'default' })} />
+            <span style={{ fontSize: 14, color: 'var(--text-body)' }}>Some networks block direct connections. A TURN relay forwards encrypted traffic when that happens, but whoever runs it sees your IP address and who you talk to. Off by default.</span>
+            <Radio name="turn" value="default" label="Free public relay" description="Open Relay by Metered. Its operator sees your IP address and who you connect to (not content). Rate-limited." checked={net.turn === 'default'} onChange={() => setNet({ ...net, turn: 'default' })} />
             <Radio name="turn" value="custom" label="My own TURN server" checked={net.turn === 'custom'} onChange={() => setNet({ ...net, turn: 'custom' })} />
             {net.turn === 'custom' && <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 30 }}>
               <Input label="TURN URLs" placeholder="turn:turn.example.com:3478" value={net.turnUrls} onChange={(e) => setNet({ ...net, turnUrls: e.target.value })} />
               <div style={{ display: 'flex', gap: 8 }}><Input label="Username" value={net.turnUser} onChange={(e) => setNet({ ...net, turnUser: e.target.value })} /><Input label="Credential" type="password" value={net.turnPass} onChange={(e) => setNet({ ...net, turnPass: e.target.value })} /></div>
             </div>}
             <Radio name="turn" value="off" label="Direct only (STUN)" checked={net.turn === 'off'} onChange={() => setNet({ ...net, turn: 'off' })} />
-            <Input label="Nostr relays" optional placeholder="wss://relay.example.com" hint="Used only to find peers. Leave empty for Trystero’s defaults." value={net.relays} onChange={(e) => setNet({ ...net, relays: e.target.value })} />
+            <Switch checked={net.webrtc} onChange={(on) => setNet({ ...net, webrtc: on })} label="Allow WebRTC for voice and video in relay workspaces" data-testid="webrtc-switch"
+              description="Off: relay workspaces use only Nostr, and calls are unavailable. On: calls connect directly, so people in a call see each other’s IP addresses." />
+            <Input label="Blossom file servers" optional placeholder="https://blossom.example.com" data-testid="blossom-servers" hint="Where relay workspaces keep encrypted files. Leave empty for the defaults." value={net.blossom} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNet({ ...net, blossom: e.target.value })} />
+            <Input label="Nostr relays" optional placeholder="wss://relay.example.com" hint="Used to find peers, and as the relays for new encrypted relay workspaces. Leave empty for the defaults." value={net.relays} onChange={(e) => setNet({ ...net, relays: e.target.value })} />
             <div><Button type="submit" variant="primary">Save network settings</Button></div>
           </form>
         )}

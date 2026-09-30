@@ -12,14 +12,16 @@ export function Home({ narrow }: { narrow: boolean }) {
   const menu = narrow && <div style={{ position: 'absolute', top: 10, left: 8 }}><IconButton icon="menu" label="Open sidebar" size="sm" onClick={() => useApp.setState({ drawer: true })} /></div>;
 
   if (route.code) {
-    const n = peer?.peers.size || 0;
+    const n = peer?.presence.size || 0;
+    const relayed = peer?.transport.kind === 'nostr';
     return (
       <div style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 32, textAlign: 'center' }}>
         {menu}
         <span style={{ display: 'flex', color: 'var(--accent)', animation: 'ag-spin 1.2s linear infinite' }}><Icon name="loader" size={28} /></span>
-        <div style={{ font: '700 28px/1.1 var(--font-display)', letterSpacing: '-0.04em', color: 'var(--text-strong)' }}>{n ? 'Syncing ' : 'Looking for members of '}{state?.name || rec?.name || formatCode(route.code)}</div>
+        <div style={{ font: '700 28px/1.1 var(--font-display)', letterSpacing: '-0.04em', color: 'var(--text-strong)' }}>{relayed ? 'Fetching ' : n ? 'Syncing ' : 'Looking for members of '}{state?.name || rec?.name || formatCode(route.code)}</div>
         <div style={{ fontSize: 14.5, color: 'var(--text-muted)', maxWidth: 440, textWrap: 'pretty' as any }}>
-          {n ? 'Pulling channels and history from ' + n + (n === 1 ? ' member' : ' members') + '.' : 'Channels and history arrive once another member is online. Keep this tab open; it connects on its own.'}
+          {relayed ? (peer?.connected ? 'Downloading encrypted history from relays.' : 'Connecting to relays. Keep this tab open; it retries on its own.')
+            : n ? 'Pulling channels and history from ' + n + (n === 1 ? ' member' : ' members') + '.' : 'Channels and history arrive once another member is online. Keep this tab open; it connects on its own.'}
         </div>
         <span style={{ font: '500 13px var(--font-mono)', color: 'var(--text-subtle)' }}>{formatCode(route.code)}</span>
       </div>

@@ -35,14 +35,16 @@ class Huddle {
 
   async join(peer: WorkspacePeer, ch: string) {
     if (this.view.ch) await this.leave();
-    if (!peer.room) { this.emit({ error: 'Still connecting to this workspace. Try again in a moment.' }); return; }
+    // Relay workspaces open their WebRTC room only on demand; this joins it if needed.
+    const room = peer.ensureRoom();
+    if (!room) { this.emit({ error: 'Still connecting to this workspace. Try again in a moment.' }); return; }
     let mic: MediaStream;
     try { mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false }); }
     catch { this.emit({ error: 'Allow microphone access to join the huddle.' }); return; }
     this.peer = peer;
     this.streams = { mic };
     this.sentTo.clear();
-    peer.room!.onPeerStream = (stream, peerId, meta) => {
+    room.onPeerStream = (stream, peerId, meta) => {
       const kind = (meta?.kind || 'mic') as keyof RemoteMedia;
       if (meta?.ch !== this.view.ch) return;
       const cur = this.view.remote[peerId] || {};

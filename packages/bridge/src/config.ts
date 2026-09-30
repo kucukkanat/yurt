@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import type { AgentConfig, BridgeWorkspace } from '@yurt/protocol';
+import type { AgentConfig, BridgeWorkspace, WsTransport } from '@yurt/protocol';
 
 export const HOME = process.env.YURT_HOME || path.join(os.homedir(), '.yurt');
 export const WS_DIR = path.join(HOME, 'workspaces');
@@ -16,7 +16,8 @@ export interface Config {
   startOnLogin: boolean;
   allowedOrigins: string[];
   agents: AgentConfig[];
-  workspaces: (BridgeWorkspace & { creator?: string | null })[];
+  // A Nostr transport holds the workspace key; config.json is written 0600 for that reason (and the phrase).
+  workspaces: (BridgeWorkspace & { creator?: string | null; transport?: WsTransport })[];
 }
 
 export interface StoredIdentity { phrase: string; name: string; handle: string }

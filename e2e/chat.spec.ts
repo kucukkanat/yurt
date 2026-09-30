@@ -16,14 +16,18 @@ test('two peers create, join, sync history and chat', async ({ browser }) => {
   await a.getByLabel('Workspace name').fill('E2E ' + Date.now());
   await a.getByRole('button', { name: 'Create workspace' }).click();
   await expect(a).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
-  const code = a.url().match(/#\/w\/([A-Z0-9]{8})/)![1];
+  await a.getByRole('button', { name: 'Invite people' }).first().click();
+  const link = await a.getByTestId('invite-link').inputValue();
+  expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/k\/[A-Za-z0-9_-]{43}$/); // link-only: the key is what lets people in
+  await a.getByTestId('invite-link').press('Escape'); // the dialog handles Escape when focus is inside it
+  await expect(a.getByRole('dialog')).toHaveCount(0);
 
   // Written before anyone else is here: must arrive through history sync.
   const composerA = a.getByRole('textbox', { name: 'Message #general' });
   await composerA.fill('first, before you joined');
   await composerA.press('Enter');
 
-  await b.goto('./#/w/' + code);
+  await b.goto(link);
   await onboard(b, 'Bo', 'Join workspace');
   await expect(b.getByText('first, before you joined')).toBeVisible();
 
@@ -33,6 +37,8 @@ test('two peers create, join, sync history and chat', async ({ browser }) => {
 
   const composerB = b.getByRole('textbox', { name: 'Message #general' });
   await composerB.fill('ping from bo @ada');
+  // Enter would pick from the @-mention menu once Ada's profile has synced; close it first.
+  await composerB.press('Escape');
   await composerB.press('Enter');
   await expect(a.getByText('ping from bo')).toBeVisible();
 

@@ -37,6 +37,11 @@ describe('identity', () => {
 });
 
 describe('events', () => {
+  it('stamps events from one device in strictly increasing order', () => {
+    const ts = Array.from({ length: 50 }, () => makeEvent(A, { ws: WS, t: 'msg', b: {} }).ts);
+    expect(ts.every((t, i) => i === 0 || t > ts[i - 1])).toBe(true);
+  });
+
   it('rejects tampered events', () => {
     const e = ev(A, 'msg', { text: 'hello' }, { ch: 'general' });
     expect(verifyEvent(e)).toBe(true);

@@ -14,11 +14,9 @@ export function useTyping(ch: string) {
   const { peer, state, identity } = useCurrent();
   if (!peer) return [];
   const out: { name: string; kind: 'human' | 'agent' }[] = [];
-  for (const [pid, pr] of peer.presence) {
-    const who = peer.peers.get(pid);
-    if (!who) continue;
-    if (pr.typing === ch && !pr.bridge && who.pub !== identity.pub) out.push({ name: state?.profiles.get(who.pub)?.name || 'Someone', kind: 'human' });
-    if (pr.bridge && pr.agents) for (const [id, a] of Object.entries(pr.agents)) if (a.working === ch) out.push({ name: state?.agents.get(who.pub + '/' + id)?.name || id, kind: 'agent' });
+  for (const pr of peer.presence.values()) {
+    if (pr.typing === ch && !pr.bridge && pr.pub !== identity.pub) out.push({ name: state?.profiles.get(pr.pub)?.name || 'Someone', kind: 'human' });
+    if (pr.bridge && pr.agents) for (const [id, a] of Object.entries(pr.agents)) if (a.working === ch) out.push({ name: state?.agents.get(pr.pub + '/' + id)?.name || id, kind: 'agent' });
   }
   return out;
 }
@@ -108,8 +106,11 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
   const agents = people.filter((p) => p.kind === 'agent');
   const pinnedN = state.pins.get(ch)?.size || 0;
   const togglePanel = (type: 'members' | 'pinned' | 'search') => app.setPanel(panel.type === type ? { type: null } : { type });
-  const nobody = (peer?.peers.size || 0) === 0;
+  // On Nostr the relays hold messages, so being alone is fine; only unreachable relays matter.
+  const relayed = peer?.transport.kind === 'nostr';
+  const nobody = !relayed && (peer?.presence.size || 0) === 0;
   const note = !online ? 'Offline · sends when a peer is reachable'
+    : relayed && !peer?.connected ? 'Relays unreachable · sends when one is back'
     : isAgentDm ? (agent?.presence === 'offline' ? agent.name + ' is off. Start yurt-bridge to get replies.' : 'Only you and ' + agent?.name + ' see this')
     : nobody ? 'No one else is online · sends when someone joins'
     : isDm ? 'Private between you two' : <>Type @ to mention a person or agent</>;
@@ -167,7 +168,10 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
           </button>
         )}
       </header>
-      <ConnectionBanner state={online ? 'online' : 'offline'} queued={peer?.queued.size || 0} />
+      {rec && !rec.transport.key && <div role="status" data-testid="legacy-warning" style={{ padding: '6px 16px', background: 'var(--surface-raised)', borderBottom: '1px solid var(--border-subtle)', font: '500 13px/1.3 var(--font-body)', color: 'var(--text-body)' }}>
+        This workspace uses a short code anyone on the network can guess. Create a new workspace to keep conversations private.
+      </div>}
+      <ConnectionBanner state={!online ? 'offline' : relayed && !peer?.connected ? 'reconnecting' : 'online'} queued={peer?.queued.size || 0} />
       <HuddleStrip ch={ch} />
       {hud.code === code && hud.ch === ch && <HuddleStage />}
       <MessageList key={code + ch} ids={ids} ctx={ctx} lastRead={entryRead} emptyState={emptyState} highlight={highlight} />

@@ -157,7 +157,7 @@ export class BridgeServer {
         this.ws.setIdentity(m.phrase);
         break;
       }
-      case 'ws.join': this.ws.join(m.code, m.name, m.creator, m.agents); break;
+      case 'ws.join': this.ws.join(m.code, m.name, m.creator, m.agents, m.transport); break;
       case 'ws.agents': this.ws.join(m.code, this.cfg.workspaces.find((w) => w.code === m.code)?.name || m.code, null, m.agents); break;
       case 'ws.leave': this.ws.leave(m.code); break;
       default:

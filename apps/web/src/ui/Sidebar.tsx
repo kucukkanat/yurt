@@ -110,7 +110,7 @@ export function Sidebar() {
         </button>
         {menu && (
           <div role="menu" onMouseLeave={() => setMenu(false)} style={{ position: 'absolute', top: 44, left: 0, right: 0, zIndex: 30, padding: 6, borderRadius: 14, background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)', animation: 'ag-rise var(--dur-fast) var(--ease-out)' }}>
-            <div style={{ padding: '6px 10px 8px', font: '400 11.5px/1.4 var(--font-mono)', color: 'var(--text-subtle)' }}>Code {formatCode(code)} · {peer?.peers.size || 0} online</div>
+            <div style={{ padding: '6px 10px 8px', font: '400 11.5px/1.4 var(--font-mono)', color: 'var(--text-subtle)' }}>{peer?.presence.size || 0} online</div>
             <Row onClick={() => { setMenu(false); setDialog('invite'); }}><Icon name="user-plus" size={16} /><span>Invite people</span></Row>
             <Row onClick={() => { setMenu(false); setDialog('channel'); }}><Icon name="hash" size={16} /><span>New channel</span></Row>
             <Row onClick={() => { setMenu(false); setLeaving(true); }}><Icon name="log-out" size={16} /><span style={{ color: 'var(--danger-ink)' }}>Leave workspace</span></Row>

@@ -123,7 +123,7 @@ function Profile({ id }: { id: string }) {
 function Thread({ id }: { id: string }) {
   const { state, peer, identity, route } = useCurrent();
   const [, setN] = useState(0);
-  const people = useMemo(() => roster(state, peer, identity.pub), [state, peer?.peers.size]);
+  const people = useMemo(() => roster(state, peer, identity.pub), [state, peer?.presence.size]);
   const typing = useTyping(route.ch || '');
   const parent = state?.msgs.get(id);
   if (!state || !parent) return <div style={{ padding: 20, fontSize: 14, color: 'var(--text-muted)' }}>This thread syncs once a member who has it is online.</div>;

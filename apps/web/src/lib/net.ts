@@ -1,5 +1,5 @@
 import { joinRoom, selfId } from 'trystero';
-import { WorkspacePeer, type KeyPair, type WsState, type Ev, type JoinRoom } from '@yurt/protocol';
+import { WorkspacePeer, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport } from '@yurt/protocol';
 import { peerStore } from './db';
 
 export interface NetSettings {
@@ -8,6 +8,9 @@ export interface NetSettings {
   turnUser: string;
   turnPass: string;
   relays: string; // optional Nostr relay list, one per line
+  /** Relay workspaces use WebRTC (voice and video) only when this is on. Trystero workspaces always use it. */
+  webrtc: boolean;
+  blossom: string; // optional Blossom file servers for relay workspaces, one per line
 }
 
 // Free public TURN (Open Relay by Metered). Rate-limited; set your own in Settings → Network.
@@ -36,12 +39,13 @@ export interface NetHandlers {
 
 const peers = new Map<string, WorkspacePeer>();
 
-export function connect(code: string, kp: KeyPair, creator: string | null, net: NetSettings, h: NetHandlers): WorkspacePeer {
+export function connect(code: string, kp: KeyPair, creator: string | null, transport: WsTransport, net: NetSettings, h: NetHandlers): WorkspacePeer {
   const existing = peers.get(code);
   if (existing) return existing;
   const p = new WorkspacePeer({
-    code, kp, selfId, creator,
-    joinRoom: joinRoom as unknown as JoinRoom,
+    code, kp, selfId, creator, transport,
+    // No mixing: a relay workspace gets no WebRTC at all unless the user opted in.
+    joinRoom: transport.kind === 'trystero' || net.webrtc ? (joinRoom as unknown as JoinRoom) : undefined,
     store: peerStore,
     rtc: rtcOptions(net),
     onState: (s, fresh) => h.onState(code, s, fresh),
@@ -50,6 +54,7 @@ export function connect(code: string, kp: KeyPair, creator: string | null, net: 
     onBlob: h.onBlob,
     onBlobProgress: h.onBlobProgress,
     onJoinError: (d) => console.warn('[yurt] join error', d),
+    onError: (msg) => console.error('[yurt]', msg),
   });
   peers.set(code, p);
   p.start();

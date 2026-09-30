@@ -1,3 +1,4 @@
+import type { BlobRef } from './blossom';
 export type EvType =
   | 'ws.create' | 'profile' | 'ch.create' | 'ch.update'
   | 'msg' | 'edit' | 'del' | 'react' | 'pin'
@@ -19,7 +20,11 @@ export interface Ev<B = any> {
 
 export type UnsignedEv<B = any> = Omit<Ev<B>, 'id' | 'sig'>;
 
-export interface FileRef { id: string; name: string; size: number; type: string }
+export interface FileRef {
+  id: string; name: string; size: number; type: string;
+  /** Relay workspaces: the file sealed on Blossom. Absent on Trystero, where peers serve files over WebRTC. */
+  blob?: BlobRef;
+}
 
 export interface TraceStep {
   title: string;

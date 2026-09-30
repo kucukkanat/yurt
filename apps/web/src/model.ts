@@ -29,21 +29,17 @@ export function useMedia(q: string): boolean {
 export function presenceOf(peer: WorkspacePeer | undefined, pub: string, me: string): 'online' | 'away' | 'offline' {
   if (pub === me) return document.hidden ? 'away' : 'online';
   let best: 'away' | 'offline' = 'offline';
-  if (peer) for (const [pid, p] of peer.peers) {
-    if (p.pub !== pub) continue;
-    const pr = peer.presence.get(pid);
-    if (pr?.bridge) continue;
-    if (!pr || pr.st === 'online') return 'online';
+  if (peer) for (const pr of peer.presence.values()) {
+    if (pr.pub !== pub || pr.bridge) continue;
+    if (pr.st === 'online') return 'online';
     best = 'away';
   }
   return best;
 }
 
 export function agentPresence(peer: WorkspacePeer | undefined, owner: string, id: string): { online: boolean; working: string | null } {
-  if (peer) for (const [pid, p] of peer.peers) {
-    if (p.pub !== owner) continue;
-    const pr = peer.presence.get(pid);
-    if (pr?.bridge && pr.agents && id in pr.agents) return { online: true, working: pr.agents[id]?.working || null };
+  if (peer) for (const pr of peer.presence.values()) {
+    if (pr.pub === owner && pr.bridge && pr.agents && id in pr.agents) return { online: true, working: pr.agents[id]?.working || null };
   }
   return { online: false, working: null };
 }

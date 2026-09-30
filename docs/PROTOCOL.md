@@ -9,8 +9,13 @@ Version 1. All code in `packages/protocol`.
 
 ## Workspaces and rooms
 
-- Invite code: 8 chars from `ABCDEFGHJKMNPQRSTVWXYZ23456789`, shown as `K7QX-2MPD`. Links: `…/#/w/K7QX2MPD`.
-- Trystero (Nostr strategy): `appId = "yurt.p2p.v1"`, `password = code`, `roomId = sha256("yurt-room:" + code)[0:24]`.
+- Workspace id: 8 chars from `ABCDEFGHJKMNPQRSTVWXYZ23456789`, shown as `K7QX-2MPD`. It is **not a secret** and can't be used to join.
+- Workspace key `wk`: 32 random bytes made at creation. Every secret below derives from it (see [Keys](#keys)).
+- Each workspace has a **transport**, chosen at creation and fixed: `trystero` (events travel peer to peer; history lives only on members' devices) or `nostr` (events are end-to-end encrypted and stored on relays; see [Nostr transport](#nostr-transport)).
+- Invites are links only: `…/#/w/<id>/k/<key>` (Trystero) or `…/#/w/<id>/k/<key>/n/<relays>` (Nostr). `<key>` is `wk` in base64url; `<relays>` is a URI-encoded comma list, or `-` for the defaults. Links without a valid key are refused.
+- The key lives only in the `#` fragment, which browsers never send to a server. On load the app keeps the invite in memory and removes it from the address bar and history (`history.replaceState`), so it can't end up in synced browser history.
+- WebRTC room (Trystero, Nostr signaling strategy): `appId = HKDF(wk, "app")`, `roomId = HKDF(wk, "room")`, `password = HKDF(wk, "room-pw")`. Nothing in the signaling identifies the app or the workspace, and the room can't be found or joined without the key.
+- **Legacy workspaces** (created before keys) have only the code: `appId = "yurt.p2p.v1"`, `password = code`, `roomId = sha256("yurt-room:" + code)[0:24]`. That's brute-forceable from public relay traffic (~39 bits), so they keep working for existing members but can't be joined anew; the app asks members to recreate them.
 - Handshake (`onPeerHandshake`): each side sends `{pub, sig}` where `sig = sign("yurt-hs:" + code + ":" + selfId + ">" + remotePeerId)`. The receiver verifies against its own ids and rejects banned keys.
 
 ## Events
@@ -45,13 +50,77 @@ State is `reduce(events)` sorted by `(ts, id)`; every peer with the same events 
 
 ## Actions (Trystero)
 
+**Transports don't mix.** Trystero workspaces use this WebRTC room for everything. Nostr workspaces use Nostr for everything (events, presence, files via [Blossom](#files-on-blossom)); only `hud` and media streams may use a WebRTC room, and only if the user turned on *Allow WebRTC for voice and video* in Settings → Network. Without that opt-in a Nostr workspace has no WebRTC room at all, and neither does the bridge.
+
 | action | payload | purpose |
 |---|---|---|
 | `ev` | `Ev[]` | New events. Public ones broadcast; private ones only to the two parties' peers. |
 | `sync` | `{k:'sum', s}` → `{k:'ids', d}` → `{k:'want', ids}` | Anti-entropy on join. `s` maps UTC day → `count:xor(id[0:8])` over events visible to both sides. Differing days exchange id lists, each side pushes what the other lacks and asks for what it lacks. |
 | `pres` | `{pub, st, typing?, agents?, bridge?}` | Presence, typing, agent working state. Re-sent every 30 s. |
 | `hud` | `{ch, mic, cam, screen}` | Huddle membership. Media streams carry metadata `{kind: 'mic'|'cam'|'screen', ch}` and flow only between peers in the same huddle. Video capped at 4. |
-| `fwant` / `file` | `{id}` / binary + `{id}` | Content-addressed files (`id = sha256(bytes)`), ≤25 MB, served by any peer holding them. |
+| `fwant` / `file` | `{id}` / binary + `{id}` | Trystero workspaces only. Content-addressed files (`id = sha256(bytes)`), ≤25 MB. A file is requested from, and served only to, peers who can see a `msg` that attaches it, so DM files stay within the pair even if a member asks directly. Pending requests are re-sent as peers join, for up to a minute. |
+
+## Nostr transport
+
+Relays store and forward; they never see plaintext, member keys or the invite code.
+
+### Keys
+
+With `HKDF-SHA256(ikm = wk, info = "yurt-<name>-v1")`:
+
+| name | bytes | use |
+|---|---|---|
+| `enc` | 32 | XChaCha20-Poly1305 key for everything members share |
+| `tag` | 16 (hex) | relay index tag for the workspace |
+| `inbox:<pub>` | 16 (hex) | a member's mailbox tag for private events |
+| `app` / `room` / `room-pw` | 16 / 12 / 32 (hex) | WebRTC app id / room id / password (both transports) |
+
+A private pair's key is `HKDF(ikm = X25519(edToMontgomery(mySec), edToMontgomery(theirPub)), salt = wk, info = "yurt-dm-v1")`; both sides derive the same key.
+
+**Sealing.** `seal(key, text) = base64url(nonce24 ‖ XChaCha20-Poly1305(key, nonce, aad = tag, u32be(len) ‖ text ‖ zeros))`. The plaintext is padded to 256 B, 1 KiB, 4 KiB, 16 KiB, 64 KiB, then 64 KiB steps, so sizes only reveal a bucket. Anything that fails to open is ignored, since tags are shared with anyone who knows them.
+
+**Nostr events.** One `["y", <tag>]` tag each. `created_at` is backdated by a random 0–2 h.
+
+| kind | stored | signed by | content |
+|---|---|---|---|
+| `4344` | yes | session key | Public event: `seal(enc, JSON(ev))`, `y = tag`. |
+| `4344` | yes | one-off key per copy | Private event (`to` set): two copies, one tagged `y = inbox(to)` and one `y = inbox(a)`, each `seal(enc, JSON({a, to, c: seal(pairKey, JSON(ev))}))`. |
+| `24344` | no (ephemeral) | session key | Presence: `seal(enc, JSON({j, t, s}))` with `j = JSON(presence)`, `s = ed25519("yurt-pres:" + code + ":" + t + ":" + j)`; dropped when `t` is more than 150 s off. Sent on change and every 60 s, but only while the member is in the foreground, needs the room, or is a bridge. |
+
+The session key is a fresh random secp256k1 key per app session, never the member's identity (a shared key would also let any member file NIP-09 deletions for everyone). Private copies use one-off keys, so a relay can't link the two inboxes as a pair or tie a DM to the session's other traffic.
+
+The inner Yurt event keeps its own Ed25519 signature and passes the same validation as on Trystero, so relays can't forge or alter events.
+
+**Sync.** Clients subscribe live to `{kinds: [4344, 24344], "#y": [tag, inbox(me)], since: now − 2 h}` and then page backwards (`limit` 500) from now to `mark − 1 day`, where `mark` is when the last backfill finished (0 on first join). The day of margin covers backdating and senders with skewed clocks, since `created_at` is theirs. Backfill re-runs whenever relays come back. After it, any of my own recent events the relays don't have (the app closed before an ack) are re-sent. An event leaves "queued" when the first relay acks it; unacked events retry every 15 s.
+
+**Calls (opt-in).** With the WebRTC opt-in, a member in a huddle sets `rtc: true` in presence; opted-in members who see it join the room, and everyone leaves after 60 s without it. The room signals over the workspace's own relays. Members without the opt-in never join, so they can't take part in calls.
+
+### Files on Blossom
+
+Nostr workspaces keep attachments on [Blossom](https://github.com/hzrd149/blossom) servers (BUD-01/02), chosen in Settings → Network (default: `blossom.primal.net`, `nostr.download`, `files.sovbit.host`).
+
+- **Sealing.** Each file gets a fresh random 32-byte key: `cipher = sealBytes(fileKey, aad = "yurt-file-v1", bytes)`, padded like everything else. Its Blossom id is `sha256(cipher)`.
+- **Upload.** `PUT /upload` to every server, authorized by a kind `24242` event (`t=upload`, `x=<hash>`, 5-minute `expiration`) signed by a one-off key. It succeeds if any server accepts; otherwise the message isn't sent.
+- **Reference.** The message's `FileRef` carries `blob: {key, hash, servers}` next to `id = sha256(plaintext)`. It travels inside the encrypted event, so only people who can read the message can fetch and open the file; DM files stay within the pair.
+- **Download.** `GET /<hash>` from the listed servers in turn (with `t=get` auth for servers that want it). The ciphertext must hash to `hash`, decrypt under `key`, and the plaintext must hash to `id`, so a server can't substitute content.
+
+### Threat model
+
+**A relay operator** sees IP addresses, when events arrive, coarse size buckets, backdated `created_at`, the workspace tag, inbox tags that receive private events, and throwaway pubkeys (one per session, one per private copy). It does **not** see the id or key, names, channels, contents, member identities, or which inboxes talk to each other, beyond what arrival timing suggests.
+
+**Anyone else on Nostr** can read the same stored events as the operator (minus IPs and arrival times) but can't find a workspace without its tag, and sees only padded, backdated ciphertext.
+
+**Blossom servers** (Nostr workspaces) see IP addresses, when files are uploaded and fetched, padded ciphertext sizes and one-off pubkeys. Not names, contents, or which workspace or message a file belongs to.
+
+**Signaling relays and STUN/TURN servers** (WebRTC: always in Trystero workspaces, only during opted-in calls in Nostr ones) see IP addresses and connection timing. Signaling topics derive from the key and don't identify Yurt. TURN is off by default; the bridge never uses it. STUN servers (Trystero's defaults) see your IP address whenever a room is joined.
+
+**Members** see everything in the workspace, and each other's IP addresses while in the same WebRTC room. They can tell which inboxes receive private events and, by opening the outer wrapper, who the pair is, but never the contents. DM files only go to the pair.
+
+**Known limits.**
+- Removing someone doesn't revoke the key. A banned member's events are ignored, but they can still decrypt what's posted afterwards. Key rotation on ban is future work.
+- Relays see arrival times and IP addresses; use a VPN or Tor to hide the latter.
+- The kinds `4344`/`24344` are specific to Yurt, so a relay can tell that *some* Yurt workspace uses it, though not which or whose.
+- Relays can drop or withhold events. Use several; clients publish to all of them. Retention is up to each relay's and Blossom server's policy: a file can disappear even though its message remains.
 
 ## Local bridge
 
@@ -60,7 +129,7 @@ State is `reduce(events)` sorted by `(ts, id)`; every peer with the same events 
 1. `hello {token?}` → `hello {paired, admin}`. The bridge's own page gets an admin token embedded in its same-origin HTML.
 2. Unpaired browsers send `pair {code}` with the 6-digit code shown by the bridge (rotates on use, every 10 min, and after 5 misses) → `paired {token}`.
 3. The browser sends `identity {phrase, name, handle}`; the bridge stores it in `~/.yurt/identity.json` (0600) and joins workspaces as a headless peer with that key.
-4. `ws.join {code, name, creator, agents}` / `ws.agents` / `ws.leave` choose which agents sit in which workspace. The bridge publishes `agent` events and presence `{bridge: true, agents: {id: {working}}}`.
+4. `ws.join {code, name, transport?, creator, agents}` (a missing `transport` means a legacy Trystero workspace) / `ws.agents` / `ws.leave` choose which agents sit in which workspace. The bridge publishes `agent` events and presence `{bridge: true, agents: {id: {working}}}`.
 
 ### ACP mapping
 
@@ -69,4 +138,5 @@ State is `reduce(events)` sorted by `(ts, id)`; every peer with the same events 
 - Prompt: identity, owner instructions, the last N messages of the channel or thread, and the triggering message.
 - `session/update`: `agent_message_chunk` → reply text; `tool_call` / `tool_call_update` → trace steps with timings.
 - `session/request_permission`: tool kinds on the auto-approve list get `allow_once`. Anything else posts a private `msg` with `approval` to the owner and waits (30 min timeout → reject) for an `approve` event.
+- Attachments: the triggering message's files are fetched (Blossom in Nostr workspaces, WebRTC in Trystero ones) and written to `<workdir>/.yurt/files/<msgId>/<name>` (dirs `0700`, files `0600`; names reduced to plain characters and kept inside that folder). The prompt lists `name → path`, or `name (couldn't download)`. Earlier messages' files are listed by name only.
 - Reply: `msg {text, trace, meta, parent}` with `ag = agentId`, in a thread or the channel per agent config.

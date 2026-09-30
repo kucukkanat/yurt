@@ -2,15 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { joinRoom, selfId } from 'trystero';
 import { RTCPeerConnection } from 'werift';
-import { WorkspacePeer, agentKey, keyFromPhrase, type Ev, type PeerStore, type JoinRoom, type KeyPair, type AgentBody } from '@yurt/protocol';
+import { WorkspacePeer, agentKey, keyFromPhrase, LEGACY_TRYSTERO, type WsTransport, type Ev, type PeerStore, type JoinRoom, type KeyPair, type AgentBody } from '@yurt/protocol';
 import { WS_DIR, BLOB_DIR, saveConfig, type Config } from './config';
 import type { AgentHost } from './agents';
 import { log } from './log';
-
-const DEFAULT_TURN = [{
-  urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turns:openrelay.metered.ca:443?transport=tcp'],
-  username: 'openrelayproject', credential: 'openrelayproject',
-}];
 
 const safe = (s: string) => s.replace(/[^A-Za-z0-9]/g, '');
 
@@ -27,6 +22,10 @@ const fileStore: PeerStore = {
     try { const b = fs.readFileSync(path.join(BLOB_DIR, safe(id))); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer; } catch { return null; }
   },
   async putBlob(id, buf) { fs.writeFileSync(path.join(BLOB_DIR, safe(id)), Buffer.from(buf)); },
+  async loadMark(ws) {
+    try { return Number(fs.readFileSync(path.join(WS_DIR, safe(ws) + '.mark'), 'utf8')) || 0; } catch { return 0; }
+  },
+  async saveMark(ws, sec) { fs.writeFileSync(path.join(WS_DIR, safe(ws) + '.mark'), String(sec), { mode: 0o600 }); },
 };
 
 /** Headless peers: the bridge joins each workspace with the owner's key so agents answer with the browser closed. */
@@ -51,10 +50,12 @@ export class Workspaces {
     const w = this.cfg.workspaces.find((x) => x.code === code);
     if (!this.kp || !w || this.peers.has(code)) return;
     const p = new WorkspacePeer({
-      code, kp: this.kp, selfId, creator: w.creator, isBridge: true,
-      joinRoom: joinRoom as unknown as JoinRoom,
+      code, kp: this.kp, selfId, creator: w.creator, isBridge: true, transport: w.transport ?? LEGACY_TRYSTERO,
+      // Relay workspaces are Nostr-only for the bridge: files come from Blossom, and it never joins calls.
+      joinRoom: (w.transport ?? LEGACY_TRYSTERO).kind === 'trystero' ? (joinRoom as unknown as JoinRoom) : undefined,
       store: fileStore,
-      rtc: { rtcPolyfill: RTCPeerConnection, turnConfig: DEFAULT_TURN },
+      // No third-party TURN: it would see who the bridge connects to. The browser is usually on the same machine.
+      rtc: { rtcPolyfill: RTCPeerConnection },
       onState: (s, fresh) => {
         if (s.name && w.name !== s.name) { w.name = s.name; saveConfig(this.cfg); this.changed(); }
         this.announce(code);
@@ -63,6 +64,7 @@ export class Workspaces {
       onPeers: () => this.changed(),
       onCreator: (pub) => { w.creator = pub; saveConfig(this.cfg); },
       onJoinError: (d) => log('warn', 'p2p', 'join error in ' + code + ': ' + JSON.stringify(d).slice(0, 300)),
+      onError: (msg) => log('error', 'relay', code + ': ' + msg),
     });
     this.peers.set(code, p);
     p.start().then(() => { this.presence(code); log('info', 'p2p', 'joined workspace ' + code); });
@@ -95,9 +97,11 @@ export class Workspaces {
     p.setPresence({ st: 'online', bridge: true, agents: Object.fromEntries(w.agents.map((id) => [id, { working: this.host.workingIn(id, code) }])) });
   }
 
-  join(code: string, name: string, creator: string | null | undefined, agents: string[]) {
+  join(code: string, name: string, creator: string | null | undefined, agents: string[], transport?: WsTransport) {
     let w = this.cfg.workspaces.find((x) => x.code === code);
-    if (!w) { w = { code, name, creator: creator || null, agents: [] }; this.cfg.workspaces.push(w); }
+    if (!w) { w = { code, name, creator: creator || null, agents: [], transport }; this.cfg.workspaces.push(w); }
+    // A transport is fixed once known; only fill it in for workspaces joined before transports existed.
+    if (transport && !w.transport) w.transport = transport;
     w.agents = agents.filter((id) => this.cfg.agents.some((a) => a.id === id));
     if (creator && !w.creator) w.creator = creator;
     saveConfig(this.cfg);
@@ -118,5 +122,5 @@ export class Workspaces {
 
   refreshAll() { for (const code of this.peers.keys()) { this.announce(code); this.presence(code); } }
 
-  peerCount(code: string) { return this.peers.get(code)?.peers.size || 0; }
+  peerCount(code: string) { return this.peers.get(code)?.presence.size || 0; }
 }

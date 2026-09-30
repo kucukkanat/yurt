@@ -3,15 +3,22 @@
   "version": "0.1.0",
   "description": "Connects Yurt workspaces to agent CLIs on your machine over ACP. One command, config in the browser.",
   "type": "module",
-  "bin": { "yurt-bridge": "dist/cli.js" },
-  "files": ["dist"],
-  "engines": { "node": ">=20" },
+  "bin": {
+    "yurt-bridge": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "npm run build:ui && tsx src/cli.ts",
     "build:ui": "vite build --config ui/vite.config.ts",
     "build": "npm run build:ui && tsup",
     "prepublishOnly": "npm run build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@noble/curves": "~1.6.0",
@@ -34,6 +41,7 @@
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
-    "vite": "^5.4.0"
+    "vite": "^5.4.0",
+    "vitest": "^2.1.0"
   }
 }

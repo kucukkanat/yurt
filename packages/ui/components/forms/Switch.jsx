@@ -2,7 +2,7 @@ import React from 'react';
 import { Icon } from '../core/Icon.jsx';
 import { shadows } from '../core/useInteraction.js';
 
-export function Switch({ checked, defaultChecked, onChange, label, description, tone = 'accent', size = 'md', disabled, id, style }) {
+export function Switch({ checked, defaultChecked, onChange, label, description, tone = 'accent', size = 'md', disabled, id, style, ...rest }) {
   const auto = React.useId();
   const fid = id || auto;
   const [inner, setInner] = React.useState(!!defaultChecked);
@@ -15,7 +15,7 @@ export function Switch({ checked, defaultChecked, onChange, label, description, 
   return (
     <div style={{ display: 'inline-flex', alignItems: 'flex-start', gap: 10, opacity: disabled ? 0.5 : 1, ...style }}>
       <button
-        id={fid} type="button" role="switch" aria-checked={on} disabled={disabled} onClick={toggle}
+        {...rest} id={fid} type="button" role="switch" aria-checked={on} disabled={disabled} onClick={toggle}
         onFocus={(e) => { let fv = true; try { fv = e.target.matches(':focus-visible'); } catch (_) {} setFocus(fv); }} onBlur={() => setFocus(false)}
         onPointerDown={() => setPress(true)} onPointerUp={() => setPress(false)} onPointerLeave={() => setPress(false)}
         style={{

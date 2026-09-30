@@ -36,7 +36,9 @@ function Attachment({ f }: { f: FileRef }) {
       </a>
     );
   }
-  const note = url ? fmtBytes(f.size) : progress != null && progress < 1 ? 'Fetching · ' + Math.round(progress * 100) + '%' : fmtBytes(f.size) + ' · waiting for a peer who has it';
+  // Relay workspaces fetch sealed files from Blossom; Trystero ones need a member who has the file online.
+  const note = url ? fmtBytes(f.size) : progress != null && progress < 1 ? 'Fetching · ' + Math.round(progress * 100) + '%'
+    : fmtBytes(f.size) + (f.blob ? ' · downloading' : ' · waiting for a peer who has it');
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px 8px 8px', borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--surface-card)', minWidth: 220, maxWidth: 360 }}>
       <span style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--surface-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', flexShrink: 0 }}><Icon name={isImg ? 'image' : 'file-text'} size={16} /></span>
@@ -46,7 +48,7 @@ function Attachment({ f }: { f: FileRef }) {
       </span>
       {url
         ? <a href={url} download={f.name} aria-label={'Download ' + f.name} style={{ display: 'flex', color: 'var(--text-muted)', padding: 6 }}><Icon name="download" size={16} /></a>
-        : <IconButton icon="refresh-cw" label="Ask peers again" size="sm" onClick={() => useApp.getState().fetchBlob(f.id)} />}
+        : <IconButton icon="refresh-cw" label={f.blob ? 'Try downloading again' : 'Ask peers again'} size="sm" onClick={() => useApp.getState().fetchBlob(f.id)} />}
     </div>
   );
 }

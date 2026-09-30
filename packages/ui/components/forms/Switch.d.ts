@@ -11,5 +11,7 @@ export interface SwitchProps {
   disabled?: boolean;
   id?: string;
   style?: React.CSSProperties;
+  /** Forwarded to the switch button, e.g. `data-testid`. */
+  [attr: `data-${string}`]: string | undefined;
 }
 export declare function Switch(props: SwitchProps): JSX.Element;

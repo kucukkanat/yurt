@@ -57,4 +57,6 @@ export const peerStore: PeerStore = {
   save: (evs) => eventsDb.put(evs),
   getBlob: async (id) => (await blobsDb.get(id)) ?? null,
   putBlob: (id, buf) => blobsDb.put(id, buf),
+  loadMark: async (ws) => (await kv.get<number>('mark:' + ws)) ?? 0,
+  saveMark: async (ws, sec) => { await kv.set('mark:' + ws, sec); },
 };

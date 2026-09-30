@@ -1,3 +1,4 @@
+import type { WsTransport } from './invite';
 /** Messages between the Yurt web app / bridge UI and the local bridge over ws://127.0.0.1:7717/ws. */
 
 export const BRIDGE_PORT = 7717;
@@ -48,7 +49,8 @@ export type ToBridge =
   | { t: 'hello'; token?: string }
   | { t: 'pair'; code: string }
   | { t: 'identity'; phrase: string; name: string; handle: string }
-  | { t: 'ws.join'; code: string; name: string; creator?: string | null; agents: string[] }
+  // `transport` is optional so an older web app's joins still work; absent means Trystero.
+  | { t: 'ws.join'; code: string; name: string; transport?: WsTransport; creator?: string | null; agents: string[] }
   | { t: 'ws.leave'; code: string }
   | { t: 'ws.agents'; code: string; agents: string[] }
   // bridge UI only (local admin token)
