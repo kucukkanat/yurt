@@ -16,4 +16,3 @@ export function Icon({ name, size = 20, strokeWidth = 2, label, color = 'current
   );
 }
 
-export const ICON_NAMES = Object.keys(ICONS);

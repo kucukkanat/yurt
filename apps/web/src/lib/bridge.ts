@@ -48,8 +48,11 @@ class BridgeClient {
   stop() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    this.ws?.close();
+    // Detach first: a close event from this socket would otherwise schedule a redial.
+    const ws = this.ws;
     this.ws = null;
+    if (ws) { ws.onopen = ws.onmessage = ws.onclose = null; ws.close(); }
+    this.state = null;
     this.set('off');
   }
 
@@ -59,7 +62,7 @@ class BridgeClient {
   }
 
   private onMsg(m: FromBridge) {
-    this.waiters.splice(0).forEach((w) => w(m));
+    [...this.waiters].forEach((w) => w(m));
     if (m.t === 'hello') {
       if (m.paired) { this.set('connected'); if (this.identity) this.send({ t: 'identity', ...this.identity }); }
       else this.set('unpaired');
@@ -77,15 +80,13 @@ class BridgeClient {
   send(m: ToBridge) { if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m)); }
 
   pair(code: string): Promise<boolean> {
-    this.send({ t: 'pair', code });
     return new Promise((res) => {
-      const w = (m: FromBridge) => {
-        if (m.t === 'paired') res(true);
-        else if (m.t === 'error') res(false);
-        else this.waiters.push(w);
-      };
+      // Every exit removes the waiter, so timed-out pairings don't pile up.
+      const done = (ok: boolean) => { clearTimeout(timer); this.waiters = this.waiters.filter((x) => x !== w); res(ok); };
+      const w = (m: FromBridge) => { if (m.t === 'paired' || m.t === 'error') done(m.t === 'paired'); };
+      const timer = setTimeout(() => done(false), 8000);
       this.waiters.push(w);
-      setTimeout(() => res(false), 8000);
+      this.send({ t: 'pair', code });
     });
   }
 

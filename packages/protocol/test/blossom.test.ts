@@ -1,11 +1,21 @@
+import http from 'node:http';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
-import { encryptFile, decryptFile, uploadFile, downloadFile, parseServers, sealBytes, openBytes, workspaceKeys, newWorkspaceKey } from '../src';
+import { encryptFile, decryptFile, uploadFile, downloadFile, parseServers, sealBytes, openBytes, workspaceKeys, newWorkspaceKey, MAX_FILE_BYTES, type BlobRef } from '../src';
 import { startBlossom, type TestBlossom } from './blossom-server';
 
 const text = (s: string) => new TextEncoder().encode(s);
+const dev = { allowHttp: true }; // the test servers are plain http
+
+async function until(cond: () => boolean, ms = 5_000) {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error('timed out waiting for condition');
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 describe('file sealing', () => {
   it('round-trips bytes and identifies the blob by its ciphertext hash', () => {
@@ -43,13 +53,13 @@ describe('blossom', () => {
     expect(ref.servers).toEqual([server.url]);
     const stored = [...server.stored.values()].map((b) => b.toString('latin1')).join('');
     expect(stored).not.toContain('ship friday');
-    expect(new TextDecoder().decode((await downloadFile(ref)) ?? new Uint8Array())).toBe('meeting notes: ship friday');
+    expect(new TextDecoder().decode((await downloadFile(ref, dev)) ?? new Uint8Array())).toBe('meeting notes: ship friday');
   });
 
   it('skips unreachable servers and keeps the ones that took it', async () => {
     const ref = await uploadFile(['http://127.0.0.1:9', server.url], text('x'));
     expect(ref.servers).toEqual([server.url]);
-    expect(await downloadFile({ ...ref, servers: ['http://127.0.0.1:9', server.url] })).not.toBeNull();
+    expect(await downloadFile({ ...ref, servers: ['http://127.0.0.1:9', server.url] }, dev)).not.toBeNull();
   });
 
   it('fails loudly when no server accepts the upload', async () => {
@@ -58,9 +68,48 @@ describe('blossom', () => {
 
   it('returns null when no server has an intact copy', async () => {
     const ref = await uploadFile([server.url], text('x'));
-    expect(await downloadFile({ ...ref, hash: '0'.repeat(64) })).toBeNull();
+    expect(await downloadFile({ ...ref, hash: '0'.repeat(64) }, dev)).toBeNull();
     server.stored.set(ref.hash, Buffer.from('swapped bytes'));
+    expect(await downloadFile(ref, dev)).toBeNull();
+  });
+
+  it('only fetches from https servers unless dev servers are allowed', async () => {
+    const ref = await uploadFile([server.url], text('x'));
     expect(await downloadFile(ref)).toBeNull();
+    expect(await downloadFile(ref, dev)).not.toBeNull();
+  });
+
+  it('returns null for malformed refs from other members instead of throwing', async () => {
+    const ref = await uploadFile([server.url], text('x'));
+    const bad: unknown[] = [null, 'ref', { ...ref, servers: server.url }, { ...ref, servers: [42] }, { ...ref, hash: 'ZZ'.repeat(32) }, { ...ref, hash: ref.hash.slice(2) }, { ...ref, key: 'not a key' }, { ...ref, key: 7 }];
+    for (const r of bad) expect(await downloadFile(r as BlobRef, dev)).toBeNull();
+  });
+
+  it('stops reading a body larger than any allowed file', async () => {
+    const huge = Buffer.alloc(2 * MAX_FILE_BYTES);
+    // With Content-Length it's refused up front; without, once the bytes read pass the limit.
+    for (const chunked of [false, true]) {
+      const big = await startBlossom(0, { chunked });
+      const ref = await uploadFile([big.url], text('x'));
+      big.stored.set(ref.hash, huge);
+      expect(await downloadFile(ref, dev)).toBeNull();
+      await until(() => big.aborted.includes(ref.hash)); // hung up mid-transfer instead of buffering it all
+      await big.close();
+    }
+  });
+
+  it('gives up on a server that never answers', async () => {
+    const stall = http.createServer(() => {}); // accepts requests, never responds
+    await new Promise<void>((r) => stall.listen(0, '127.0.0.1', r));
+    const addr = stall.address();
+    const slow = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
+    const ref = await uploadFile([server.url], text('still here'));
+    const started = Date.now();
+    const got = await downloadFile({ ...ref, servers: [slow, server.url] }, { ...dev, timeoutMs: 300 });
+    expect(new TextDecoder().decode(got ?? new Uint8Array())).toBe('still here');
+    expect(Date.now() - started).toBeLessThan(5_000);
+    stall.closeAllConnections();
+    await new Promise((r) => stall.close(r));
   });
 
   it('test server refuses uploads without valid auth', async () => {

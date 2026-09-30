@@ -2,7 +2,7 @@ import type { WorkspacePeer, Msg, TraceStep, AgentConfig } from '@yurt/protocol'
 import { agentDmChannel, mentions, agentKey } from '@yurt/protocol';
 import type { Ev } from '@yurt/protocol';
 import { AcpConnection, isAuthError, type AcpUpdate } from './acp';
-import { RUNTIMES } from './runtimes';
+import { RUNTIMES, acpCommand } from './runtimes';
 import type { Config } from './config';
 import { log } from './log';
 import { saveAttachment } from './files';
@@ -15,6 +15,15 @@ const STALE_MS = 3 * 60_000;
 const APPROVAL_TIMEOUT_MS = 30 * 60_000;
 
 const mapStatus = (s?: string): TraceStep['status'] => (s === 'completed' ? 'done' : s === 'failed' ? 'error' : 'running');
+
+/** Only the human owner answers approvals; an agent signing with the owner's key (`ag`) must not. */
+export const isOwnerApproval = (e: Ev, me: string): boolean => e.t === 'approve' && e.a === me && !e.ag;
+
+/** Ids of this workspace's agents that `text` @mentions, never the agent `from` that wrote it. */
+export const mentionedAgents = (agents: readonly AgentConfig[], wsAgents: readonly string[], text: string, from?: string): string[] => {
+  const handles = mentions(text);
+  return wsAgents.filter((id) => id !== from && agents.some((a) => a.id === id && handles.includes(a.handle.toLowerCase())));
+};
 
 /** Runs the owner's agents: one ACP session per agent, prompts queued, replies posted back into the room. */
 export class AgentHost {
@@ -44,7 +53,7 @@ export class AgentHost {
     const ws = this.cfg.workspaces.find((w) => w.code === peer.code);
     if (!ws) return;
     for (const e of fresh) {
-      if (e.t === 'approve' && e.a === me) { this.approvals.get(e.b?.req)?.(e.b?.option); continue; }
+      if (isOwnerApproval(e, me)) { this.approvals.get(e.b?.req)?.(e.b?.option); continue; }
       if (e.t !== 'msg' || !e.ch || Date.now() - e.ts > STALE_MS) continue;
       const m = peer.state.msgs.get(e.id);
       if (!m) continue;
@@ -54,12 +63,10 @@ export class AgentHost {
         continue;
       }
       if (e.ch.startsWith('dm:')) continue;
-      if (e.ag && !this.allowAgentChain(e.ch)) continue;
-      const handles = mentions(m.text);
-      for (const id of ws.agents) {
-        const a = this.agent(id);
-        if (a && e.ag !== id && handles.includes(a.handle.toLowerCase())) this.enqueue(id, peer, m, 'mention');
-      }
+      const targets = mentionedAgents(this.cfg.agents, ws.agents, m.text, e.ag);
+      // Only agent messages that actually hand off to another agent count toward the chain limit.
+      if (!targets.length || (e.ag && !this.allowAgentChain(e.ch))) continue;
+      for (const id of targets) this.enqueue(id, peer, m, 'mention');
     }
   }
 
@@ -83,18 +90,23 @@ export class AgentHost {
     const cur = this.sessions.get(a.id);
     if (cur && !cur.conn.closed && cur.key === key) return cur;
     cur?.conn.close();
-    const def = RUNTIMES[a.runtime];
-    const conn = new AcpConnection(a.name, def.acp[0], def.acp.slice(1), a.workdir);
+    const conn = new AcpConnection(a.name, ...acpCommand(a.runtime), a.workdir);
     const s: Session = { conn, id: '', key };
     conn.onUpdate = (_sid, u) => s.onUpdate?.(u);
-    conn.onPermission = (p) => this.permission(a, p);
+    // By id, not `a`: saving the agent replaces its config object, and auto-approve changes must apply mid-session.
+    conn.onPermission = (p) => this.permission(a.id, p);
     conn.onExit = () => { if (this.sessions.get(a.id) === s) this.sessions.delete(a.id); };
-    await conn.initialize();
-    const res = await conn.request<{ sessionId: string }>('session/new', { cwd: a.workdir, mcpServers: [] }, 120_000);
-    s.id = res.sessionId;
+    try {
+      await conn.initialize();
+      const res = await conn.request<{ sessionId: string }>('session/new', { cwd: a.workdir, mcpServers: [] }, 120_000);
+      s.id = res.sessionId;
+    } catch (e) {
+      conn.close(); // never stored, so nothing else would stop this process
+      throw e;
+    }
     if (a.model) await conn.request('session/set_model', { sessionId: s.id, modelId: a.model }, 20_000).catch((e) => log('warn', a.name, 'model not set: ' + e.message));
     this.sessions.set(a.id, s);
-    log('info', a.name, `session ${s.id} on ${def.name} in ${a.workdir}`);
+    log('info', a.name, `session ${s.id} on ${RUNTIMES[a.runtime].name} in ${a.workdir}`);
     return s;
   }
 
@@ -175,7 +187,7 @@ export class AgentHost {
       text = auth ? `I can't run yet: ${RUNTIMES[a.runtime].name} isn't signed in on my owner's machine.` : `I hit an error and stopped: ${(e as Error).message}`;
       trace.push({ title: auth ? 'Sign-in needed' : 'Run failed', status: 'error', detail: (e as Error).message });
       this.setStatus(id, 'error');
-      if (!auth) this.drop(id);
+      this.drop(id); // auth errors too: a fresh process picks up a sign-in done since
     } finally {
       for (const st of trace) if (st.status === 'running') st.status = 'done';
       this.working.delete(id);
@@ -191,7 +203,9 @@ export class AgentHost {
     });
   }
 
-  private async permission(a: AgentConfig, p: any) {
+  private async permission(id: string, p: any) {
+    const a = this.agent(id);
+    if (!a) return { outcome: { outcome: 'cancelled' } }; // removed while running
     const kind: string = p?.toolCall?.kind || 'other';
     const title: string = p?.toolCall?.title || 'use a tool';
     const options: { optionId: string; name: string; kind: string }[] = p?.options || [];

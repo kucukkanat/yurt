@@ -19,5 +19,7 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   kbd?: string;
   fullWidth?: boolean;
   children?: React.ReactNode;
+  /** Forwarded to the element, e.g. `data-testid`. */
+  [attr: `data-${string}`]: string | undefined;
 }
 export declare function Button(props: ButtonProps): JSX.Element;

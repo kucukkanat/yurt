@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { Toast } from '@yurt/ui';
 import { useApp } from './store';
 import { useCurrent, useMedia } from './model';

@@ -32,6 +32,8 @@ const fileStore: PeerStore = {
 export class Workspaces {
   peers = new Map<string, WorkspacePeer>();
   private kp: KeyPair | null = null;
+  /** Leaves wait a moment so the "agents removed" announcement goes out; a rejoin cancels them. */
+  private stopping = new Map<string, ReturnType<typeof setTimeout>>();
   host!: AgentHost;
 
   constructor(private cfg: Config, private changed: () => void) {}
@@ -67,10 +69,18 @@ export class Workspaces {
       onError: (msg) => log('error', 'relay', code + ': ' + msg),
     });
     this.peers.set(code, p);
-    p.start().then(() => { this.presence(code); log('info', 'p2p', 'joined workspace ' + code); });
+    p.start().then(
+      () => { this.presence(code); log('info', 'p2p', 'joined workspace ' + code); },
+      (e: unknown) => log('error', 'p2p', `couldn't start workspace ${code}: ${e instanceof Error ? e.message : String(e)}`),
+    );
   }
 
-  private stop(code: string) { this.peers.get(code)?.leave(); this.peers.delete(code); }
+  private stop(code: string) {
+    clearTimeout(this.stopping.get(code));
+    this.stopping.delete(code);
+    this.peers.get(code)?.leave();
+    this.peers.delete(code);
+  }
 
   /** Publish an `agent` event whenever what the room knows about one of my agents differs from local config. */
   announce(code: string) {
@@ -98,13 +108,19 @@ export class Workspaces {
   }
 
   join(code: string, name: string, creator: string | null | undefined, agents: string[], transport?: WsTransport) {
+    clearTimeout(this.stopping.get(code));
+    this.stopping.delete(code);
     let w = this.cfg.workspaces.find((x) => x.code === code);
     if (!w) { w = { code, name, creator: creator || null, agents: [], transport }; this.cfg.workspaces.push(w); }
-    // A transport is fixed once known; only fill it in for workspaces joined before transports existed.
-    if (transport && !w.transport) w.transport = transport;
+    // Kind and key are fixed once known (only filled in for workspaces joined before transports existed);
+    // a relay workspace's relay list may be edited, which needs a fresh peer on the new relays.
+    const cur = w.transport;
+    const relaysEdited = transport?.kind === 'nostr' && cur?.kind === 'nostr' && transport.key === cur.key && transport.relays.join() !== cur.relays.join();
+    if (transport && (!cur || relaysEdited)) w.transport = transport;
     w.agents = agents.filter((id) => this.cfg.agents.some((a) => a.id === id));
     if (creator && !w.creator) w.creator = creator;
     saveConfig(this.cfg);
+    if (relaysEdited) this.stop(code); // immediate, and clears any pending delayed stop
     const running = this.peers.has(code);
     this.start(code);
     if (running) { this.announce(code); this.presence(code); } // a fresh peer announces after its log loads
@@ -114,7 +130,8 @@ export class Workspaces {
   leave(code: string) {
     const w = this.cfg.workspaces.find((x) => x.code === code);
     if (w) { w.agents = []; this.announce(code); }
-    setTimeout(() => this.stop(code), 1500);
+    clearTimeout(this.stopping.get(code));
+    this.stopping.set(code, setTimeout(() => this.stop(code), 1500));
     this.cfg.workspaces = this.cfg.workspaces.filter((x) => x.code !== code);
     saveConfig(this.cfg);
     this.changed();

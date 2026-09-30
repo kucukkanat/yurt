@@ -1,5 +1,5 @@
 import type { Ev, FileRef, MsgBody } from './types';
-import { makeEvent, verifyEvent, visibleTo, type EventFields } from './events';
+import { makeEvent, verifyEvent, visibleTo, MAX_FILE_BYTES, type EventFields } from './events';
 import { reduce, type WsState } from './reduce';
 import { APP_ID, roomIdFor } from './codes';
 import { sign, verify, type KeyPair } from './crypto';
@@ -49,7 +49,10 @@ export interface WorkspacePeerOpts {
   selfId: string;
   /** How events travel. Defaults to Trystero. */
   transport?: WsTransport;
-  /** WebRTC room for huddles and files. Required for Trystero, which also carries events over it. */
+  /**
+   * WebRTC room. Required for Trystero, which carries events, files and huddles over it. Relay
+   * workspaces use it only for voice and video, and only when given (the user's opt-in).
+   */
   joinRoom?: JoinRoom;
   store: PeerStore;
   creator?: string | null;
@@ -57,18 +60,24 @@ export interface WorkspacePeerOpts {
   isBridge?: boolean;
   /** Relay workspaces leave the WebRTC room after it's been unneeded this long. Default 60 s. */
   roomIdleMs?: number;
+  /** Trystero workspaces stop looking for a file among peers after this long. Default 60 s. */
+  fetchMs?: number;
+  /** Allow `http://` Blossom servers in file refs (local development and tests). Otherwise only `https://` ones are fetched. */
+  devFileServers?: boolean;
   onState?(s: WsState, fresh: Ev[]): void;
   onPeers?(): void;
   onCreator?(pub: string): void;
   onBlob?(id: string): void;
   onBlobProgress?(id: string, p: number): void;
   onJoinError?(d: unknown): void;
-  onError?(msg: string): void;
+  /** Failures the user should hear about: relays refusing an event, a failed save or download. */
+  onError(msg: string): void;
 }
 
 const hsMsg = (code: string, from: string, to: string) => `yurt-hs:${code}:${from}>${to}`;
 const FUTURE_SKEW_MS = 10 * 60 * 1000;
 const NO_PRESENCE: ReadonlyMap<string, Presence> = new Map();
+const NO_RELAYS: ReadonlyMap<string, boolean> = new Map();
 const ROOM_IDLE_MS = 60_000;
 const FETCH_MS = 60_000;
 
@@ -78,14 +87,17 @@ async function sha256Buf(buf: ArrayBuffer): Promise<string> {
 }
 export { sha256Buf };
 
+const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null;
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
 // Files only travel over WebRTC in Trystero workspaces; relay workspaces use Blossom.
-type MediaActs = { hud: TAction<HuddleState>; fwant?: TAction<{ id: string }>; file?: TAction<ArrayBuffer> };
+type FileActs = { fwant: TAction<{ id: string }>; file: TAction<ArrayBuffer> };
 
 /**
  * One workspace. Holds the signed event log and derived state; a DataLink (Trystero or Nostr)
- * carries events and presence. Huddles and file transfer always run over a WebRTC room: always
- * joined for Trystero (it's also the event plane), joined on demand for Nostr so members don't
- * expose IPs or signaling metadata while nobody needs it.
+ * carries events and presence. Trystero workspaces run everything over their WebRTC room. Relay
+ * workspaces keep files on Blossom and open WebRTC only for huddles, only with the user's opt-in,
+ * and only while someone is in one, so members don't expose IPs or signaling metadata otherwise.
  * Shared by the web app and the headless bridge.
  */
 export class WorkspacePeer implements LinkHost {
@@ -100,17 +112,18 @@ export class WorkspacePeer implements LinkHost {
   myPresence: Presence;
   myHuddle: HuddleState = { ch: null, mic: false, cam: false, screen: false };
   onHuddle?: (peerId: string, h: HuddleState | null) => void;
-  onPeerJoined?: (peerId: string) => void;
   private data: DataLink | null = null;
-  private act: MediaActs | null = null;
+  private hud: TAction<HuddleState> | null = null;
+  private files: FileActs | null = null;
   private pendingPub = new Map<string, string>();
-  private fetching = new Map<string, number>(); // Trystero: blob id → give up at (ms)
+  private fetching = new Map<string, ReturnType<typeof setTimeout>>(); // Trystero: blob id → give-up timer
   private waiters = new Map<string, ((b: ArrayBuffer | null) => void)[]>();
   private downloads = new Map<string, Promise<ArrayBuffer | null>>(); // Nostr: in-flight Blossom fetches
   private idleSince = 0;
   private roomTimer: ReturnType<typeof setInterval> | null = null;
   private fresh: Ev[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private closed = false;
 
   constructor(public o: WorkspacePeerOpts) {
     if ((o.transport ?? LEGACY_TRYSTERO).kind === 'trystero' && !o.joinRoom) throw new Error('Trystero workspaces need joinRoom');
@@ -123,7 +136,17 @@ export class WorkspacePeer implements LinkHost {
   get code() { return this.o.code; }
   get transport(): WsTransport { return this.o.transport ?? LEGACY_TRYSTERO; }
   /** Online members, keyed by a link-specific id; each entry's `pub` is authenticated. */
-  get presence(): ReadonlyMap<string, Presence> { return this.data?.presence ?? NO_PRESENCE; }
+  get presence(): ReadonlyMap<string, Presence> {
+    const all = this.data?.presence;
+    // A ban can arrive after someone's presence did.
+    return all ? new Map([...all].filter(([, p]) => !this.isBanned(p.pub))) : NO_PRESENCE;
+  }
+  /** Relay workspaces: each relay → connected now. Empty for Trystero workspaces. */
+  relayStatus(): ReadonlyMap<string, boolean> {
+    const t = this.transport;
+    if (t.kind !== 'nostr') return NO_RELAYS;
+    return this.data?.relayStatus?.() ?? new Map(t.relays.map((u) => [u, false]));
+  }
   /** Whether events can currently leave this device (a peer or relay is reachable). */
   get connected(): boolean { return this.data?.connected ?? false; }
   private get lazyRoom() { return this.transport.kind === 'nostr'; }
@@ -132,13 +155,17 @@ export class WorkspacePeer implements LinkHost {
 
   async start() {
     const evs = await this.o.store.load(this.o.code);
+    // Left while loading: opening a link or room now would leak it, since nobody will leave it again.
+    if (this.closed) return;
     for (const e of evs) this.events.set(e.id, e);
     this.recompute();
     const t = this.transport;
     if (t.kind === 'nostr') {
       const { code, store } = this.o;
       const mark = (await store.loadMark?.(code)) ?? 0;
-      this.data = new NostrData(this, { key: t.key, relays: t.relays, mark, saveMark: (sec) => void store.saveMark?.(code, sec) });
+      if (this.closed) return;
+      const saveMark = (sec: number) => { store.saveMark?.(code, sec).catch((err: unknown) => this.error(`Couldn't save the sync mark: ${errMsg(err)}`)); };
+      this.data = new NostrData(this, { key: t.key, relays: t.relays, mark, saveMark });
       if (this.o.joinRoom) this.roomTimer = setInterval(() => this.syncRoom(), Math.min(5_000, this.o.roomIdleMs ?? 5_000));
     } else {
       const room = this.joinMedia();
@@ -175,68 +202,99 @@ export class WorkspacePeer implements LinkHost {
       },
     });
     this.room = room;
-    const act: MediaActs = { hud: room.makeAction<HuddleState>('hud') };
-    this.act = act;
-    act.hud.onMessage = (h, { peerId }) => {
+    const hud = (this.hud = room.makeAction<HuddleState>('hud'));
+    hud.onMessage = (h, { peerId }) => {
       if (!this.peers.has(peerId)) return;
       this.huddles.set(peerId, h);
       this.onHuddle?.(peerId, h);
       this.o.onPeers?.();
     };
-    if (!this.lazyRoom) this.wireFiles(room, act);
+    if (!this.lazyRoom) this.files = this.wireFiles(room);
     room.onPeerJoin = (peerId) => {
       const pub = this.pendingPub.get(peerId);
       if (!pub) return;
       this.pendingPub.delete(peerId);
+      if (this.isBanned(pub)) { room.getPeers()[peerId]?.close(); return; } // banned since its handshake
       this.peers.set(peerId, { pub });
-      if (this.myHuddle.ch) act.hud.send(this.myHuddle, { target: peerId });
-      for (const id of this.fetching.keys()) if (this.canSeeFile(id, pub)) act.fwant?.send({ id }, { target: peerId });
+      if (this.myHuddle.ch) hud.send(this.myHuddle, { target: peerId });
+      if (this.files) for (const id of this.fetching.keys()) if (this.canSeeFile(id, pub)) this.files.fwant.send({ id }, { target: peerId });
       this.data?.onPeerJoin?.(peerId, pub);
-      this.onPeerJoined?.(peerId);
-      this.o.onPeers?.();
-      this.emit();
-    };
-    room.onPeerLeave = (peerId) => {
-      this.peers.delete(peerId);
-      this.data?.onPeerLeave?.(peerId);
-      if (this.huddles.has(peerId)) { this.huddles.delete(peerId); this.onHuddle?.(peerId, null); }
+      // Only "peers changed". State goes out with the scheduled recompute, together with the fresh
+      // events it contains: emitting here would hand out fresh events with a state that lacks them.
       this.o.onPeers?.();
     };
+    room.onPeerLeave = (peerId) => this.peerLeft(peerId);
     return room;
   }
 
-  private wireFiles(room: TRoom, act: MediaActs) {
-    const fwant = (act.fwant = room.makeAction<{ id: string }>('fwant'));
-    const file = (act.file = room.makeAction<ArrayBuffer>('file'));
-    fwant.onMessage = async ({ id }, { peerId }) => {
+  private peerLeft(peerId: string) {
+    this.peers.delete(peerId);
+    this.data?.onPeerLeave?.(peerId);
+    if (this.huddles.has(peerId)) { this.huddles.delete(peerId); this.onHuddle?.(peerId, null); }
+    this.o.onPeers?.();
+  }
+
+  /** Cut WebRTC peers whose key the current state bans; the handshake keeps them out from then on. */
+  private dropBanned() {
+    for (const [peerId, { pub }] of this.peers) {
+      if (!this.isBanned(pub)) continue;
+      this.room?.getPeers()[peerId]?.close();
+      this.peerLeft(peerId);
+    }
+  }
+
+  private wireFiles(room: TRoom): FileActs {
+    const fwant = room.makeAction<{ id: string }>('fwant');
+    const file = room.makeAction<ArrayBuffer>('file');
+    fwant.onMessage = (m: unknown, { peerId }) => {
       const who = this.peers.get(peerId);
+      const id = isObj(m) ? m.id : undefined;
       if (!who || typeof id !== 'string' || !this.canSeeFile(id, who.pub)) return;
-      const b = await this.o.store.getBlob?.(id);
-      if (b) file.send(b, { target: peerId, metadata: { id } });
+      this.o.store.getBlob?.(id)
+        .then((b) => { if (b) file.send(b, { target: peerId, metadata: { id } }); })
+        .catch((err: unknown) => this.error(`Couldn't serve file ${id}: ${errMsg(err)}`));
     };
-    file.onMessage = async (data: unknown, { metadata }) => {
-      const id = metadata?.id;
+    file.onMessage = (data: unknown, { peerId, metadata }) => {
+      const id: unknown = metadata?.id;
+      const who = this.peers.get(peerId);
+      // Only files I'm fetching, from a member who may see them: anything else is a peer pushing bytes at me.
+      if (!who || typeof id !== 'string' || !this.fetching.has(id) || !this.canSeeFile(id, who.pub)) return;
+      if (!(data instanceof ArrayBuffer || ArrayBuffer.isView(data)) || data.byteLength > MAX_FILE_BYTES) return;
       // Browsers deliver an ArrayBuffer; Node (the bridge, via werift) delivers a Uint8Array.
-      const buf = data instanceof ArrayBuffer ? data : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice().buffer : null;
-      if (!id || !buf || (await this.o.store.getBlob?.(id))) return;
-      if ((await sha256Buf(buf)) !== id) return;
-      await this.gotBlob(id, buf);
+      const buf = data instanceof ArrayBuffer ? data : new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice().buffer;
+      this.storeFile(id, buf).catch((err: unknown) => this.error(`Couldn't store file ${id}: ${errMsg(err)}`));
     };
-    file.onReceiveProgress = (p, { metadata }) => metadata?.id && this.o.onBlobProgress?.(metadata.id, p);
+    file.onReceiveProgress = (p, { metadata }) => {
+      const id: unknown = metadata?.id;
+      if (typeof id === 'string' && this.fetching.has(id)) this.o.onBlobProgress?.(id, p);
+    };
+    return { fwant, file };
+  }
+
+  private async storeFile(id: string, buf: ArrayBuffer) {
+    if ((await this.o.store.getBlob?.(id)) || (await sha256Buf(buf)) !== id) return;
+    await this.gotBlob(id, buf);
   }
 
   private async gotBlob(id: string, buf: ArrayBuffer) {
     await this.o.store.putBlob?.(id, buf);
+    this.settle(id, buf);
+    this.o.onBlob?.(id);
+  }
+
+  /** Ends a WebRTC file fetch: stops its give-up timer and answers everyone waiting for it. */
+  private settle(id: string, buf: ArrayBuffer | null) {
+    clearTimeout(this.fetching.get(id));
     this.fetching.delete(id);
     this.waiters.get(id)?.forEach((w) => w(buf));
     this.waiters.delete(id);
-    this.o.onBlob?.(id);
   }
 
   private leaveMedia() {
     this.room?.leave();
     this.room = null;
-    this.act = null;
+    this.hud = null;
+    this.files = null;
     this.pendingPub.clear();
     for (const pid of this.peers.keys()) this.data?.onPeerLeave?.(pid);
     this.peers.clear();
@@ -264,7 +322,9 @@ export class WorkspacePeer implements LinkHost {
   }
 
   leave() {
+    this.closed = true;
     if (this.roomTimer) clearInterval(this.roomTimer);
+    for (const id of [...this.fetching.keys()]) this.settle(id, null);
     this.data?.leave();
     this.data = null;
     this.leaveMedia();
@@ -275,7 +335,7 @@ export class WorkspacePeer implements LinkHost {
   publish<B>(f: Omit<EventFields<B>, 'ws'>): Ev<B> {
     const e = makeEvent(this.o.kp, { ...f, ws: this.o.code });
     this.events.set(e.id, e);
-    this.o.store.save([e]);
+    this.save([e]);
     this.queued.add(e.id);
     this.schedule([e]);
     this.data?.send([e]);
@@ -296,24 +356,27 @@ export class WorkspacePeer implements LinkHost {
       this.events.set(ev.id, ev);
       fresh.push(ev);
     }
-    if (fresh.length) { this.o.store.save(fresh); this.schedule(fresh); }
+    if (fresh.length) { this.save(fresh); this.schedule(fresh); }
   }
 
-  delivered(ids: readonly string[] | 'all') {
-    if (ids === 'all') this.queued.clear();
-    else ids.forEach((id) => this.queued.delete(id));
+  private save(evs: Ev[]) {
+    this.o.store.save(evs).catch((err: unknown) => this.error(`Couldn't save ${evs.length} event(s) on this device: ${errMsg(err)}`));
+  }
+
+  delivered(ids: readonly string[]) {
+    if (!ids.length) return;
+    ids.forEach((id) => this.queued.delete(id));
     this.o.onPeers?.();
   }
+
+  isBanned(pub: string): boolean { return this.state.bans.has(pub); }
 
   changed() {
     this.syncRoom();
     this.o.onPeers?.();
   }
 
-  error(msg: string) {
-    if (!this.o.onError) throw new Error(msg);
-    this.o.onError(msg);
-  }
+  error(msg: string) { this.o.onError(msg); }
 
   visibleFor(pub: string): Ev[] {
     const out: Ev[] = [];
@@ -332,8 +395,8 @@ export class WorkspacePeer implements LinkHost {
     return null;
   }
 
-  /** A file may only travel to someone who can see a message attaching it (DM files stay within the pair). */
-  private canSeeFile(id: string, pub: string): boolean { return !!this.fileRef(id, pub); }
+  /** A file may only travel to or from someone who can see a message attaching it (DM files stay within the pair), and never a banned key. */
+  private canSeeFile(id: string, pub: string): boolean { return !this.isBanned(pub) && !!this.fileRef(id, pub); }
 
   private schedule(fresh: Ev[]) {
     this.fresh.push(...fresh);
@@ -345,13 +408,10 @@ export class WorkspacePeer implements LinkHost {
     const hadCreator = this.o.creator;
     this.state = reduce(this.o.code, [...this.events.values()], { creator: this.o.creator });
     if (!hadCreator && this.state.creator) { this.o.creator = this.state.creator; this.o.onCreator?.(this.state.creator); }
-    this.emit();
-  }
-
-  private emit() {
-    const f = this.fresh;
+    this.dropBanned();
+    const fresh = this.fresh;
     this.fresh = [];
-    this.o.onState?.(this.state, f);
+    this.o.onState?.(this.state, fresh);
   }
 
   /* ---------- ephemeral ---------- */
@@ -364,7 +424,7 @@ export class WorkspacePeer implements LinkHost {
   setHuddle(h: Partial<HuddleState>) {
     this.myHuddle = { ...this.myHuddle, ...h };
     this.syncRoom();
-    this.act?.hud.send(this.myHuddle);
+    this.hud?.send(this.myHuddle);
   }
 
   /**
@@ -372,12 +432,11 @@ export class WorkspacePeer implements LinkHost {
    * download it from Blossom. Trystero workspaces ask peers who may see it, retrying as peers join.
    */
   requestBlob(id: string) {
-    if (this.transport.kind === 'nostr') { void this.download(id); return; }
-    const now = Date.now();
-    for (const [x, until] of this.fetching) if (until < now) this.fetching.delete(x);
-    this.fetching.set(id, now + FETCH_MS);
+    if (this.transport.kind === 'nostr') { void this.download(id); return; } // never rejects: failures are reported
+    clearTimeout(this.fetching.get(id));
+    this.fetching.set(id, setTimeout(() => this.settle(id, null), this.o.fetchMs ?? FETCH_MS));
     const t = [...this.peers].filter(([, v]) => this.canSeeFile(id, v.pub)).map(([k]) => k);
-    if (t.length) this.act?.fwant?.send({ id }, { target: t });
+    if (t.length) this.files?.fwant.send({ id }, { target: t });
   }
 
   /** An attachment's bytes: from the local store, or fetched over the workspace's transport. Null if unavailable. */
@@ -386,8 +445,7 @@ export class WorkspacePeer implements LinkHost {
     if (have) return have;
     if (this.transport.kind === 'nostr') return this.download(id);
     return new Promise((resolve) => {
-      this.waiters.set(id, [...(this.waiters.get(id) ?? []), resolve]);
-      setTimeout(() => resolve(null), FETCH_MS);
+      this.waiters.set(id, [...(this.waiters.get(id) ?? []), resolve]); // settled on arrival, give-up or leave
       this.requestBlob(id);
     });
   }
@@ -396,14 +454,17 @@ export class WorkspacePeer implements LinkHost {
     const inflight = this.downloads.get(id);
     if (inflight) return inflight;
     const run = (async () => {
+      // Another member wrote this ref: downloadFile checks its shape and which servers it names.
       const ref = this.fileRef(id, this.me)?.blob;
-      const bytes = ref ? await downloadFile(ref) : null;
+      const bytes = ref ? await downloadFile(ref, { allowHttp: this.o.devFileServers }) : null;
       if (!bytes) return null;
       const buf = bytes.slice().buffer;
       if ((await sha256Buf(buf)) !== id) return null; // the plaintext must match what the sender attached
       await this.gotBlob(id, buf);
       return buf;
-    })().finally(() => this.downloads.delete(id));
+    })()
+      .catch((err: unknown) => { this.error(`Couldn't download file ${id}: ${errMsg(err)}`); return null; })
+      .finally(() => this.downloads.delete(id));
     this.downloads.set(id, run);
     return run;
   }

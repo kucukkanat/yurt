@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { RTCPeerConnection } from 'werift';
 import {
-  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, newTrysteroTransport, dmChannel, sha256Buf, LEGACY_TRYSTERO,
-  type Ev, type JoinRoom, type KeyPair, type PeerStore, type WsTransport, type HuddleState,
+  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, newTrysteroTransport, dmChannel, sha256Buf, makeEvent, LEGACY_TRYSTERO,
+  type Ev, type JoinRoom, type KeyPair, type PeerStore, type WsTransport, type HuddleState, type WsState,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
 
@@ -33,32 +33,48 @@ async function until(cond: () => boolean, ms = 20_000, what = 'condition') {
 let relay: TestRelay;
 let keyed: WsTransport; // one fresh workspace per test
 const open: WorkspacePeer[] = [];
+let errors: string[] = []; // every onError of the test; afterEach requires none
+
+interface DeviceOpts {
+  transport?: WsTransport; code?: string; blobs?: Map<string, ArrayBuffer>; events?: Ev[]; webrtc?: boolean; fetchMs?: number;
+  /** Hold `store.load` until this settles, and don't wait for start(). */
+  loading?: Promise<void>;
+}
 
 /** One simulated device: its own Trystero instance (own selfId), store and peer. */
-async function device(kp: KeyPair, opts: { transport?: WsTransport; code?: string; blobs?: Map<string, ArrayBuffer>; events?: Ev[]; webrtc?: boolean } = {}) {
+async function device(kp: KeyPair, opts: DeviceOpts = {}) {
   vi.resetModules();
   const { joinRoom, selfId } = await import('trystero');
   const store = memStore(opts.blobs);
   if (opts.events) await store.save(opts.events);
+  const { loading } = opts;
   const blobsSeen: string[] = [];
   const p = new WorkspacePeer({
-    code: opts.code ?? CODE, kp, selfId, transport: opts.transport ?? keyed, store, roomIdleMs: 1_500,
+    code: opts.code ?? CODE, kp, selfId, transport: opts.transport ?? keyed, roomIdleMs: 1_500, fetchMs: opts.fetchMs,
+    store: loading ? { ...store, load: async (ws) => { await loading; return store.load(ws); } } : store,
     // `webrtc: false` is a relay workspace without the user's opt-in: no WebRTC at all.
     joinRoom: opts.webrtc === false ? undefined : (joinRoom as unknown as JoinRoom),
     rtc: { rtcPolyfill: RTCPeerConnection, relayConfig: { urls: [relay.url] } },
     onBlob: (id) => blobsSeen.push(id),
+    onError: (m) => errors.push(m),
   });
   open.push(p);
-  await p.start();
-  return { p, blobsSeen };
+  const started = p.start();
+  if (!loading) await started;
+  return { p, blobsSeen, started };
 }
+
+const pubs = (m: ReadonlyMap<string, { pub: string }>) => [...m.values()].map((x) => x.pub);
 
 const texts = (p: WorkspacePeer) => [...p.state.msgs.values()].map((m) => m.text);
 
 beforeAll(async () => { relay = await startRelay(); });
 afterAll(() => relay.close());
-beforeEach(() => { keyed = newTrysteroTransport(); });
-afterEach(() => { open.splice(0).forEach((p) => p.leave()); });
+beforeEach(() => { keyed = newTrysteroTransport(); errors = []; });
+afterEach(() => {
+  open.splice(0).forEach((p) => p.leave());
+  expect(errors).toEqual([]);
+});
 
 describe('trystero transport', () => {
   it('syncs history between members and delivers live messages', async () => {
@@ -123,6 +139,55 @@ describe('trystero transport', () => {
     expect([...a.peers.values()].map((x) => x.pub)).not.toContain(C.pub);
     expect([...c.peers.values()].map((x) => x.pub)).not.toContain(A.pub);
   }, 60_000);
+
+  it('cuts off a member banned while connected', async () => {
+    const { p: a } = await device(A);
+    a.publish({ t: 'ws.create', b: { name: 'Strict' } });
+    const { p: b } = await device(B);
+    const { p: c } = await device(C);
+    await until(() => a.peers.size === 2 && b.peers.size === 2 && c.peers.size === 2 && b.state.creator === A.pub);
+    a.publish({ t: 'ban', b: { target: C.pub, on: true } });
+    await until(() => !pubs(a.peers).includes(C.pub) && !pubs(b.peers).includes(C.pub), 20_000, 'ban disconnect');
+    expect(pubs(a.presence)).not.toContain(C.pub);
+    const after = a.publish({ t: 'msg', ch: 'general', b: { text: 'not for C' } });
+    await until(() => b.events.has(after.id));
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(c.events.has(after.id)).toBe(false);
+    expect(pubs(a.peers)).not.toContain(C.pub); // and it can't come back through the handshake
+  }, 60_000);
+
+  it('emits fresh events only with a state that contains them, even when a peer joins mid-batch', async () => {
+    const { p: a } = await device(A);
+    const calls: { s: WsState; fresh: Ev[] }[] = [];
+    a.o.onState = (s, fresh) => calls.push({ s, fresh });
+    const late = makeEvent(C, { ws: CODE, t: 'profile', b: { name: 'Carol', handle: 'carol' } });
+    // Lands inside the 16 ms batch window that the join opens.
+    a.o.onPeers = () => { if (a.peers.size && !a.events.has(late.id)) a.receive([late]); };
+    await device(B);
+    await until(() => calls.some(({ fresh }) => fresh.includes(late)), 20_000, 'fresh event');
+    for (const { s, fresh } of calls) if (fresh.includes(late)) expect(s.profiles.has(C.pub)).toBe(true);
+  }, 60_000);
+
+  it('keeps a DM queued until its recipient is reachable', async () => {
+    const { p: a } = await device(A);
+    const dm = a.publish({ t: 'msg', ch: dmChannel(A.pub, B.pub), to: B.pub, b: { text: 'later' } });
+    const pub = a.publish({ t: 'msg', ch: 'general', b: { text: 'all' } });
+    await device(C);
+    await until(() => !a.queued.has(pub.id), 20_000, 'public event delivered');
+    expect(a.queued.has(dm.id)).toBe(true);
+    const { p: b } = await device(B);
+    await until(() => b.events.has(dm.id) && !a.queued.has(dm.id), 20_000, 'DM delivered');
+  }, 60_000);
+
+  it('opens no room when left while still loading', async () => {
+    let release = () => {};
+    const { p: a, started } = await device(A, { loading: new Promise<void>((r) => { release = r; }) });
+    a.leave();
+    release();
+    await started;
+    expect(a.room).toBeNull();
+    expect(a.connected).toBe(false);
+  });
 });
 
 describe('rooms are keyed', () => {
@@ -163,6 +228,28 @@ describe('DM files', () => {
   }, 60_000);
 });
 
+describe('file transfers', () => {
+  it('ignore bytes nobody asked for', async () => {
+    const buf = new TextEncoder().encode('pushed').buffer as ArrayBuffer;
+    const id = await sha256Buf(buf);
+    const { p: a, blobsSeen } = await device(A);
+    a.publish({ t: 'msg', ch: 'general', b: { text: 'x', files: [{ id, name: 'p.txt', size: 6, type: 'text/plain' }] } });
+    const { p: b } = await device(B, { blobs: new Map([[id, buf]]) });
+    await until(() => a.peers.size === 1 && b.events.size === 1);
+    await b.room?.makeAction<ArrayBuffer>('file').send(buf, { target: b.peerIdsFor([A.pub]), metadata: { id } });
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(blobsSeen).not.toContain(id);
+    expect(new TextDecoder().decode((await a.fetchFile(id)) ?? new ArrayBuffer(0))).toBe('pushed'); // welcome once asked for
+  }, 60_000);
+
+  it('give up on a file no peer has, and forget the request', async () => {
+    const { p: a } = await device(A, { fetchMs: 300 });
+    expect(await a.fetchFile('0'.repeat(64))).toBeNull();
+    expect(a['fetching'].size).toBe(0);
+    expect(a['waiters'].size).toBe(0);
+  });
+});
+
 describe('relay workspaces open WebRTC only on demand', () => {
   it('joins the key-derived room for a huddle and leaves when it ends', async () => {
     const transport = newNostrTransport([relay.url]);
@@ -178,6 +265,22 @@ describe('relay workspaces open WebRTC only on demand', () => {
     await until(() => seen.some((h) => h?.ch === 'general'), 20_000, 'huddle state');
     a.setHuddle({ ch: null });
     await until(() => a.room === null && b.room === null, 20_000, 'idle leave');
+  }, 60_000);
+
+  it('ignores a banned member asking for the room', async () => {
+    const transport = newNostrTransport([relay.url]);
+    const { p: a } = await device(A, { transport });
+    a.publish({ t: 'ws.create', b: { name: 'Strict' } });
+    a.publish({ t: 'ban', b: { target: C.pub, on: true } });
+    const { p: c } = await device(C, { transport, webrtc: false });
+    const { p: b } = await device(B, { transport, webrtc: false });
+    await until(() => a.connected && b.connected && c.connected && a.state.bans.has(C.pub));
+    c.setPresence({ rtc: true });
+    b.setPresence({ typing: 'general' }); // sent after C's, so once A sees it, C's has arrived too
+    await until(() => [...a.presence.values()].some((p) => p.pub === B.pub && p.typing === 'general'), 20_000, 'marker presence');
+    await new Promise((r) => setTimeout(r, 2000)); // past a room check (every 1.5 s here)
+    expect(a.room).toBeNull();
+    expect(pubs(a.presence)).not.toContain(C.pub);
   }, 60_000);
 
   it('never opens WebRTC without the opt-in, even when a member asks for a call', async () => {

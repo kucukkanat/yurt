@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Button, Input, Checkbox, Icon } from '@yurt/ui';
 import { newRecoveryPhrase, keyFromPhrase, fingerprint, isValidPhrase, normalizePhrase, formatCode } from '@yurt/protocol';
 import { useApp } from '../store';
@@ -31,7 +31,7 @@ export function Onboarding() {
                 {route.code ? 'You’re invited.' : 'Team chat with no server in the middle.'}
               </h1>
               <p style={{ margin: 0, fontSize: 16, color: 'var(--text-muted)', textWrap: 'pretty' as any }}>
-                {route.code ? <>Pick a name and you’ll join <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-strong)' }}>{formatCode(route.code)}</span>. Messages travel straight between members’ browsers.</> : 'Messages travel straight between members’ browsers. No accounts: you are a key that lives on this device.'}
+                {route.code ? <>Pick a name and you’ll join <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-strong)' }}>{formatCode(route.code)}</span>. Messages are end-to-end encrypted.</> : 'Messages go straight between members’ browsers, or through relays that can’t read them. No accounts: you are a key that lives on this device.'}
               </p>
             </div>
             <Input label="Display name" placeholder="Maya Chen" value={name} onChange={(e) => setName(e.target.value)} error={err || undefined} autoFocus />
@@ -58,7 +58,7 @@ export function Onboarding() {
             useApp.getState().createIdentity(p, name.trim(), h);
           }} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <h1 style={{ margin: 0, font: '700 36px/1.05 var(--font-display)', letterSpacing: '-0.045em', color: 'var(--text-strong)' }}>Welcome back.</h1>
-            <p style={{ margin: 0, fontSize: 15, color: 'var(--text-muted)' }}>Enter your 12 words to be the same person on this device. Rejoin your workspaces with their codes and history syncs back.</p>
+            <p style={{ margin: 0, fontSize: 15, color: 'var(--text-muted)' }}>Enter your 12 words to be the same person on this device. Then open your invite links again to rejoin your workspaces: history comes back from the relays or from members who are online.</p>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-strong)' }}>Recovery phrase</span>
               <textarea value={restoreText} onChange={(e) => setRestoreText(e.target.value)} rows={3} autoFocus spellCheck={false} autoCapitalize="none"

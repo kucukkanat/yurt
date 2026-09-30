@@ -8,7 +8,8 @@ import { BRIDGE_PORT } from '@yurt/protocol';
 import { loadConfig, loadIdentity, HOME } from './config';
 import { Workspaces } from './workspaces';
 import { AgentHost } from './agents';
-import { BridgeServer, VERSION } from './server';
+import { BridgeServer } from './server';
+import { VERSION } from './version';
 import { detectAll, check, runtimeStatus } from './runtimes';
 import { log } from './log';
 
@@ -17,7 +18,12 @@ if (argv.includes('--help') || argv.includes('-h')) {
   console.log(`yurt-bridge ${VERSION}\n\nConnects Yurt to agent CLIs on this machine.\n\n  --no-open    don't open the setup page\n  --port N     listen on N (default ${BRIDGE_PORT}; the web app expects ${BRIDGE_PORT})\n\nData lives in ${HOME}`);
   process.exit(0);
 }
-const port = Number(argv[argv.indexOf('--port') + 1]) || BRIDGE_PORT;
+const portAt = argv.indexOf('--port');
+const port = portAt < 0 ? BRIDGE_PORT : Number(argv[portAt + 1]); // 0 picks a free port (tests)
+if (!Number.isInteger(port) || port < 0 || port > 65535) {
+  console.error('--port needs a number from 0 to 65535');
+  process.exit(2);
+}
 const noOpen = argv.includes('--no-open');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -48,7 +54,7 @@ if (id) workspaces.setIdentity(id.phrase);
 detectAll();
 (async () => { for (const r of runtimeStatus()) if (r.installed) await check(r.id); })();
 
-const url = `http://127.0.0.1:${port}/`;
+const url = `http://127.0.0.1:${server.boundPort}/`;
 const c = server.pairingCode;
 console.log(`
   yurt bridge ${VERSION}
@@ -56,12 +62,15 @@ console.log(`
   Pair code  ${c.slice(0, 3)} ${c.slice(3)}   (enter it in Yurt → Add agents)
   Data       ${HOME.replace(os.homedir(), '~')}
 `);
-log('info', 'bridge', 'listening on 127.0.0.1:' + port);
+log('info', 'bridge', 'listening on 127.0.0.1:' + server.boundPort);
 if (!noOpen) openUrl(url);
 
 function openUrl(u: string) {
   const [cmd, args] = process.platform === 'darwin' ? ['open', [u]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', u]] : ['xdg-open', [u]];
-  try { spawn(cmd, args as string[], { stdio: 'ignore', detached: true }).unref(); } catch { /* headless */ }
+  // Headless boxes lack xdg-open: spawn reports ENOENT as an 'error' event, which would crash if unhandled.
+  const p = spawn(cmd, args as string[], { stdio: 'ignore', detached: true });
+  p.on('error', (e) => log('warn', 'bridge', `couldn't open a browser (${e.message}); open ${u} yourself`));
+  p.unref();
 }
 
 const bye = () => { for (const p of workspaces.peers.values()) p.leave(); process.exit(0); };

@@ -13,19 +13,16 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "npm run build:ui && tsx src/cli.ts",
+    "dev": "vite build --config ui/vite.config.ts && tsx src/cli.ts",
     "build:ui": "vite build --config ui/vite.config.ts",
-    "build": "npm run build:ui && tsup",
+    "build": "vite build --config ui/vite.config.ts && tsup",
     "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@noble/curves": "~1.6.0",
-    "@noble/hashes": "~1.5.0",
-    "@scure/bip39": "~1.4.0",
     "trystero": "~0.25.4",
-    "werift": ">=0.19.0",
+    "werift": "^0.24.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {

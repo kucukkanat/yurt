@@ -8,13 +8,20 @@ import { slug, keyFromPhrase, isValidPhrase, TOOL_KINDS, type BridgeState, type 
 import { saveConfig, saveIdentity, loadIdentity, type Config } from './config';
 import type { Workspaces } from './workspaces';
 import type { AgentHost } from './agents';
-import { RUNTIMES, RUNTIME_IDS, runtimeStatus, install, check, login, onRuntimeChange } from './runtimes';
+import { RUNTIME_IDS, runtimeStatus, install, check, login, onRuntimeChange } from './runtimes';
 import { setStartOnLogin } from './autostart';
 import { log, onLog, recentLogs } from './log';
+import { VERSION } from './version';
 
-export const VERSION = '0.1.0';
+interface Client { sock: WebSocket; paired: boolean; admin: boolean; misses: number }
 
-interface Client { sock: WebSocket; paired: boolean; admin: boolean }
+// Pairing brute force: a 6-digit code rotates every 5 misses, a socket is closed after 3, and more
+// than 10 misses a minute (from any origin) lock pairing for 30 s, doubling per lockout up to an hour.
+const CONN_MISSES = 3;
+const CODE_MISSES = 5;
+const MINUTE_MISSES = 10;
+const LOCK_MS = 30_000;
+const MAX_LOCK_MS = 60 * 60_000;
 
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.map': 'application/json' };
 
@@ -23,17 +30,23 @@ export class BridgeServer {
   private code = '';
   private codeAt = 0;
   private misses = 0;
+  private recentMisses: number[] = [];
+  private lockedUntil = 0;
+  private lockouts = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private server: http.Server | null = null;
+  private readonly rotator: ReturnType<typeof setInterval>;
+  private readonly unLog: () => void;
 
   constructor(private port: number, private cfg: Config, private ws: Workspaces, private host: AgentHost, private uiDir: string) {
     this.rotate();
-    setInterval(() => Date.now() - this.codeAt > 10 * 60_000 && this.rotate(), 30_000);
+    this.rotator = setInterval(() => Date.now() - this.codeAt > 10 * 60_000 && this.rotate(), 30_000);
     onRuntimeChange(() => this.changed());
-    onLog((e) => this.send((c) => c.admin, e));
+    this.unLog = onLog((e) => this.send((c) => c.admin, e));
   }
 
   get pairingCode() { return this.code; }
-  get origin() { return `http://127.0.0.1:${this.port}`; }
+  get origin() { return `http://127.0.0.1:${this.boundPort}`; }
 
   rotate() {
     this.code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
@@ -68,14 +81,14 @@ export class BridgeServer {
   private sendTo(c: Client, m: FromBridge) { if (c.sock.readyState === 1) c.sock.send(JSON.stringify(m)); }
   private send(pred: (c: Client) => boolean, m: FromBridge) { for (const c of this.clients) if (pred(c)) this.sendTo(c, m); }
 
-  private okHost(h?: string) { return h === `127.0.0.1:${this.port}` || h === `localhost:${this.port}`; }
+  private okHost(h?: string) { return h === `127.0.0.1:${this.boundPort}` || h === `localhost:${this.boundPort}`; }
 
   listen() {
     const server = http.createServer((req, res) => this.http(req, res));
     const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
     server.on('upgrade', (req, sock, head) => {
       const origin = req.headers.origin || '';
-      const allowed = origin === this.origin || origin === `http://localhost:${this.port}` || this.cfg.allowedOrigins.includes(origin);
+      const allowed = origin === this.origin || origin === `http://localhost:${this.boundPort}` || this.cfg.allowedOrigins.includes(origin);
       if (!req.url?.startsWith('/ws') || !this.okHost(req.headers.host) || !allowed) {
         log('warn', 'bridge', 'refused connection from origin ' + (origin || '(none)'));
         sock.write('HTTP/1.1 403 Forbidden\r\n\r\n');
@@ -84,17 +97,36 @@ export class BridgeServer {
       }
       wss.handleUpgrade(req, sock, head, (s) => this.accept(s));
     });
+    this.server = server;
     return new Promise<void>((res, rej) => {
       server.once('error', rej);
       server.listen(this.port, '127.0.0.1', () => res());
     });
   }
 
+  /** The bound port (differs from the requested one when that was 0). */
+  get boundPort(): number {
+    const a = this.server?.address();
+    return a && typeof a === 'object' ? a.port : this.port;
+  }
+
+  close(): Promise<void> {
+    clearInterval(this.rotator);
+    if (this.timer) clearTimeout(this.timer);
+    this.unLog();
+    for (const c of this.clients) c.sock.terminate();
+    const s = this.server;
+    return new Promise((res) => (s ? s.close(() => res()) : res()));
+  }
+
   private http(req: http.IncomingMessage, res: http.ServerResponse) {
     if (!this.okHost(req.headers.host)) { res.writeHead(403).end(); return; }
     const url = new URL(req.url || '/', this.origin);
-    let file = path.normalize(path.join(this.uiDir, decodeURIComponent(url.pathname)));
-    if (!file.startsWith(this.uiDir)) { res.writeHead(403).end(); return; }
+    let rel: string;
+    try { rel = decodeURIComponent(url.pathname); } catch { res.writeHead(400).end(); return; } // e.g. /%E0
+    let file = path.join(this.uiDir, rel);
+    // Separator required: a bare prefix check would also admit a sibling like <uiDir>-secrets.
+    if (file !== this.uiDir && !file.startsWith(this.uiDir + path.sep)) { res.writeHead(403).end(); return; }
     if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(this.uiDir, 'index.html');
     if (!fs.existsSync(file)) { res.writeHead(500, { 'content-type': 'text/plain' }).end('Bridge UI is missing. Run: npm run build -w packages/bridge'); return; }
     const ext = path.extname(file);
@@ -110,7 +142,7 @@ export class BridgeServer {
   }
 
   private accept(sock: WebSocket) {
-    const c: Client = { sock, paired: false, admin: false };
+    const c: Client = { sock, paired: false, admin: false, misses: 0 };
     this.clients.add(c);
     sock.on('close', () => this.clients.delete(c));
     sock.on('message', (raw) => {
@@ -130,7 +162,10 @@ export class BridgeServer {
       return;
     }
     if (m.t === 'pair') {
-      if (m.code === this.code) {
+      const wait = this.lockedUntil - Date.now();
+      if (wait <= 0 && m.code === this.code) {
+        this.lockouts = 0;
+        this.recentMisses = [];
         const token = crypto.randomBytes(24).toString('hex');
         this.cfg.tokens = [...this.cfg.tokens.slice(-9), token];
         saveConfig(this.cfg);
@@ -139,9 +174,13 @@ export class BridgeServer {
         this.sendTo(c, { t: 'state', state: this.state(c.admin) });
         log('info', 'bridge', 'paired a browser');
         this.rotate();
-      } else {
-        this.sendTo(c, { t: 'error', msg: 'Wrong pairing code' });
-        if (++this.misses >= 5) this.rotate();
+        return;
+      }
+      if (wait > 0) this.sendTo(c, { t: 'error', msg: `Too many wrong pairing codes. Try again in ${Math.ceil(wait / 1000)} s.` });
+      else { this.sendTo(c, { t: 'error', msg: 'Wrong pairing code' }); this.miss(); }
+      if (++c.misses >= CONN_MISSES) {
+        log('warn', 'bridge', 'closed a connection after ' + c.misses + ' pairing attempts');
+        c.sock.close(1008, 'Too many pairing attempts');
       }
       return;
     }
@@ -165,6 +204,19 @@ export class BridgeServer {
         this.admin(m);
     }
     this.changed();
+  }
+
+  private miss() {
+    const now = Date.now();
+    this.recentMisses = [...this.recentMisses.filter((t) => now - t < 60_000), now];
+    log('warn', 'bridge', `wrong pairing code (${this.recentMisses.length} in the last minute)`);
+    if (this.recentMisses.length >= MINUTE_MISSES) {
+      const ms = Math.min(LOCK_MS * 2 ** this.lockouts++, MAX_LOCK_MS);
+      this.lockedUntil = now + ms;
+      this.recentMisses = [];
+      log('warn', 'bridge', `pairing locked for ${ms / 1000} s after repeated wrong codes`);
+      this.rotate();
+    } else if (++this.misses >= CODE_MISSES) this.rotate();
   }
 
   private admin(m: ToBridge) {
@@ -222,5 +274,3 @@ function sanitize(a: AgentConfig): AgentConfig {
     replyIn: a.replyIn === 'channel' ? 'channel' : 'thread',
   };
 }
-
-export { RUNTIMES };

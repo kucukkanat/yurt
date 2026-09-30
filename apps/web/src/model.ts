@@ -26,7 +26,7 @@ export function useMedia(q: string): boolean {
   return m;
 }
 
-export function presenceOf(peer: WorkspacePeer | undefined, pub: string, me: string): 'online' | 'away' | 'offline' {
+function presenceOf(peer: WorkspacePeer | undefined, pub: string, me: string): 'online' | 'away' | 'offline' {
   if (pub === me) return document.hidden ? 'away' : 'online';
   let best: 'away' | 'offline' = 'offline';
   if (peer) for (const pr of peer.presence.values()) {
@@ -37,7 +37,14 @@ export function presenceOf(peer: WorkspacePeer | undefined, pub: string, me: str
   return best;
 }
 
-export function agentPresence(peer: WorkspacePeer | undefined, owner: string, id: string): { online: boolean; working: string | null } {
+/** Other members online: distinct people, not sessions, so my own tabs and my bridge don't count. */
+export function othersOnline(peer: WorkspacePeer | undefined, me: string): number {
+  const pubs = new Set<string>();
+  if (peer) for (const pr of peer.presence.values()) if (!pr.bridge && pr.pub !== me) pubs.add(pr.pub);
+  return pubs.size;
+}
+
+function agentPresence(peer: WorkspacePeer | undefined, owner: string, id: string): { online: boolean; working: string | null } {
   if (peer) for (const pr of peer.presence.values()) {
     if (pr.pub === owner && pr.bridge && pr.agents && id in pr.agents) return { online: true, working: pr.agents[id]?.working || null };
   }

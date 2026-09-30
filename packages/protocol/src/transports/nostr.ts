@@ -1,24 +1,30 @@
 import { SimplePool } from 'nostr-tools/pool';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { normalizeURL } from 'nostr-tools/utils';
 import type { Event as NostrEvent } from 'nostr-tools/core';
+import type { Filter } from 'nostr-tools/filter';
 import type { Ev } from '../types';
 import type { DataLink, LinkHost, Presence } from '../transport';
 import { sign, verify } from '../crypto';
 import { open, seal, workspaceKeys, type WsKeys } from '../seal';
 
-export const KIND_EVENT = 4344;     // regular: relays store it
-export const KIND_PRESENCE = 24344; // ephemeral: relays forward it, never store it
+const KIND_EVENT = 4344;     // regular: relays store it
+const KIND_PRESENCE = 24344; // ephemeral: relays forward it, never store it
 
 const BEAT_MS = 60_000;
 const PRESENCE_TTL_MS = 150_000;
 const RETRY_MS = 15_000;
 const PAGE = 500;
+// A relay that answered "no" to the same event this often will keep saying it; stop and tell the user.
+const MAX_REFUSALS = 3;
 // created_at is backdated by a random 0–2 h so relay dumps don't show precise activity times.
 // (A relay operator still sees when events arrive.)
 const FUZZ_S = 7_200;
 // Nostr created_at is the sender's (fuzzed, possibly skewed) clock. Re-fetching a day before our
 // last sync mark covers both; duplicates are dropped by event id.
 const SKEW_S = 86_400;
+// nostr-tools' close reason when a relay answered a query to the end (EOSE); anything else means it didn't.
+const EOSE = 'closed automatically on eose';
 
 export interface NostrOpts {
   key: string;
@@ -30,9 +36,18 @@ export interface NostrOpts {
 
 const parse = (s: string | null): unknown => { if (s === null) return null; try { return JSON.parse(s); } catch { return null; } };
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null;
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const now = () => Math.floor(Date.now() / 1000);
 const fuzzed = () => now() - Math.floor(Math.random() * FUZZ_S);
 const presMsg = (code: string, t: number, j: string) => `yurt-pres:${code}:${t}:${j}`;
+
+/**
+ * Why reachable relays refused a publish, if any did. NIP-01 makes `OK false` carry a machine-readable
+ * prefix ("blocked: …"); connection failures and timeouts have none. "rate-limited" passes, so it isn't one.
+ */
+const refusals = (err: unknown): string[] =>
+  (err instanceof AggregateError ? err.errors : [err]).flatMap((e: unknown) =>
+    e instanceof Error && /^[a-z-]+:/.test(e.message) && !e.message.startsWith('rate-limited:') ? [e.message] : []);
 
 /**
  * Events and presence through Nostr relays, end-to-end encrypted with the workspace key.
@@ -47,7 +62,11 @@ export class NostrData implements DataLink {
   private self = getPublicKey(this.sk);
   private k: WsKeys;
   private relays: string[];
+  /** Events still being retried, as their wrapped copies. */
   private pending = new Map<string, NostrEvent[]>();
+  private refused = new Map<string, number>();
+  /** Given up on after repeated refusals: still queued for the UI, but not retried or re-sent. */
+  private abandoned = new Set<string>();
   /** Yurt event ids we've seen come back from a relay. */
   private onRelay = new Set<string>();
   private me: Presence | null = null;
@@ -58,6 +77,7 @@ export class NostrData implements DataLink {
   private wasConnected = false;
   private needSync = true;
   private syncing = false;
+  private closed = false;
 
   constructor(private host: LinkHost, private o: NostrOpts) {
     this.k = workspaceKeys(o.key);
@@ -76,11 +96,19 @@ export class NostrData implements DataLink {
     ];
   }
 
-  get connected() { return [...this.pool.listConnectionStatus().values()].some(Boolean); }
+  get connected() { return [...this.relayStatus().values()].some(Boolean); }
+
+  /** Each of this workspace's relays → whether it's connected now (the pool may also hold others). */
+  relayStatus(): ReadonlyMap<string, boolean> {
+    const s = this.pool.listConnectionStatus();
+    return new Map(this.relays.map((u) => [u, s.get(normalizeURL(u)) ?? false]));
+  }
 
   send(evs: readonly Ev[]) {
     for (const e of evs) {
       const nes = e.to ? this.wrapPrivate(e) : [this.wrap(KIND_EVENT, this.k.tag, seal(this.k.enc, this.k.tag, JSON.stringify(e)))];
+      this.abandoned.delete(e.id);
+      this.refused.delete(e.id);
       this.pending.set(e.id, nes);
       this.publish(e.id, nes);
     }
@@ -92,6 +120,7 @@ export class NostrData implements DataLink {
   }
 
   leave() {
+    this.closed = true;
     this.timers.forEach(clearInterval);
     this.closeSub();
     this.pool.destroy();
@@ -117,11 +146,22 @@ export class NostrData implements DataLink {
     });
   }
 
+  // Every copy must land somewhere (a private event has one per inbox). Being offline is retried
+  // quietly; reachable relays refusing it is retried MAX_REFUSALS times, then reported once.
   private publish(id: string, nes: NostrEvent[]) {
     Promise.all(nes.map((ne) => Promise.any(this.pool.publish(this.relays, ne)))).then(
-      () => { this.onRelay.add(id); if (this.pending.delete(id)) this.host.delivered([id]); },
-      // While offline every relay fails; only a reachable relay refusing it is worth reporting.
-      (err: unknown) => this.connected && this.host.error(`No relay accepted event ${id}: ${err instanceof AggregateError ? err.errors.map(String).join('; ') : String(err)}`),
+      () => { this.onRelay.add(id); this.refused.delete(id); if (this.pending.delete(id)) this.host.delivered([id]); },
+      (err: unknown) => {
+        const why = refusals(err);
+        if (!why.length || !this.pending.has(id)) return;
+        const n = (this.refused.get(id) ?? 0) + 1;
+        this.refused.set(id, n);
+        if (n < MAX_REFUSALS) return;
+        this.pending.delete(id);
+        this.refused.delete(id);
+        this.abandoned.add(id);
+        this.host.error(`Relays refused event ${id}, giving up: ${[...new Set(why)].join('; ')}`);
+      },
     );
   }
 
@@ -138,38 +178,93 @@ export class NostrData implements DataLink {
   private async backfill() {
     if (this.syncing) return;
     this.syncing = true;
+    try {
+      await this.syncHistory();
+    } catch (err) {
+      this.host.error(`Relay sync failed: ${errMsg(err)}`);
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  private async syncHistory() {
     const started = now();
     const since = Math.max(0, this.mark - SKEW_S);
-    let until = started;
-    for (;;) {
-      const evs = await this.pool.querySync(this.relays, { kinds: [KIND_EVENT], '#y': this.tags, since, until, limit: PAGE }, { maxWait: 10_000 });
-      evs.forEach((e) => this.onNostr(e));
-      if (evs.length < PAGE) break;
-      const oldest = Math.min(...evs.map((e) => e.created_at));
-      until = oldest < until ? oldest : until - 1;
-      if (until < since) break;
-    }
-    this.syncing = false;
-    if (!this.connected) return;
+    const results = await Promise.all(this.relays.map((url) => this.pageRelay(url, since, started)));
+    // The mark only moves once every reachable relay was read to the end; otherwise the next
+    // backfill (sweep retries while needSync) would skip what we didn't get to.
+    if (this.closed || results.includes('partial') || !results.includes('done')) return;
     // My own recent events the relays don't have, e.g. the app closed before any relay acked them.
+    // created_at is backdated up to FUZZ_S, so only events newer than since + FUZZ_S surely came back.
     const me = this.host.kp.pub;
-    const lost = [...this.host.events.values()].filter((e) => e.a === me && e.ts / 1000 >= since && !this.onRelay.has(e.id) && !this.pending.has(e.id));
+    const lost = [...this.host.events.values()].filter((e) => e.a === me && e.ts / 1000 >= since + FUZZ_S && !this.onRelay.has(e.id) && !this.pending.has(e.id) && !this.abandoned.has(e.id));
     if (lost.length) this.send(lost);
     this.needSync = false;
     this.mark = started;
     this.o.saveMark(started);
   }
 
+  /**
+   * Reads one relay's history back to `since`. Each relay is paged on its own cursor: merged pages
+   * can't tell which relay ran out. Relays may cap `limit` below PAGE, so a short page doesn't mean
+   * done; a relay is done when a page brings nothing new.
+   */
+  private async pageRelay(url: string, since: number, until: number): Promise<'done' | 'down' | 'partial'> {
+    const got = new Set<string>();
+    for (let first = true; ; first = false) {
+      if (this.closed) return 'partial';
+      const evs = await this.query(url, { kinds: [KIND_EVENT], '#y': this.tags, since, until, limit: PAGE });
+      if (!evs) return first ? 'down' : 'partial';
+      const fresh = evs.filter((e) => !got.has(e.id));
+      if (!fresh.length) return 'done';
+      for (const e of fresh) { got.add(e.id); this.onNostr(e); }
+      // Inclusive: more events may share the oldest second than fit on this page; `got` drops repeats.
+      until = Math.min(until, ...evs.map((e) => e.created_at));
+    }
+  }
+
+  /** One query to one relay; null when it couldn't be reached or closed the query early. */
+  private query(url: string, filter: Filter): Promise<NostrEvent[] | null> {
+    return new Promise((resolve) => {
+      const evs: NostrEvent[] = [];
+      this.pool.subscribeEose([url], filter, {
+        maxWait: 10_000,
+        onevent: (e) => evs.push(e),
+        onclose: ([r]) => resolve(r?.reason === EOSE ? evs : null),
+      });
+    });
+  }
+
   private onNostr(ne: NostrEvent) {
+    try {
+      this.handle(ne);
+    } catch (err) {
+      // Relay input is untrusted, but a throw here is our bug: surface it without losing the rest of the page.
+      this.host.error(`Dropped a relay event: ${errMsg(err)}`);
+    }
+  }
+
+  private handle(ne: NostrEvent) {
     if (ne.pubkey === this.self) return;
     const outer = parse(open(this.k.enc, this.k.tag, ne.content));
     if (ne.kind === KIND_PRESENCE) return this.onPresence(ne.pubkey, outer);
     if (isObj(outer) && typeof outer.a === 'string' && typeof outer.to === 'string' && typeof outer.c === 'string') {
       const me = this.host.kp.pub;
       if (outer.a !== me && outer.to !== me) return;
-      return this.accept(parse(open(this.k.pair(this.host.kp.sec, outer.a === me ? outer.to : outer.a), this.k.tag, outer.c)));
+      const pair = this.pairWith(outer.a === me ? outer.to : outer.a);
+      return pair ? this.accept(parse(open(pair, this.k.tag, outer.c))) : undefined;
     }
     this.accept(outer);
+  }
+
+  /** The pair key with `pub`, or null if it isn't a valid public key: any key holder can write the wrapper naming it. */
+  private pairWith(pub: string): Uint8Array | null {
+    if (!/^[0-9a-f]{64}$/.test(pub)) return null;
+    try {
+      return this.k.pair(this.host.kp.sec, pub);
+    } catch {
+      return null; // well-formed hex that isn't a curve point: foreign junk, like any unopenable event
+    }
   }
 
   private accept(e: unknown) {
@@ -182,6 +277,7 @@ export class NostrData implements DataLink {
     if (Math.abs(Date.now() - m.t) > PRESENCE_TTL_MS) return; // stale or replayed
     const p = parse(m.j);
     if (!isObj(p) || typeof p.pub !== 'string' || !verify(p.pub, presMsg(this.host.code, m.t, m.j), m.s)) return;
+    if (this.host.isBanned(p.pub)) return;
     this.presence.set(session, p as unknown as Presence);
     this.seen.set(session, Date.now());
     this.host.changed();
@@ -191,7 +287,7 @@ export class NostrData implements DataLink {
     const up = this.connected;
     let dirty = up !== this.wasConnected;
     if (!up) this.needSync = true;
-    else if (this.needSync) void this.backfill();
+    else if (this.needSync) void this.backfill(); // never rejects: failures are reported inside
     this.wasConnected = up;
     for (const [s, at] of this.seen) if (Date.now() - at > PRESENCE_TTL_MS) { this.seen.delete(s); this.presence.delete(s); dirty = true; }
     if (dirty) this.host.changed();

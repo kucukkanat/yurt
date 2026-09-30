@@ -2,7 +2,8 @@ import { randomBytes } from '@noble/ciphers/webcrypto';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
-import { b64, unb64, sealBytes, openBytes } from './seal';
+import { b64, unb64, sealBytes, openBytes, padSize, isWorkspaceKey } from './seal';
+import { MAX_FILE_BYTES } from './events';
 
 /**
  * Files for relay workspaces, on Blossom (BUD-01/02: content-addressed blob servers over HTTPS).
@@ -18,6 +19,9 @@ export const DEFAULT_BLOSSOM: readonly string[] = ['https://blossom.primal.net',
 export interface BlobRef { key: string; hash: string; servers: string[] }
 
 const AAD = 'yurt-file-v1';
+// Largest ciphertext of an allowed file: nonce (24) + padded plaintext + Poly1305 tag (16).
+const MAX_CIPHER_BYTES = 24 + padSize(MAX_FILE_BYTES + 4) + 16;
+const DOWNLOAD_MS = 60_000;
 const base = (s: string) => s.replace(/\/+$/, '');
 const hex = (b: Uint8Array) => bytesToHex(sha256(b));
 
@@ -56,17 +60,56 @@ export async function uploadFile(servers: readonly string[], bytes: Uint8Array):
   return { key, hash, servers: ok };
 }
 
-/** Fetch from the listed servers in turn; null when none has an intact copy or it doesn't decrypt. */
-export async function downloadFile(ref: BlobRef): Promise<Uint8Array | null> {
-  for (const s of ref.servers) {
+export interface DownloadOpts {
+  /** Also fetch from `http://` servers (local development and tests). Otherwise only `https://` ones. */
+  allowHttp?: boolean;
+  /** Per-server time limit for the whole request, body included. Default 60 s. */
+  timeoutMs?: number;
+}
+
+/** A FileRef's `blob` comes from another member's message, so its shape is checked, not assumed. */
+function isBlobRef(r: unknown): r is BlobRef {
+  if (typeof r !== 'object' || r === null) return false;
+  const { key, hash, servers } = r as Record<string, unknown>;
+  // The file key has the same shape as a workspace key: 32 bytes, base64url.
+  return typeof key === 'string' && isWorkspaceKey(key) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash)
+    && Array.isArray(servers) && servers.every((s) => typeof s === 'string');
+}
+
+/** The body, or null once it's longer than `max` (stops reading there, so a server can't make us buffer gigabytes). */
+async function readCapped(r: Response, max: number): Promise<Uint8Array | null> {
+  const body = r.body;
+  if (!body) return new Uint8Array();
+  if (Number(r.headers.get('content-length') ?? 0) > max) { await body.cancel(); return null; }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let n = 0;
+  for (let c = await reader.read(); !c.done; c = await reader.read()) {
+    n += c.value.length;
+    if (n > max) { await reader.cancel(); return null; }
+    chunks.push(c.value);
+  }
+  const out = new Uint8Array(n);
+  chunks.reduce((at, c) => { out.set(c, at); return at + c.length; }, 0);
+  return out;
+}
+
+/**
+ * Fetch from the listed servers in turn; null when the ref is malformed, or no allowed server has
+ * an intact copy that decrypts.
+ */
+export async function downloadFile(ref: BlobRef, opts: DownloadOpts = {}): Promise<Uint8Array | null> {
+  if (!isBlobRef(ref)) return null;
+  const allowed = opts.allowHttp ? /^https?:\/\//i : /^https:\/\//i;
+  for (const s of ref.servers.filter((u) => allowed.test(u))) {
     try {
-      const r = await fetch(base(s) + '/' + ref.hash, { headers: { Authorization: auth('get', ref.hash) } });
-      if (!r.ok) continue;
-      const cipher = new Uint8Array(await r.arrayBuffer());
+      const r = await fetch(base(s) + '/' + ref.hash, { headers: { Authorization: auth('get', ref.hash) }, signal: AbortSignal.timeout(opts.timeoutMs ?? DOWNLOAD_MS) });
+      if (!r.ok) { await r.body?.cancel(); continue; }
+      const cipher = await readCapped(r, MAX_CIPHER_BYTES);
       // Content addressing: a server can't substitute bytes without failing this check.
-      if (hex(cipher) === ref.hash) return decryptFile(ref.key, cipher);
+      if (cipher && hex(cipher) === ref.hash) return decryptFile(ref.key, cipher);
     } catch {
-      // Unreachable server: try the next one.
+      // Servers are untrusted and may be down, slow (timeout) or malformed: try the next one.
     }
   }
   return null;

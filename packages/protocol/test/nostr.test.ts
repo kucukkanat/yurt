@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 import {
-  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, dmChannel, makeEvent, workspaceKeys, uploadFile, sha256Buf,
-  type Ev, type KeyPair, type PeerStore, type WsTransport, type KeyedTransport,
+  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, dmChannel, makeEvent, workspaceKeys, uploadFile, sha256Buf, seal,
+  type Ev, type KeyPair, type PeerStore, type WsTransport, type KeyedTransport, type WorkspacePeerOpts,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
 import { startBlossom, type TestBlossom } from './blossom-server';
@@ -12,10 +13,9 @@ const B = keyFromPhrase(newRecoveryPhrase());
 const C = keyFromPhrase(newRecoveryPhrase());
 
 /** In-memory PeerStore: a real implementation of the interface, one per simulated device. */
-function memStore(initial: Ev[] = []) {
+function memStore(initial: Ev[] = [], mark = 0) {
   const evs = new Map<string, Ev>(initial.map((e) => [e.id, e]));
   const blobs = new Map<string, ArrayBuffer>();
-  let mark = 0;
   const store: PeerStore = {
     getBlob: async (id) => blobs.get(id) ?? null,
     putBlob: async (id, b) => { blobs.set(id, b); },
@@ -38,24 +38,44 @@ async function until(cond: () => boolean, ms = 8000) {
 let relay: TestRelay;
 let transport: KeyedTransport;
 const open: WorkspacePeer[] = [];
+/** Every onError of this test; afterEach requires it empty, so tests that expect errors take theirs out. */
+let errors: string[] = [];
 
-async function join(kp: KeyPair, t: WsTransport = transport, store = memStore().store) {
-  const p = new WorkspacePeer({ code: CODE, kp, selfId: kp.pub.slice(0, 20), transport: t, store, onError: (m) => { throw new Error(m); } });
+function peer(kp: KeyPair, t: WsTransport = transport, store = memStore().store, extra: Partial<WorkspacePeerOpts> = {}) {
+  const p = new WorkspacePeer({ code: CODE, kp, selfId: kp.pub.slice(0, 20), transport: t, store, devFileServers: true, onError: (m) => errors.push(m), ...extra });
   open.push(p);
+  return p;
+}
+
+async function join(kp: KeyPair, t: WsTransport = transport, store = memStore().store, extra: Partial<WorkspacePeerOpts> = {}) {
+  const p = peer(kp, t, store, extra);
   await p.start();
   await until(() => p.connected);
   return p;
 }
 
+/** A stored relay event in Yurt's wire format, built by hand to control what relays hold. */
+const rawEvent = (content: string, tag: string, createdAt = Math.floor(Date.now() / 1000)) =>
+  finalizeEvent({ kind: 4344, created_at: createdAt, tags: [['y', tag]], content }, generateSecretKey());
+
+/** Swap the shared relay for one with other behaviour. */
+async function useRelay(opts: Parameters<typeof startRelay>[1]) {
+  await relay.close();
+  relay = await startRelay(0, opts);
+  transport = newNostrTransport([relay.url]);
+}
+
 const texts = (p: WorkspacePeer) => [...p.state.msgs.values()].map((m) => m.text);
 
 beforeEach(async () => {
+  errors = [];
   relay = await startRelay();
   transport = newNostrTransport([relay.url]);
 });
 afterEach(async () => {
   open.splice(0).forEach((p) => p.leave());
   await relay.close();
+  expect(errors).toEqual([]);
 });
 
 describe('nostr transport', () => {
@@ -152,8 +172,7 @@ describe('nostr transport', () => {
   });
 
   it('sends events published while the link was still starting', async () => {
-    const a = new WorkspacePeer({ code: CODE, kp: A, selfId: 'a', transport, store: memStore().store });
-    open.push(a);
+    const a = peer(A);
     const starting = a.start();
     a.publish({ t: 'ws.create', b: { name: 'Early' } }); // what createWorkspace does right after connecting
     await starting;
@@ -189,9 +208,7 @@ describe('nostr transport', () => {
   it('queues events while no relay is reachable and sends them when one comes back', async () => {
     const { port } = relay;
     await relay.close();
-    const errors: string[] = [];
-    const a = new WorkspacePeer({ code: CODE, kp: A, selfId: 'a', transport, store: memStore().store, onError: (m) => errors.push(m) });
-    open.push(a);
+    const a = peer(A);
     await a.start();
     const e = a.publish({ t: 'msg', ch: 'general', b: { text: 'offline draft' } });
     await new Promise((r) => setTimeout(r, 300));
@@ -200,8 +217,82 @@ describe('nostr transport', () => {
     relay = await startRelay(port);
     await until(() => a.queued.size === 0, 25_000);
     expect(relay.stored).toHaveLength(1);
-    expect(errors).toEqual([]);
   }, 30_000);
+
+  it('skips private wrappers naming invalid keys and still finishes the backfill', async () => {
+    const k = workspaceKeys(transport.key);
+    // Only members can write these, but a member (or a buggy client) can write anything.
+    for (const a of ['not hex', 'f'.repeat(64)]) relay.stored.push(rawEvent(seal(k.enc, k.tag, JSON.stringify({ a, to: A.pub, c: 'x' })), k.inbox(A.pub)));
+    const good = makeEvent(B, { ws: CODE, t: 'ws.create', b: { name: 'Still synced' } });
+    relay.stored.push(rawEvent(seal(k.enc, k.tag, JSON.stringify(good)), k.tag, Math.floor(Date.now() / 1000) - 5 * 3600)); // backfill only
+    const s = memStore();
+    const a = await join(A, transport, s.store);
+    await until(() => a.state.name === 'Still synced' && s.mark() > 0);
+  });
+
+  it('pages each relay to the end even when it serves fewer events than asked', async () => {
+    await useRelay({ maxLimit: 5 });
+    const a = await join(A);
+    const sent = Array.from({ length: 12 }, (_, i) => a.publish({ t: 'msg', ch: 'general', b: { text: 'm' + i } }));
+    await until(() => a.queued.size === 0);
+    const s = memStore();
+    const b = await join(B, transport, s.store);
+    await until(() => sent.every((e) => b.events.has(e.id)) && s.mark() > 0);
+  });
+
+  it('gives up on an event relays keep refusing, says why once, and keeps it queued', async () => {
+    let refusals = 0;
+    await useRelay({ refuse: (e) => (e.kind === 4344 ? (refusals++, 'blocked: members of the relay only') : null) });
+    const a = await join(A);
+    const e = a.publish({ t: 'msg', ch: 'general', b: { text: 'refused' } });
+    await until(() => errors.length > 0, 45_000);
+    expect(refusals).toBe(3); // retried a bounded number of times first
+    expect(errors).toEqual([expect.stringContaining('blocked: members of the relay only')]);
+    await new Promise((r) => setTimeout(r, 16_000)); // a full retry period: nothing more is sent or reported
+    expect(refusals).toBe(3);
+    expect(errors).toHaveLength(1);
+    expect(a.queued.has(e.id)).toBe(true);
+    errors = [];
+  }, 70_000);
+
+  it('does not re-send own events whose fuzzed relay copy predates the sync window', async () => {
+    const k = workspaceKeys(transport.key);
+    const since = Math.floor(Date.now() / 1000) - 30 * 3600; // where the next backfill starts (mark − 1 day)
+    const ev = makeEvent(A, { ws: CODE, t: 'ws.create', b: { name: 'Backdated' }, ts: (since + 600) * 1000 });
+    relay.stored.push(rawEvent(seal(k.enc, k.tag, JSON.stringify(ev)), k.tag, since - 600)); // created_at backdated past `since`
+    const s = memStore([ev], since + 86_400);
+    await join(A, transport, s.store);
+    await until(() => s.mark() > since + 86_400);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(relay.stored).toHaveLength(1);
+  });
+
+  it('opens no relay link when left while still loading', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const base = memStore().store;
+    const a = peer(A, transport, { ...base, load: async (ws) => { await gate; return base.load(ws); } });
+    const starting = a.start();
+    a.leave();
+    release();
+    await starting;
+    await new Promise((r) => setTimeout(r, 500));
+    expect(a.connected).toBe(false);
+    expect(a.relayStatus()).toEqual(new Map([[relay.url, false]]));
+  });
+
+  it('reports each relay\'s connection', async () => {
+    const down = 'ws://127.0.0.1:9';
+    const a = await join(A, newNostrTransport([relay.url, down]));
+    expect(a.relayStatus()).toEqual(new Map([[relay.url, true], [down, false]]));
+  });
+
+  it('reports a failed save on this device', async () => {
+    const a = await join(A, transport, { ...memStore().store, save: async () => { throw new Error('disk full'); } });
+    a.publish({ t: 'msg', ch: 'general', b: { text: 'x' } });
+    await until(() => errors.some((m) => m.includes('disk full')));
+    errors = [];
+  });
 });
 
 describe('files in relay workspaces', () => {
@@ -249,11 +340,29 @@ describe('files in relay workspaces', () => {
     a.publish({ t: 'msg', ch: 'general', b: { text: 'x', files: [forged] } });
     expect(await a.fetchFile(f.id)).toBeNull();
   });
+
+  it('only come from https servers unless dev file servers are allowed', async () => {
+    const a = await join(A);
+    const f = await attach('over plain http');
+    const m = a.publish({ t: 'msg', ch: 'general', b: { text: 'x', files: [f] } });
+    const b = await join(B, transport, memStore().store, { devFileServers: false });
+    await until(() => b.events.has(m.id));
+    expect(await b.fetchFile(f.id)).toBeNull();
+    expect(read(await a.fetchFile(f.id))).toBe('over plain http');
+  });
+
+  it('shrug off malformed refs from other members', async () => {
+    const a = await join(A);
+    const f = await attach('x');
+    a.publish({ t: 'msg', ch: 'general', b: { text: 'x', files: [{ ...f, blob: { key: 5, hash: null, servers: 5 } }] } });
+    a.requestBlob(f.id); // fire and forget: must not become an unhandled rejection
+    expect(await a.fetchFile(f.id)).toBeNull();
+  });
 });
 
 describe('workspace peer', () => {
   it('refuses a Trystero workspace without a WebRTC room', () => {
-    expect(() => new WorkspacePeer({ code: CODE, kp: A, selfId: 'a', store: memStore().store })).toThrow('Trystero workspaces need joinRoom');
+    expect(() => new WorkspacePeer({ code: CODE, kp: A, selfId: 'a', store: memStore().store, onError: (m) => errors.push(m) })).toThrow('Trystero workspaces need joinRoom');
   });
 
   it('drops forged, foreign and malformed events', async () => {
@@ -265,10 +374,5 @@ describe('workspace peer', () => {
     b.receive([{ ...good, id: 'x'.repeat(32) }, { ...good, ws: 'OTHERWSX' }, null, 'junk', { ...good, b: { text: 'tampered' } }]);
     b.receive('not an array');
     expect(b.events.size).toBe(n);
-  });
-
-  it('reports relay errors loudly when no handler is given', () => {
-    const p = new WorkspacePeer({ code: CODE, kp: A, selfId: 'a', transport, store: memStore().store });
-    expect(() => p.error('boom')).toThrow('boom');
   });
 });

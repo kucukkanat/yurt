@@ -11,21 +11,37 @@ permissions:
   pages: write
   id-token: write
 
+# Per ref, so PR runs and main runs never cancel each other; a main run (which deploys) is never cut off.
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      # Node stays: vitest, tsx and the published bridge CLI run on it.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
-      - run: npm test
-      - run: npm run build
+      - run: bun install --frozen-lockfile
+      # Protocol + bridge unit/integration tests (the bridge suite also builds and starts dist/cli.js).
+      - run: bun run test
+      - run: bun run build
+      - run: bun run bridge:build
+      - name: Smoke-start the built bridge
+        run: |
+          export YURT_HOME="$(mktemp -d)"
+          node packages/bridge/dist/cli.js --no-open --port 7799 &
+          pid=$!
+          for _ in $(seq 1 40); do curl -sf http://127.0.0.1:7799/ >/dev/null && break; sleep 0.5; done
+          curl -sf http://127.0.0.1:7799/ | grep -q __YURT_ADMIN__
+          kill -INT "$pid"
+          wait "$pid"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: apps/web/dist
@@ -36,12 +52,15 @@ jobs:
     continue-on-error: true   # relies on public Nostr relays; don't block deploys on relay weather
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
-      - run: npx playwright install --with-deps chromium
-      - run: npm run e2e
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run e2e
 
   deploy:
     if: github.ref == 'refs/heads/main'

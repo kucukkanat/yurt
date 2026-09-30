@@ -1,8 +1,9 @@
 import type { WorkspacePeer, HuddleState } from '@yurt/protocol';
+import { getPeer } from './net';
 
 export const MAX_VIDEO = 4;
 
-export interface RemoteMedia { mic?: MediaStream; cam?: MediaStream; screen?: MediaStream }
+interface RemoteMedia { mic?: MediaStream; cam?: MediaStream; screen?: MediaStream }
 export interface HuddleView {
   code: string | null;
   ch: string | null;
@@ -33,14 +34,18 @@ class Huddle {
     return n;
   }
 
-  async join(peer: WorkspacePeer, ch: string) {
+  async join(target: WorkspacePeer, ch: string) {
     if (this.view.ch) await this.leave();
-    // Relay workspaces open their WebRTC room only on demand; this joins it if needed.
-    const room = peer.ensureRoom();
-    if (!room) { this.emit({ error: 'Still connecting to this workspace. Try again in a moment.' }); return; }
+    // Relay workspaces open their WebRTC room only on demand; ensureRoom is null only when WebRTC is off for them.
+    const off = 'Turn on “Allow WebRTC for voice and video” in Settings → Network to join calls here.';
+    if (!target.ensureRoom()) { this.emit({ error: off }); return; }
     let mic: MediaStream;
     try { mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false }); }
     catch { this.emit({ error: 'Allow microphone access to join the huddle.' }); return; }
+    // The permission prompt can take a while: the workspace may have reconnected (new peer) or its room been left meanwhile.
+    const peer = getPeer(target.code);
+    const room = peer?.ensureRoom();
+    if (!peer || !room) { mic.getTracks().forEach((t) => t.stop()); this.emit({ error: peer ? off : 'You left this workspace.' }); return; }
     this.peer = peer;
     this.streams = { mic };
     this.sentTo.clear();
@@ -57,14 +62,14 @@ class Huddle {
   }
 
   private onPeerHuddle(peerId: string, h: HuddleState | null) {
-    const p = this.peer;
-    if (!p || !this.view.ch) return;
+    const room = this.peer?.room;
+    if (!room || !this.view.ch) return;
     if (h && h.ch === this.view.ch) {
       if (!this.sentTo.has(peerId)) {
         this.sentTo.add(peerId);
         for (const k of ['mic', 'cam', 'screen'] as const) {
           const s = this.streams[k];
-          if (s) p.room!.addStream(s, { target: peerId, metadata: { kind: k, ch: this.view.ch } });
+          if (s) room.addStream(s, { target: peerId, metadata: { kind: k, ch: this.view.ch } });
         }
       }
       const cur = this.view.remote[peerId];
@@ -73,7 +78,7 @@ class Huddle {
       }
     } else if (this.sentTo.has(peerId)) {
       this.sentTo.delete(peerId);
-      for (const s of Object.values(this.streams)) if (s) try { p.room!.removeStream(s, { target: peerId }); } catch { /* peer gone */ }
+      for (const s of Object.values(this.streams)) if (s) try { room.removeStream(s, { target: peerId }); } catch { /* peer gone */ }
       const { [peerId]: _gone, ...rest } = this.view.remote;
       this.emit({ remote: rest });
     }
@@ -112,9 +117,9 @@ class Huddle {
   private startKind(k: 'cam' | 'screen', s: MediaStream) {
     this.streams[k] = s;
     const t = this.targets();
-    if (t.length) this.peer!.room!.addStream(s, { target: t, metadata: { kind: k, ch: this.view.ch } });
+    if (t.length) this.peer?.room?.addStream(s, { target: t, metadata: { kind: k, ch: this.view.ch } });
     this.emit({ [k]: true, local: { ...this.view.local, [k]: s }, error: undefined });
-    this.peer!.setHuddle({ [k]: true });
+    this.peer?.setHuddle({ [k]: true });
   }
 
   private stopKind(k: 'cam' | 'screen') {

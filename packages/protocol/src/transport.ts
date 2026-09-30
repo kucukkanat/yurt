@@ -7,7 +7,7 @@ export interface Presence {
   typing?: string | null;                              // channel id
   agents?: Record<string, { working?: string | null }>; // agentId → channel it's working in
   bridge?: boolean;
-  /** Relay workspaces: this member needs the WebRTC room now (huddle or file fetch), so others should join it. */
+  /** Relay workspaces: this member is in a huddle and needs the WebRTC room, so opted-in members should join it. */
   rtc?: boolean;
 }
 
@@ -16,21 +16,26 @@ export interface LinkHost {
   readonly code: string;
   readonly kp: KeyPair;
   readonly events: ReadonlyMap<string, Ev>;
+  /** Published here but not yet delivered to anyone. */
+  readonly queued: ReadonlySet<string>;
   /** Handshaked WebRTC peers (peerId → identity), for links that route over the room. */
   readonly peers: ReadonlyMap<string, { pub: string }>;
   visibleFor(pub: string): Ev[];
+  /** Banned in the current state: links ignore their presence and send them nothing. */
+  isBanned(pub: string): boolean;
   /** Untrusted input: the host validates every event before accepting it. */
   receive(evs: unknown): void;
-  /** These events (or all queued ones) reached someone else and no longer need "sends when you reconnect". */
-  delivered(ids: readonly string[] | 'all'): void;
+  /** These events reached someone else and no longer need "sends when you reconnect". */
+  delivered(ids: readonly string[]): void;
   /** Presence or link connectivity changed. */
   changed(): void;
   error(msg: string): void;
 }
 
 /**
- * Carries events and presence for a workspace. Trystero sends them peer to peer over the room;
- * Nostr stores them encrypted on relays. Huddles and files always stay on the WebRTC room.
+ * Carries events and presence for a workspace. Trystero sends them peer to peer over its WebRTC
+ * room, which also carries files and huddles. Nostr stores them encrypted on relays, with files
+ * on Blossom; a Nostr workspace uses WebRTC only for opted-in voice and video.
  */
 export interface DataLink {
   /** Who is online, keyed by a link-specific id. Every entry's `pub` is authenticated. */
@@ -39,6 +44,8 @@ export interface DataLink {
   readonly connected: boolean;
   send(evs: readonly Ev[]): void;
   setPresence(p: Presence): void;
+  /** Relay links: each configured relay → connected. */
+  relayStatus?(): ReadonlyMap<string, boolean>;
   onPeerJoin?(peerId: string, pub: string): void;
   onPeerLeave?(peerId: string): void;
   leave(): void;

@@ -1,18 +1,17 @@
-import React from 'react';
 import { Button, Icon, IconButton } from '@yurt/ui';
 import { formatCode } from '@yurt/protocol';
 import { useApp } from '../store';
-import { useCurrent } from '../model';
+import { useCurrent, othersOnline } from '../model';
 import { CreateJoin } from './Dialogs';
 
 export function Home({ narrow }: { narrow: boolean }) {
-  const { route, state, rec, peer } = useCurrent();
+  const { route, state, rec, peer, identity } = useCurrent();
   const workspaces = useApp((s) => s.workspaces);
   const app = useApp.getState();
   const menu = narrow && <div style={{ position: 'absolute', top: 10, left: 8 }}><IconButton icon="menu" label="Open sidebar" size="sm" onClick={() => useApp.setState({ drawer: true })} /></div>;
 
   if (route.code) {
-    const n = peer?.presence.size || 0;
+    const n = othersOnline(peer, identity.pub);
     const relayed = peer?.transport.kind === 'nostr';
     return (
       <div style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 32, textAlign: 'center' }}>

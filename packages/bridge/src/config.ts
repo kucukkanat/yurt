@@ -22,7 +22,10 @@ export interface Config {
 
 export interface StoredIdentity { phrase: string; name: string; handle: string }
 
-export const DEFAULT_ORIGINS = ['https://kucukkanat.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'];
+// Origins can't carry a path, so this admits every GitHub Pages site of this user, not just /yurt.
+// Accepted risk: any of them can still only reach the pairing prompt, which is rate limited and
+// locks out (server.ts), and nothing else works without a paired token.
+const DEFAULT_ORIGINS = ['https://kucukkanat.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173'];
 
 function ensure() {
   for (const d of [HOME, WS_DIR, BLOB_DIR]) fs.mkdirSync(d, { recursive: true, mode: 0o700 });
@@ -45,7 +48,7 @@ export function loadConfig(): Config {
     adminToken: c.adminToken || crypto.randomBytes(24).toString('hex'),
     tokens: c.tokens || [],
     startOnLogin: !!c.startOnLogin,
-    allowedOrigins: c.allowedOrigins?.length ? c.allowedOrigins : DEFAULT_ORIGINS,
+    allowedOrigins: c.allowedOrigins ?? DEFAULT_ORIGINS, // [] is a deliberate "no web apps"
     agents: c.agents || [],
     workspaces: c.workspaces || [],
   };

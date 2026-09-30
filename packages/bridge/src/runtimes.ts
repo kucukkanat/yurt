@@ -33,9 +33,18 @@ function set(id: RuntimeId, p: Partial<RuntimeStatus>) {
   onChange();
 }
 
-function which(bin: string): boolean {
+/** Absolute path of `bin` on PATH, or null. */
+export function whichPath(bin: string): string | null {
   const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [bin], { encoding: 'utf8' });
-  return r.status === 0 && !!r.stdout.trim();
+  return (r.status === 0 && r.stdout.trim().split(/\r?\n/)[0]) || null;
+}
+const which = (bin: string) => whichPath(bin) !== null;
+
+/** The command that speaks ACP; `npx -y pkg` becomes `bunx pkg` on machines that only have Bun. */
+export function acpCommand(id: RuntimeId): [string, string[]] {
+  const [cmd, ...args] = RUNTIMES[id].acp;
+  if (cmd !== 'npx' || which('npx') || !which('bun')) return [cmd, args];
+  return ['bunx', args.filter((a) => a !== '-y')];
 }
 
 export function detect(id: RuntimeId) {
@@ -73,11 +82,10 @@ export function install(id: RuntimeId): Promise<boolean> {
 
 /** Start the agent over ACP in a scratch dir and open a session to learn whether it's signed in. */
 export async function check(id: RuntimeId): Promise<void> {
-  const d = RUNTIMES[id];
   if (!status.get(id)?.installed) return;
   set(id, { busy: 'checking' });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yurt-check-'));
-  const c = new AcpConnection(id + ':check', d.acp[0], d.acp.slice(1), dir);
+  const c = new AcpConnection(id + ':check', ...acpCommand(id), dir);
   try {
     await c.initialize();
     await c.request('session/new', { cwd: dir, mcpServers: [] }, 60_000);
@@ -87,6 +95,7 @@ export async function check(id: RuntimeId): Promise<void> {
     log(isAuthError(e) ? 'info' : 'warn', id, 'check: ' + (e as Error).message);
   } finally {
     c.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -95,7 +104,7 @@ export async function login(id: RuntimeId): Promise<void> {
   const d = RUNTIMES[id];
   set(id, { busy: 'signing-in' });
   const dir = os.tmpdir();
-  const c = new AcpConnection(id + ':login', d.acp[0], d.acp.slice(1), dir);
+  const c = new AcpConnection(id + ':login', ...acpCommand(id), dir);
   try {
     const init = await c.initialize();
     const m = init.authMethods?.[0];

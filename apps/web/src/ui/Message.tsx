@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChatMessage, MentionText, ApprovalCard, Button, Kbd, Icon, IconButton } from '@yurt/ui';
 import { EDIT_WINDOW_MS, mentions, type Msg, type WsState, type WorkspacePeer, type FileRef } from '@yurt/protocol';
 import { useApp } from '../store';
@@ -8,26 +8,31 @@ import { fmtTime, fmtBytes } from '../lib/format';
 
 const pendingDeletes = new Set<string>();
 
-function useBlobUrl(f: FileRef): { url: string | null; progress?: number } {
-  const tick = useApp((s) => s.blobTick);
+function useBlobUrl(f: FileRef, code: string) {
+  const ver = useApp((s) => s.blobVer[f.id] ?? 0); // only this blob's arrivals re-run the load
   const progress = useApp((s) => s.blobProgress[f.id]);
   const [url, setUrl] = useState<string | null>(null);
-  const asked = useRef(false);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    let u: string | null = null;
+    if (url) return; // loaded once; never swap (and revoke) a URL that's on screen
     let alive = true;
-    blobsDb.get(f.id).then((buf) => {
+    (async () => {
+      const buf = await blobsDb.get(f.id);
       if (!alive) return;
-      if (buf) { u = URL.createObjectURL(new Blob([buf], { type: f.type })); setUrl(u); }
-      else if (!asked.current) { asked.current = true; useApp.getState().fetchBlob(f.id); }
-    });
-    return () => { alive = false; if (u) URL.revokeObjectURL(u); };
-  }, [f.id, tick]);
-  return { url, progress };
+      if (buf) { setUrl(URL.createObjectURL(new Blob([buf], { type: f.type }))); return; }
+      setFailed(false);
+      const ok = await useApp.getState().fetchBlob(code, f.id);
+      if (alive && !ok) setFailed(true);
+    })();
+    return () => { alive = false; };
+  }, [f.id, ver, attempt, url]);
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+  return { url, progress, failed, retry: () => setAttempt((n) => n + 1) };
 }
 
-function Attachment({ f }: { f: FileRef }) {
-  const { url, progress } = useBlobUrl(f);
+function Attachment({ f, code }: { f: FileRef; code: string }) {
+  const { url, progress, failed, retry } = useBlobUrl(f, code);
   const isImg = f.type.startsWith('image/');
   if (isImg && url) {
     return (
@@ -37,23 +42,24 @@ function Attachment({ f }: { f: FileRef }) {
     );
   }
   // Relay workspaces fetch sealed files from Blossom; Trystero ones need a member who has the file online.
-  const note = url ? fmtBytes(f.size) : progress != null && progress < 1 ? 'Fetching · ' + Math.round(progress * 100) + '%'
+  const note = url ? fmtBytes(f.size) : failed ? 'Couldn’t download · retry'
+    : progress != null && progress < 1 ? 'Fetching · ' + Math.round(progress * 100) + '%'
     : fmtBytes(f.size) + (f.blob ? ' · downloading' : ' · waiting for a peer who has it');
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px 8px 8px', borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--surface-card)', minWidth: 220, maxWidth: 360 }}>
       <span style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--surface-sunken)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', flexShrink: 0 }}><Icon name={isImg ? 'image' : 'file-text'} size={16} /></span>
       <span style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-        <span style={{ font: '400 11px/1.2 var(--font-mono)', color: 'var(--text-subtle)' }}>{note}</span>
+        <span data-testid="attachment-status" style={{ font: '400 11px/1.2 var(--font-mono)', color: failed && !url ? 'var(--danger-ink)' : 'var(--text-subtle)' }}>{note}</span>
       </span>
       {url
         ? <a href={url} download={f.name} aria-label={'Download ' + f.name} style={{ display: 'flex', color: 'var(--text-muted)', padding: 6 }}><Icon name="download" size={16} /></a>
-        : <IconButton icon="refresh-cw" label={f.blob ? 'Try downloading again' : 'Ask peers again'} size="sm" onClick={() => useApp.getState().fetchBlob(f.id)} />}
+        : <IconButton icon="refresh-cw" label={f.blob ? 'Try downloading again' : 'Ask peers again'} size="sm" onClick={retry} data-testid="attachment-retry" />}
     </div>
   );
 }
 
-export function InlineEditor({ initial, onSave, onCancel }: { initial: string; onSave: (t: string) => void; onCancel: () => void }) {
+function InlineEditor({ initial, onSave, onCancel }: { initial: string; onSave: (t: string) => void; onCancel: () => void }) {
   const [v, setV] = useState(initial);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -99,11 +105,14 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
     steps: m.trace.map((s) => ({ status: s.status, title: s.title, tool: s.tool, meta: s.ms != null ? (s.ms / 1000).toFixed(1) + 's' : undefined, detail: s.detail })),
   } : undefined;
   const openThread = () => app.go({ code, ch: m.ch, thread: m.id });
+  // The delete goes out only when its toast goes away (expired, closed or pushed out), so Undo always wins while it's visible.
   const onDelete = () => {
+    let undone = false;
     pendingDeletes.add(m.id);
     ctx.forceRender();
-    const t = setTimeout(() => { pendingDeletes.delete(m.id); app.publish(code, { t: 'del', b: { target: m.id }, ch: m.ch, to: m.to }); }, 5000);
-    app.toast({ title: 'Message deleted', actionLabel: 'Undo', duration: 5000, onAction: () => { clearTimeout(t); pendingDeletes.delete(m.id); ctx.forceRender(); } });
+    app.toast({ title: 'Message deleted', actionLabel: 'Undo', duration: 5000,
+      onAction: () => { undone = true; pendingDeletes.delete(m.id); ctx.forceRender(); },
+      onDismiss: () => { if (undone) return; pendingDeletes.delete(m.id); app.publish(code, { t: 'del', b: { target: m.id }, ch: m.ch, to: m.to }); } });
   };
   const approval = m.approval;
   const decided = approval ? state.approvals.get(approval.req) : undefined;
@@ -126,7 +135,7 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
         editor={editing === m.id ? <InlineEditor initial={text} onSave={(t) => { app.publish(code, { t: 'edit', ch: m.ch, to: m.to, b: { target: m.id, text: t } }); useApp.setState({ editing: null }); }} onCancel={() => useApp.setState({ editing: null })} /> : undefined}
       >
         {text && <MentionText text={text} members={ctx.roster.map((p) => ({ id: p.id, handle: p.handle, kind: p.kind }))} meId={me} onMention={(mm) => app.setPanel({ type: 'profile', id: mm.id })} />}
-        {m.files.length > 0 && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: text ? 6 : 0 }}>{m.files.map((f) => <Attachment key={f.id} f={f} />)}</div>}
+        {m.files.length > 0 && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: text ? 6 : 0 }}>{m.files.map((f) => <Attachment key={f.id} f={f} code={code} />)}</div>}
       </ChatMessage>
       {approval && (
         <div style={{ padding: '2px 16px 10px 58px', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 640 }}>

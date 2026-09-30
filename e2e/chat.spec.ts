@@ -18,7 +18,7 @@ test('two peers create, join, sync history and chat', async ({ browser }) => {
   await expect(a).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
   await a.getByRole('button', { name: 'Invite people' }).first().click();
   const link = await a.getByTestId('invite-link').inputValue();
-  expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/k\/[A-Za-z0-9_-]{43}$/); // link-only: the key is what lets people in
+  expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/k\/[A-Za-z0-9_-]{43}\/o\/[0-9a-f]{64}$/); // link-only: the key lets people in; /o/ pins the creator
   await a.getByTestId('invite-link').press('Escape'); // the dialog handles Escape when focus is inside it
   await expect(a.getByRole('dialog')).toHaveCount(0);
 

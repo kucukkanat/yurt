@@ -9,10 +9,16 @@ import { matchFilter, type Filter } from 'nostr-tools/filter';
  * what an operator would hold, for privacy assertions.
  */
 export interface TestRelay { url: string; port: number; stored: Event[]; close(): Promise<void> }
+export interface RelayOpts {
+  /** Cap every REQ's `limit`, like public relays that serve fewer than asked. */
+  maxLimit?: number;
+  /** Refuse an EVENT with this NIP-01 reason (e.g. "blocked: paid relay"), or accept it (null). */
+  refuse?(e: Event): string | null;
+}
 
 const isEphemeral = (k: number) => k >= 20000 && k < 30000;
 
-export function startRelay(port = 0): Promise<TestRelay> {
+export function startRelay(port = 0, opts: RelayOpts = {}): Promise<TestRelay> {
   const stored: Event[] = [];
   const subs = new Map<WebSocket, Map<string, Filter[]>>();
   const wss = new WebSocketServer({ port, host: '127.0.0.1' });
@@ -26,6 +32,8 @@ export function startRelay(port = 0): Promise<TestRelay> {
       if (type === 'EVENT') {
         const e = rest[0] as Event;
         if (!verifyEvent(e)) return send(ws, ['OK', e.id, false, 'invalid: bad signature']);
+        const refused = opts.refuse?.(e);
+        if (refused) return send(ws, ['OK', e.id, false, refused]);
         const dup = stored.some((x) => x.id === e.id);
         if (!dup && !isEphemeral(e.kind)) stored.push(e);
         send(ws, ['OK', e.id, true, dup ? 'duplicate:' : '']);
@@ -35,7 +43,7 @@ export function startRelay(port = 0): Promise<TestRelay> {
         subs.get(ws)?.set(id, fs);
         for (const f of fs) {
           const hits = stored.filter((e) => matchFilter(f, e)).sort((a, b) => b.created_at - a.created_at);
-          for (const e of hits.slice(0, f.limit ?? hits.length)) send(ws, ['EVENT', id, e]);
+          for (const e of hits.slice(0, Math.min(f.limit ?? hits.length, opts.maxLimit ?? Infinity))) send(ws, ['EVENT', id, e]);
         }
         send(ws, ['EOSE', id]);
       } else if (type === 'CLOSE') {

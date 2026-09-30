@@ -21,5 +21,7 @@ export interface IconProps extends React.SVGAttributes<SVGSVGElement> {
   /** Accessible name. Omit for decorative icons next to text. */
   label?: string;
   color?: string;
+  /** Forwarded to the element, e.g. `data-testid`. */
+  [attr: `data-${string}`]: string | undefined;
 }
 export declare function Icon(props: IconProps): JSX.Element;

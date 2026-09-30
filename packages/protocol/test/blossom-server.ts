@@ -7,8 +7,18 @@ import { verifyEvent, type Event } from 'nostr-tools/pure';
  * A small but real Blossom server (BUD-01 auth, BUD-02 PUT /upload and GET /<sha256>, CORS),
  * for tests. `stored` is exactly what an operator would hold, for privacy assertions.
  */
-export interface TestBlossom { url: string; port: number; stored: Map<string, Buffer>; close(): Promise<void> }
+export interface TestBlossom {
+  url: string; port: number; stored: Map<string, Buffer>;
+  /** Hashes whose download the client stopped reading before the end. */
+  aborted: string[];
+  close(): Promise<void>;
+}
+export interface BlossomOpts {
+  /** Stream downloads without Content-Length, so a client only learns the size by reading. */
+  chunked?: boolean;
+}
 
+const CHUNK = 1 << 20;
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 
 function authorized(header: string | undefined, verb: string, hash: string): boolean {
@@ -22,8 +32,9 @@ function authorized(header: string | undefined, verb: string, hash: string): boo
   }
 }
 
-export function startBlossom(port = 0): Promise<TestBlossom> {
+export function startBlossom(port = 0, opts: BlossomOpts = {}): Promise<TestBlossom> {
   const stored = new Map<string, Buffer>();
+  const aborted: string[] = [];
   const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-SHA-256');
@@ -41,14 +52,26 @@ export function startBlossom(port = 0): Promise<TestBlossom> {
       }
       const hash = req.url?.slice(1).split('.')[0] ?? '';
       const blob = stored.get(hash);
-      if (req.method === 'GET' && blob) return res.writeHead(200, { 'Content-Type': 'application/octet-stream' }).end(blob);
+      if (req.method === 'GET' && blob) {
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', ...(opts.chunked ? {} : { 'Content-Length': blob.length }) });
+        res.on('close', () => { if (!res.writableFinished) aborted.push(hash); });
+        // In 1 MiB chunks, honouring backpressure, so a client that stops reading stops the transfer.
+        const write = (at: number): void => {
+          if (res.destroyed) return;
+          if (at >= blob.length) { res.end(); return; }
+          const next = at + CHUNK;
+          if (res.write(blob.subarray(at, next))) write(next);
+          else res.once('drain', () => write(next));
+        };
+        return write(0);
+      }
       res.writeHead(404).end();
     });
   });
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => {
     const addr = server.address();
     port = typeof addr === 'object' && addr ? addr.port : port;
-    resolve({ url: `http://127.0.0.1:${port}`, port, stored, close: () => new Promise((r) => { server.closeAllConnections(); server.close(() => r()); }) });
+    resolve({ url: `http://127.0.0.1:${port}`, port, stored, aborted, close: () => new Promise((r) => { server.closeAllConnections(); server.close(() => r()); }) });
   }));
 }
 

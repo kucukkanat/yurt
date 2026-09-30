@@ -7,7 +7,8 @@ interface Props {
   members: Person[];
   placeholder: string;
   note?: React.ReactNode;
-  onSend(text: string, files: File[]): void;
+  /** Resolves true once sent; on false the draft stays so nothing typed or attached is lost. */
+  onSend(text: string, files: File[]): Promise<boolean>;
   onTyping?(): void;
   autoFocus?: boolean;
   dropFiles?: File[];
@@ -19,6 +20,7 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
   const [pick, setPick] = useState<string | null>(null);
   const [idx, setIdx] = useState(0);
   const [focus, setFocus] = useState(false);
+  const [sending, setSending] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
   const fileIn = useRef<HTMLInputElement>(null);
   useEffect(() => { if (dropFiles?.length) setFiles((f) => [...f, ...dropFiles]); }, [dropFiles]);
@@ -35,7 +37,17 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
     setPick(null);
     requestAnimationFrame(() => { t.focus(); t.selectionStart = t.selectionEnd = before.length; });
   };
-  const send = () => { if (!v.trim() && !files.length) return; onSend(v.trim(), files); setV(''); setFiles([]); setPick(null); };
+  const send = async () => {
+    if (sending || (!v.trim() && !files.length)) return;
+    const [text, sent] = [v, files];
+    setSending(true);
+    const ok = await onSend(text.trim(), sent).finally(() => setSending(false));
+    if (!ok) return;
+    // Clear only what was sent: anything typed or attached during a slow upload stays.
+    setV((cur) => (cur === text ? '' : cur));
+    setFiles((cur) => cur.filter((f) => !sent.includes(f)));
+    setPick(null);
+  };
   const key = (e: React.KeyboardEvent) => {
     if (matches.length) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setIdx((i) => (i + 1) % matches.length); return; }
@@ -57,7 +69,7 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
     if (fs.length) { e.preventDefault(); setFiles((f) => [...f, ...fs]); }
   };
   return (
-    <div style={{ position: 'relative' }}>
+    <div data-testid="composer" style={{ position: 'relative' }}>
       {matches.length > 0 && (
         <div role="listbox" aria-label="Mention someone" style={{ position: 'absolute', left: 0, bottom: 'calc(100% + 8px)', width: 320, maxWidth: '100%', padding: 6, borderRadius: 16, background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)', zIndex: 20, animation: 'ag-rise var(--dur-fast) var(--ease-out)' }}>
           <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)', padding: '4px 8px 6px' }}>People and agents</div>
@@ -83,7 +95,7 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
           <IconButton icon="paperclip" label="Attach files (up to 25 MB)" size="sm" onClick={() => fileIn.current?.click()} />
           <IconButton icon="at-sign" label="Mention" size="sm" onClick={() => { const nv = v + (v && !v.endsWith(' ') ? ' @' : '@'); setV(nv); sync(nv, nv.length); ta.current?.focus(); }} />
           <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--text-subtle)', paddingLeft: 8, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{note}</span>
-          <IconButton icon="arrow-up" label="Send" variant="primary" round size="sm" disabled={!v.trim() && !files.length} onClick={send} />
+          <IconButton icon="arrow-up" label="Send" variant="primary" round size="sm" disabled={sending || (!v.trim() && !files.length)} onClick={send} data-testid="composer-send" />
         </div>
       </div>
     </div>

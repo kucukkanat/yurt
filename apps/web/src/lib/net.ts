@@ -1,5 +1,5 @@
 import { joinRoom, selfId } from 'trystero';
-import { WorkspacePeer, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport } from '@yurt/protocol';
+import { WorkspacePeer, parseRelays, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport } from '@yurt/protocol';
 import { peerStore } from './db';
 
 export interface NetSettings {
@@ -14,22 +14,22 @@ export interface NetSettings {
 }
 
 // Free public TURN (Open Relay by Metered). Rate-limited; set your own in Settings → Network.
-export const DEFAULT_TURN = [{
+const DEFAULT_TURN = [{
   urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turns:openrelay.metered.ca:443?transport=tcp'],
   username: 'openrelayproject',
   credential: 'openrelayproject',
 }];
 
-export function rtcOptions(n: NetSettings): Record<string, unknown> {
+function rtcOptions(n: NetSettings): Record<string, unknown> {
   const o: Record<string, unknown> = {};
   if (n.turn === 'default') o.turnConfig = DEFAULT_TURN;
   if (n.turn === 'custom' && n.turnUrls.trim()) o.turnConfig = [{ urls: n.turnUrls.split(/[\s,]+/).filter(Boolean), username: n.turnUser, credential: n.turnPass }];
-  const relays = n.relays.split(/\s+/).filter((u) => u.startsWith('wss://'));
+  const relays = parseRelays(n.relays); // same rules as new relay workspaces, so a ws:// test relay works for both
   if (relays.length) o.relayConfig = { urls: relays };
   return o;
 }
 
-export interface NetHandlers {
+interface NetHandlers {
   onState(code: string, s: WsState, fresh: Ev[]): void;
   onPeers(code: string): void;
   onCreator(code: string, pub: string): void;
@@ -55,6 +55,8 @@ export function connect(code: string, kp: KeyPair, creator: string | null, trans
     onBlobProgress: h.onBlobProgress,
     onJoinError: (d) => console.warn('[yurt] join error', d),
     onError: (msg) => console.error('[yurt]', msg),
+    // The dev server and e2e run a local http Blossom server; production only trusts https ones.
+    devFileServers: ['localhost', '127.0.0.1'].includes(location.hostname),
   });
   peers.set(code, p);
   p.start();

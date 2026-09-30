@@ -1,12 +1,11 @@
 // Agentic Design System components (source copied from the design system project).
-export { Icon, ICON_NAMES } from './components/core/Icon.jsx';
+export { Icon } from './components/core/Icon.jsx';
 export { Kbd } from './components/core/Kbd.jsx';
 export { ICONS } from './components/core/icons-data.js';
-export { Button, BUTTON_VARIANTS } from './components/actions/Button.jsx';
+export { Button } from './components/actions/Button.jsx';
 export { IconButton } from './components/actions/IconButton.jsx';
-export { Badge, TONES } from './components/display/Badge.jsx';
+export { Badge } from './components/display/Badge.jsx';
 export { Tag } from './components/display/Tag.jsx';
-export { Card } from './components/display/Card.jsx';
 export { Input, FieldShell } from './components/forms/Input.jsx';
 export { Select } from './components/forms/Select.jsx';
 export { Checkbox } from './components/forms/Checkbox.jsx';
@@ -16,11 +15,8 @@ export { Tabs } from './components/navigation/Tabs.jsx';
 export { Dialog } from './components/overlay/Dialog.jsx';
 export { Toast } from './components/overlay/Toast.jsx';
 export { Tooltip } from './components/overlay/Tooltip.jsx';
-export { ThinkingIndicator } from './components/agent/ThinkingIndicator.jsx';
 export { AgentStep } from './components/agent/AgentStep.jsx';
-export { PromptComposer } from './components/agent/PromptComposer.jsx';
 export { ApprovalCard } from './components/agent/ApprovalCard.jsx';
-export { SourceChip } from './components/agent/SourceChip.jsx';
 export { Avatar, initials } from './components/chat/Avatar.jsx';
 export { PresenceDot, PRESENCE } from './components/chat/PresenceDot.jsx';
 export { Mention, MentionText } from './components/chat/Mention.jsx';

@@ -11,7 +11,7 @@ export interface Ev<B = any> {
   t: EvType;
   a: string;       // author public key (ed25519, hex)
   ag?: string;     // agent id when an agent authored it (signed by its owner key)
-  ts: number;      // ms since epoch, author clock
+  ts: number;      // ms since epoch, author clock (integer); authors choose it, so it proves nothing
   ch?: string;     // channel id, "dm:<pubA>:<pubB>" or "adm:<owner>:<agentId>"
   to?: string;     // private recipient pubkey (DMs); only author + recipient ever hold it
   b: B;

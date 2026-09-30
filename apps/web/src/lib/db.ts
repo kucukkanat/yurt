@@ -30,11 +30,13 @@ export const kv = {
   get: <T>(k: string) => run<T | undefined>('kv', 'readonly', (s) => s.get(k) as IDBRequest<T | undefined>),
   set: (k: string, v: unknown) => run('kv', 'readwrite', (s) => { s.put(v, k); }),
   del: (k: string) => run('kv', 'readwrite', (s) => { s.delete(k); }),
+  clear: () => run('kv', 'readwrite', (s) => { s.clear(); }),
 };
 
 export const eventsDb = {
   byWs: (ws: string) => run<Ev[]>('events', 'readonly', (s) => s.index('ws').getAll(ws) as IDBRequest<Ev[]>),
   put: (evs: Ev[]) => run('events', 'readwrite', (s) => { for (const e of evs) s.put(e); }),
+  clear: () => run('events', 'readwrite', (s) => { s.clear(); }),
   deleteWs: async (ws: string) => {
     const d = await open();
     await new Promise<void>((res, rej) => {
@@ -50,13 +52,15 @@ export const eventsDb = {
 export const blobsDb = {
   get: (id: string) => run<ArrayBuffer | undefined>('blobs', 'readonly', (s) => s.get(id) as IDBRequest<ArrayBuffer | undefined>),
   put: (id: string, buf: ArrayBuffer) => run('blobs', 'readwrite', (s) => { s.put(buf, id); }),
+  del: (ids: readonly string[]) => run('blobs', 'readwrite', (s) => { for (const id of ids) s.delete(id); }),
+  clear: () => run('blobs', 'readwrite', (s) => { s.clear(); }),
 };
 
 export const peerStore: PeerStore = {
   load: (ws) => eventsDb.byWs(ws),
-  save: (evs) => eventsDb.put(evs),
+  save: async (evs) => { await eventsDb.put(evs); },
   getBlob: async (id) => (await blobsDb.get(id)) ?? null,
-  putBlob: (id, buf) => blobsDb.put(id, buf),
+  putBlob: async (id, buf) => { await blobsDb.put(id, buf); },
   loadMark: async (ws) => (await kv.get<number>('mark:' + ws)) ?? 0,
   saveMark: async (ws, sec) => { await kv.set('mark:' + ws, sec); },
 };

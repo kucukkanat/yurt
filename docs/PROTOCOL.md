@@ -12,7 +12,8 @@ Version 1. All code in `packages/protocol`.
 - Workspace id: 8 chars from `ABCDEFGHJKMNPQRSTVWXYZ23456789`, shown as `K7QX-2MPD`. It is **not a secret** and can't be used to join.
 - Workspace key `wk`: 32 random bytes made at creation. Every secret below derives from it (see [Keys](#keys)).
 - Each workspace has a **transport**, chosen at creation and fixed: `trystero` (events travel peer to peer; history lives only on members' devices) or `nostr` (events are end-to-end encrypted and stored on relays; see [Nostr transport](#nostr-transport)).
-- Invites are links only: `…/#/w/<id>/k/<key>` (Trystero) or `…/#/w/<id>/k/<key>/n/<relays>` (Nostr). `<key>` is `wk` in base64url; `<relays>` is a URI-encoded comma list, or `-` for the defaults. Links without a valid key are refused.
+- Invites are links only: `…/#/w/<id>/k/<key>` (Trystero) or `…/#/w/<id>/k/<key>/n/<relays>` (Nostr), optionally followed by `/o/<creator pub>`. `<key>` is `wk` in base64url; `<relays>` is a URI-encoded comma list, or `-` for the defaults. Links without a valid key are refused.
+- `/o/` pins the creator: joiners take the creator from the link instead of trusting the first `ws.create` they see, so a forged or backdated `ws.create` can't make someone else the creator. Links without it fall back to trust on first use.
 - The key lives only in the `#` fragment, which browsers never send to a server. On load the app keeps the invite in memory and removes it from the address bar and history (`history.replaceState`), so it can't end up in synced browser history.
 - WebRTC room (Trystero, Nostr signaling strategy): `appId = HKDF(wk, "app")`, `roomId = HKDF(wk, "room")`, `password = HKDF(wk, "room-pw")`. Nothing in the signaling identifies the app or the workspace, and the room can't be found or joined without the key.
 - **Legacy workspaces** (created before keys) have only the code: `appId = "yurt.p2p.v1"`, `password = code`, `roomId = sha256("yurt-room:" + code)[0:24]`. That's brute-forceable from public relay traffic (~39 bits), so they keep working for existing members but can't be joined anew; the app asks members to recreate them.
@@ -33,20 +34,20 @@ Every change is an immutable, signed event:
 
 | `t` | body | rule |
 |---|---|---|
-| `ws.create` | `{name}` | Creator = author of the earliest one, pinned locally on first join (TOFU). |
+| `ws.create` | `{name}` | Creator = the pubkey pinned by the invite link (`/o/`), else the author of the earliest one, pinned on first join. |
 | `profile` | `{name, handle}` | Latest per key wins. |
 | `ch.create` | `{id, name, topic}` | First per id wins. |
 | `ch.update` | `{id, name?, topic?}` | Any member. |
 | `msg` | `{text, parent?, files?, trace?, meta?, approval?}` | `ch` is a channel id, `dm:<pubA>:<pubB>` (sorted) or `adm:<owner>:<agentId>`. `parent` makes a thread reply. |
-| `edit` / `del` | `{target, text?}` | Same author and agent, within 15 minutes of the original. |
+| `edit` / `del` | `{target, text?}` | Same author and agent, not before the original. The 15-minute edit window is advisory: authors choose `ts`, so only honest clients can enforce it. |
 | `react` | `{target, icon, on}` | Reactor = `pub` or `pub/agentId`. |
 | `pin` | `{target, on}` | Any member. |
-| `role` | `{target, admin}` | Promote: creator only. Demote: any admin, never the creator. |
-| `ban` | `{target, on}` | Admins; never the creator or self. A banned key's later events are ignored and it fails the handshake. |
+| `role` | `{target, admin}` | Promote: creator only. Demote: the creator demotes admins; never the creator. |
+| `ban` | `{target, on}` | Admins ban non-admins; only the creator bans an admin; never the creator or self. **All** of a banned key's events are ignored whatever their timestamps (so backdating can't slip past a ban), connected peers are dropped, and it fails the handshake. Un-ban restores them. |
 | `agent` | `{id, name, handle, runtime, model?, replyIn, removed?}` | Declares one of the author's agents. |
 | `approve` | `{req, option}` | Owner's answer to an agent permission request (private, `to` = owner). |
 
-State is `reduce(events)` sorted by `(ts, id)`; every peer with the same events computes the same state.
+State is `reduce(events)`: roles and bans are computed first, then the remaining events are applied in `(ts, id)` order, skipping banned authors. Every peer with the same events computes the same state. Events must be well formed (string fields, integer `ts`, known `t`) and bodies are treated as untrusted: a malformed field is ignored, and no single event can abort the reduction. Messages in `dm:`/`adm:` channels must be addressed (`to`) to the other party and written by one of them; approvals count only from the owner (no `ag`).
 
 ## Actions (Trystero)
 
@@ -91,18 +92,20 @@ The session key is a fresh random secp256k1 key per app session, never the membe
 
 The inner Yurt event keeps its own Ed25519 signature and passes the same validation as on Trystero, so relays can't forge or alter events.
 
-**Sync.** Clients subscribe live to `{kinds: [4344, 24344], "#y": [tag, inbox(me)], since: now − 2 h}` and then page backwards (`limit` 500) from now to `mark − 1 day`, where `mark` is when the last backfill finished (0 on first join). The day of margin covers backdating and senders with skewed clocks, since `created_at` is theirs. Backfill re-runs whenever relays come back. After it, any of my own recent events the relays don't have (the app closed before an ack) are re-sent. An event leaves "queued" when the first relay acks it; unacked events retry every 15 s.
+**Sync.** Clients subscribe live to `{kinds: [4344, 24344], "#y": [tag, inbox(me)], since: now − 2 h}` and then page each relay backwards on its own cursor (`limit` 500; a relay is done when a page brings nothing new, so relays with a lower cap are still read fully) from now to `mark − 1 day`. `mark` is when the last complete backfill finished; it's 0 on first join, so **a new member fetches the whole history**. The day of margin covers backdating and senders with skewed clocks, since `created_at` is theirs. Backfill re-runs whenever relays come back. After it, any of my own recent events the relays don't have (the app closed before an ack) are re-sent.
+
+**Delivery.** A public event leaves "queued" when the first relay acks it; a private one when both of its copies are acked. Unacked events retry every 15 s while offline. A relay that refuses an event (`OK false`, other than rate limiting) gets 3 tries, then the refusal is reported once and the event stays queued without further retries.
 
 **Calls (opt-in).** With the WebRTC opt-in, a member in a huddle sets `rtc: true` in presence; opted-in members who see it join the room, and everyone leaves after 60 s without it. The room signals over the workspace's own relays. Members without the opt-in never join, so they can't take part in calls.
 
 ### Files on Blossom
 
-Nostr workspaces keep attachments on [Blossom](https://github.com/hzrd149/blossom) servers (BUD-01/02), chosen in Settings → Network (default: `blossom.primal.net`, `nostr.download`, `files.sovbit.host`).
+Nostr workspaces keep attachments on [Blossom](https://github.com/hzrd149/blossom) servers (BUD-01/02), chosen per workspace in its Connection view, else in Settings → Network (default: `blossom.primal.net`, `nostr.download`, `files.sovbit.host`). Only `https://` servers are used (plain `http://` only in local development), so a member can't point others at internal addresses.
 
 - **Sealing.** Each file gets a fresh random 32-byte key: `cipher = sealBytes(fileKey, aad = "yurt-file-v1", bytes)`, padded like everything else. Its Blossom id is `sha256(cipher)`.
 - **Upload.** `PUT /upload` to every server, authorized by a kind `24242` event (`t=upload`, `x=<hash>`, 5-minute `expiration`) signed by a one-off key. It succeeds if any server accepts; otherwise the message isn't sent.
 - **Reference.** The message's `FileRef` carries `blob: {key, hash, servers}` next to `id = sha256(plaintext)`. It travels inside the encrypted event, so only people who can read the message can fetch and open the file; DM files stay within the pair.
-- **Download.** `GET /<hash>` from the listed servers in turn (with `t=get` auth for servers that want it). The ciphertext must hash to `hash`, decrypt under `key`, and the plaintext must hash to `id`, so a server can't substitute content.
+- **Download.** `GET /<hash>` from the listed servers in turn (with `t=get` auth for servers that want it), each with a 60 s timeout, abandoning bodies larger than a sealed 25 MB file. The ciphertext must hash to `hash`, decrypt under `key`, and the plaintext must hash to `id`, so a server can't substitute content. Malformed references from other members are ignored.
 
 ### Threat model
 
@@ -129,7 +132,7 @@ Nostr workspaces keep attachments on [Blossom](https://github.com/hzrd149/blosso
 1. `hello {token?}` → `hello {paired, admin}`. The bridge's own page gets an admin token embedded in its same-origin HTML.
 2. Unpaired browsers send `pair {code}` with the 6-digit code shown by the bridge (rotates on use, every 10 min, and after 5 misses) → `paired {token}`.
 3. The browser sends `identity {phrase, name, handle}`; the bridge stores it in `~/.yurt/identity.json` (0600) and joins workspaces as a headless peer with that key.
-4. `ws.join {code, name, transport?, creator, agents}` (a missing `transport` means a legacy Trystero workspace) / `ws.agents` / `ws.leave` choose which agents sit in which workspace. The bridge publishes `agent` events and presence `{bridge: true, agents: {id: {working}}}`.
+4. `ws.join {code, name, transport?, creator, agents}` (a missing `transport` means a legacy Trystero workspace; a later join with the same kind and key but different relays updates the bridge's relays) / `ws.agents` / `ws.leave` choose which agents sit in which workspace. The bridge publishes `agent` events and presence `{bridge: true, agents: {id: {working}}}`.
 
 ### ACP mapping
 

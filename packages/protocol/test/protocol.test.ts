@@ -48,6 +48,13 @@ describe('events', () => {
     expect(verifyEvent({ ...e, b: { text: 'bye' } })).toBe(false);
     expect(verifyEvent({ ...e, a: B.pub })).toBe(false);
   });
+
+  it('rejects structurally invalid events even when correctly signed', () => {
+    for (const ts of [NaN, Infinity, 1.5, '5' as unknown as number]) expect(verifyEvent(makeEvent(A, { ws: WS, t: 'msg', b: {}, ts }))).toBe(false);
+    expect(verifyEvent(makeEvent(A, { ws: WS, t: 'nope' as 'msg', b: {} }))).toBe(false);
+    expect(verifyEvent(makeEvent(A, { ws: WS, t: 'msg', b: {}, ch: 5 as unknown as string }))).toBe(false);
+    for (const x of [null, undefined, 'x', [], { id: 'a' }]) expect(verifyEvent(x)).toBe(false);
+  });
 });
 
 describe('codes', () => {
@@ -92,15 +99,19 @@ describe('reduce', () => {
     ]);
     expect([...s.admins].sort()).toEqual([A.pub, B.pub].sort());
   });
-  it('drops events from banned keys after the ban', () => {
+  it('drops every event from a banned key, backdated or not, until unbanned', () => {
     const evs = base();
     const before = ev(B, 'msg', { text: 'before' }, { ch: 'general' });
     const ban = ev(A, 'ban', { target: B.pub, on: true });
     const after = ev(B, 'msg', { text: 'after' }, { ch: 'general' });
-    const s = reduce(WS, [...evs, before, ban, after]);
+    const backdated = makeEvent(B, { ws: WS, t: 'msg', ch: 'general', b: { text: 'old' }, ts: before.ts - 1 });
+    const s = reduce(WS, [...evs, before, ban, after, backdated]);
     expect(s.bans.has(B.pub)).toBe(true);
-    expect(s.msgs.has(before.id)).toBe(true);
-    expect(s.msgs.has(after.id)).toBe(false);
+    expect([before, after, backdated].some((m) => s.msgs.has(m.id))).toBe(false);
+    expect(s.profiles.has(B.pub)).toBe(false);
+    const u = reduce(WS, [...evs, before, ban, after, ev(A, 'ban', { target: B.pub, on: false })]);
+    expect(u.bans.has(B.pub)).toBe(false);
+    expect(u.msgs.has(before.id) && u.msgs.has(after.id)).toBe(true);
   });
   it('pins the creator on first join (TOFU)', () => {
     const fake = makeEvent(C, { ws: WS, t: 'ws.create', b: { name: 'Evil' }, ts: 1 });
@@ -119,5 +130,12 @@ describe('sync', () => {
     const { want, give } = reconcile(mine, idsByDays(theirs, days), () => false);
     expect(new Set(want)).toEqual(new Set(all.slice(3).map((e) => e.id)));
     expect(give).toEqual([all[0].id]);
+  });
+  it('ignores hostile day keys and values from the other side', () => {
+    const mine = base();
+    const theirs = JSON.parse('{"__proto__":[1],"constructor":5,"x":["a"],"1":{"length":1}}') as Record<string, string[]>;
+    expect(reconcile(mine, theirs, () => false)).toEqual({ want: [], give: [] });
+    const sum = JSON.parse('{"__proto__":"1:1","toString":"x"}') as Record<string, string>;
+    expect(diffDays(summarize(mine), sum)).toEqual(Object.keys(summarize(mine)));
   });
 });

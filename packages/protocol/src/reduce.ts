@@ -1,12 +1,12 @@
-import type { Ev, MsgBody, AgentBody, ProfileBody, ChannelBody, RoleBody, BanBody, ReactBody, PinBody, EditBody, DelBody, ApproveBody, FileRef, TraceStep, ApprovalReq } from './types';
-import { EDIT_WINDOW_MS, sortEvents } from './events';
-import { isPrivateChannel } from './codes';
+import type { Ev, AgentBody, ProfileBody, FileRef, TraceStep, ApprovalReq } from './types';
+import { EDIT_WINDOW_MS, sortEvents, isEventShape } from './events';
+import { isPrivateChannel, dmChannel } from './codes';
 
 export interface Msg {
   id: string; ch: string; a: string; ag?: string; ts: number; to?: string;
   text: string; parent?: string; files: FileRef[]; trace?: TraceStep[]; meta?: string; approval?: ApprovalReq;
   edited: boolean; deleted: boolean;
-  reactions: Record<string, string[]>; // icon → reactor keys ("pub" or "pub/agentId")
+  reactions: Record<string, string[]>; // icon → reactor keys ("pub" or "pub/agentId"); null-prototype, so any icon is a safe key
   replies: string[];
 }
 export interface Channel { id: string; name: string; topic: string; ts: number; a: string }
@@ -35,105 +35,186 @@ export function emptyState(ws: string): WsState {
   return { ws, name: '', creator: null, admins: new Set(), bans: new Set(), channels: new Map(), profiles: new Map(), agents: new Map(), msgs: new Map(), channelMsgs: new Map(), pins: new Map(), approvals: new Map() };
 }
 
+// Bodies are attacker-controlled JSON, so every field is read through these: wrong types are ignored, never coerced.
+type Obj = Readonly<Record<string, unknown>>;
+const obj = (x: unknown): Obj | undefined => (x !== null && typeof x === 'object' && !Array.isArray(x) ? (x as Obj) : undefined);
+const str = (x: unknown): string | undefined => (typeof x === 'string' ? x : undefined);
+const optStr = (x: unknown): boolean => x === undefined || typeof x === 'string';
+const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
+const TRACE_STATUS = new Set(['done', 'error', 'running', 'waiting', 'skipped']);
+
+function blobRef(x: unknown): FileRef['blob'] | false {
+  if (x === undefined) return undefined;
+  const o = obj(x);
+  if (!o || typeof o.key !== 'string' || typeof o.hash !== 'string' || !Array.isArray(o.servers) || !o.servers.every((u) => typeof u === 'string')) return false;
+  return { key: o.key, hash: o.hash, servers: o.servers as string[] };
+}
+function fileRef(x: unknown): FileRef | undefined {
+  const o = obj(x);
+  const blob = o && blobRef(o.blob);
+  if (!o || blob === false || typeof o.id !== 'string' || typeof o.name !== 'string' || typeof o.type !== 'string' || !num(o.size)) return undefined;
+  return { id: o.id, name: o.name, size: o.size, type: o.type, ...(blob ? { blob } : {}) };
+}
+function traceStep(x: unknown): TraceStep | undefined {
+  const o = obj(x);
+  if (!o || typeof o.title !== 'string' || typeof o.status !== 'string' || !TRACE_STATUS.has(o.status) || !optStr(o.tool) || !optStr(o.detail) || !(o.ms === undefined || num(o.ms))) return undefined;
+  return { title: o.title, status: o.status as TraceStep['status'], tool: str(o.tool), ms: num(o.ms) ? o.ms : undefined, detail: str(o.detail) };
+}
+function approvalReq(x: unknown): ApprovalReq | undefined {
+  const o = obj(x);
+  if (!o || typeof o.req !== 'string' || typeof o.title !== 'string' || !optStr(o.kind) || !Array.isArray(o.options)) return undefined;
+  const options = o.options.flatMap((x) => {
+    const p = obj(x);
+    return p && typeof p.id === 'string' && typeof p.name === 'string' && typeof p.kind === 'string' ? [{ id: p.id, name: p.name, kind: p.kind }] : [];
+  });
+  return { req: o.req, title: o.title, kind: str(o.kind), options };
+}
+const list = <T>(x: unknown, f: (y: unknown) => T | undefined): T[] => (Array.isArray(x) ? x.map(f).filter((y): y is T => y !== undefined) : []);
+
 /**
- * Materialize workspace state from its event log. Deterministic: every peer holding the
- * same events computes the same state. `creator` pins the creator key seen on first join (TOFU).
+ * Private channels carry their parties in the id, so a message only belongs there when its author is
+ * one of them and it's addressed to the other; otherwise a public message could pose as a DM.
+ * dm:<x>:<y> (sorted): author is x or y, `to` is the other (a self-DM addresses itself).
+ * adm:<owner>:<agentId>: author is the owner, speaking as itself or as that agent, and `to` is the owner.
+ */
+function privateOk(e: Ev, ch: string): boolean {
+  if (ch.startsWith('dm:')) {
+    const [x, y, ...rest] = ch.slice(3).split(':');
+    if (rest.length || !x || !y || dmChannel(x, y) !== ch) return false;
+    return (e.a === x && e.to === y) || (e.a === y && e.to === x);
+  }
+  const i = ch.indexOf(':', 4);
+  const owner = ch.slice(4, i);
+  return i > 4 && e.a === owner && e.to === owner && (!e.ag || e.ag === ch.slice(i + 1));
+}
+
+/**
+ * Materialize workspace state from its event log. Deterministic: every peer holding the same
+ * events computes the same state. `creator` pins the creator key (from the invite link, else the
+ * one seen on first join: TOFU). Without a pin, the earliest ws.create wins.
  */
 export function reduce(ws: string, events: Ev[], opts: { creator?: string | null } = {}): WsState {
   const s = emptyState(ws);
-  const evs = sortEvents(events.slice());
+  const evs = sortEvents(events.filter((e) => isEventShape(e) && e.ws === ws));
   s.creator = opts.creator ?? evs.find((e) => e.t === 'ws.create')?.a ?? null;
   if (s.creator) s.admins.add(s.creator);
-  for (const e of evs) apply(s, e);
+  // Roles and bans first, so a ban removes everything its target ever wrote: authors pick their own
+  // timestamps, so "events after the ban" would let a banned key backdate its way back in.
+  for (const e of evs) if (e.t === 'role' || e.t === 'ban') guarded(() => authority(s, e));
+  const approves: Ev[] = [];
+  for (const e of evs) {
+    if (s.bans.has(e.a) || e.t === 'role' || e.t === 'ban') continue;
+    // Approvals are checked against the request message, which may sort after the answer when clocks disagree.
+    if (e.t === 'approve') approves.push(e);
+    else guarded(() => apply(s, e));
+  }
+  const reqOwners = new Map<string, Set<string>>();
+  for (const m of s.msgs.values()) if (m.approval) reqOwners.set(m.approval.req, (reqOwners.get(m.approval.req) ?? new Set()).add(m.a));
+  for (const e of approves) {
+    const b = obj(e.b);
+    const req = str(b?.req), option = str(b?.option);
+    // Only the human owner of the agent that asked may answer; never the agent itself.
+    if (req && option !== undefined && !e.ag && reqOwners.get(req)?.has(e.a)) s.approvals.set(req, option);
+  }
   return s;
 }
 
+// Every member reduces the same log, so an event that throws would break the workspace for all of
+// them, permanently. The validation above should make this unreachable; this is the backstop.
+function guarded(f: () => void) {
+  try { f(); } catch { /* a hostile event is dropped, like any other invalid one */ }
+}
+
+/** Only the creator promotes or demotes, and bans admins. Admins ban non-admins, never the creator or themselves. */
+function authority(s: WsState, e: Ev) {
+  const b = obj(e.b);
+  const target = str(b?.target);
+  if (!b || !target || target === s.creator || target === e.a) return;
+  if (e.t === 'role') {
+    if (e.a !== s.creator || typeof b.admin !== 'boolean') return;
+    if (b.admin) s.admins.add(target); else s.admins.delete(target);
+    return;
+  }
+  if (!s.admins.has(e.a) || typeof b.on !== 'boolean') return;
+  if (s.admins.has(target) && e.a !== s.creator) return;
+  if (b.on) { s.bans.add(target); s.admins.delete(target); } else s.bans.delete(target);
+}
+
 function apply(s: WsState, e: Ev) {
-  if (e.ws !== s.ws) return;
-  if (s.bans.has(e.a)) return;
+  const b = obj(e.b);
+  if (!b) return;
   switch (e.t) {
     case 'ws.create':
-      if (e.a === s.creator && !s.name) s.name = String(e.b?.name || 'Workspace');
+      if (e.a === s.creator && !s.name) s.name = (str(b.name) || 'Workspace').slice(0, 64);
       break;
     case 'profile': {
-      const b = e.b as ProfileBody;
-      if (!e.ag && b?.name) s.profiles.set(e.a, { name: String(b.name).slice(0, 64), handle: String(b.handle || '').slice(0, 32), ts: e.ts });
+      const name = str(b.name);
+      if (!e.ag && name && optStr(b.handle)) s.profiles.set(e.a, { name: name.slice(0, 64), handle: (str(b.handle) ?? '').slice(0, 32), ts: e.ts });
       break;
     }
     case 'ch.create': {
-      const b = e.b as ChannelBody;
-      if (b?.id && !s.channels.has(b.id)) s.channels.set(b.id, { id: b.id, name: String(b.name).slice(0, 60), topic: String(b.topic || ''), ts: e.ts, a: e.a });
+      const id = str(b.id), name = str(b.name);
+      if (id && name && optStr(b.topic) && !isPrivateChannel(id) && !s.channels.has(id)) s.channels.set(id, { id, name: name.slice(0, 60), topic: str(b.topic) ?? '', ts: e.ts, a: e.a });
       break;
     }
     case 'ch.update': {
-      const b = e.b as ChannelBody;
-      const c = b && s.channels.get(b.id);
-      if (c) { if (b.name) c.name = String(b.name).slice(0, 60); if (b.topic != null) c.topic = String(b.topic); }
+      const c = s.channels.get(str(b.id) ?? '');
+      const name = str(b.name), topic = str(b.topic);
+      if (c) { if (name) c.name = name.slice(0, 60); if (topic !== undefined) c.topic = topic; }
       break;
     }
     case 'msg': {
-      const b = e.b as MsgBody;
-      if (!e.ch || !b) return;
-      if (!isPrivateChannel(e.ch) && !s.channels.has(e.ch)) return;
-      if (s.msgs.has(e.id)) return;
-      const parent = b.parent ? s.msgs.get(b.parent) : undefined;
-      if (b.parent && (!parent || parent.ch !== e.ch)) return;
-      const m: Msg = { id: e.id, ch: e.ch, a: e.a, ag: e.ag, ts: e.ts, to: e.to, text: String(b.text || ''), parent: parent?.id, files: Array.isArray(b.files) ? b.files : [], trace: b.trace, meta: b.meta, approval: b.approval, edited: false, deleted: false, reactions: {}, replies: [] };
+      const ch = e.ch;
+      if (!ch || s.msgs.has(e.id) || !optStr(b.text) || !optStr(b.parent) || !optStr(b.meta)) return;
+      if (isPrivateChannel(ch) ? !privateOk(e, ch) : !s.channels.has(ch)) return;
+      const parentId = str(b.parent);
+      const parent = parentId !== undefined ? s.msgs.get(parentId) : undefined;
+      if (parentId !== undefined && (!parent || parent.ch !== ch)) return;
+      const trace = b.trace === undefined ? undefined : list(b.trace, traceStep);
+      // Approval prompts come only from agents to their owner, in the owner's private agent channel.
+      const approval = ch.startsWith('adm:') ? approvalReq(b.approval) : undefined;
+      const m: Msg = {
+        id: e.id, ch, a: e.a, ag: e.ag, ts: e.ts, to: e.to, text: str(b.text) ?? '', parent: parent?.id, files: list(b.files, fileRef),
+        trace, meta: str(b.meta), approval, edited: false, deleted: false, reactions: Object.create(null) as Record<string, string[]>, replies: [],
+      };
       s.msgs.set(e.id, m);
       if (parent) parent.replies.push(e.id);
-      else { const l = s.channelMsgs.get(e.ch) || []; l.push(e.id); s.channelMsgs.set(e.ch, l); }
+      else s.channelMsgs.set(ch, [...(s.channelMsgs.get(ch) ?? []), e.id]);
       break;
     }
     case 'edit': case 'del': {
-      const b = e.b as EditBody | DelBody;
-      const m = b && s.msgs.get(b.target);
+      const m = s.msgs.get(str(b.target) ?? '');
       if (!m || m.deleted || m.a !== e.a || (m.ag || '') !== (e.ag || '')) return;
+      // Advisory only: authors choose their own ts, so a late edit can simply claim an early time.
+      // Honest clients enforce the window in the UI; this just keeps them consistent with each other.
       if (e.ts - m.ts > EDIT_WINDOW_MS || e.ts < m.ts) return;
-      if (e.t === 'edit') { m.text = String((b as EditBody).text || ''); m.edited = true; }
+      if (e.t === 'edit') { const text = str(b.text); if (text === undefined) return; m.text = text; m.edited = true; }
       else { m.deleted = true; m.text = ''; m.files = []; }
       break;
     }
     case 'react': {
-      const b = e.b as ReactBody;
-      const m = b && s.msgs.get(b.target);
-      if (!m || m.deleted || !b.icon) return;
+      const m = s.msgs.get(str(b.target) ?? '');
+      const icon = str(b.icon);
+      if (!m || m.deleted || !icon || icon.length > 64 || typeof b.on !== 'boolean') return;
       const who = reactorKey(e);
-      const set = new Set(m.reactions[b.icon] || []);
-      b.on ? set.add(who) : set.delete(who);
-      if (set.size) m.reactions[b.icon] = [...set]; else delete m.reactions[b.icon];
+      const set = new Set(Object.hasOwn(m.reactions, icon) ? m.reactions[icon] : []);
+      if (b.on) set.add(who); else set.delete(who);
+      if (set.size) m.reactions[icon] = [...set]; else delete m.reactions[icon];
       break;
     }
     case 'pin': {
-      const b = e.b as PinBody;
-      const m = b && s.msgs.get(b.target);
-      if (!m) return;
+      const m = s.msgs.get(str(b.target) ?? '');
+      if (!m || typeof b.on !== 'boolean') return;
       const set = s.pins.get(m.ch) || new Set<string>();
-      b.on ? set.add(m.id) : set.delete(m.id);
+      if (b.on) set.add(m.id); else set.delete(m.id);
       s.pins.set(m.ch, set);
       break;
     }
-    case 'role': {
-      const b = e.b as RoleBody;
-      if (!b?.target) return;
-      if (b.admin && e.a === s.creator) s.admins.add(b.target);
-      else if (!b.admin && s.admins.has(e.a) && b.target !== s.creator) s.admins.delete(b.target);
-      break;
-    }
-    case 'ban': {
-      const b = e.b as BanBody;
-      if (!b?.target || !s.admins.has(e.a) || b.target === s.creator || b.target === e.a) return;
-      if (b.on) { s.bans.add(b.target); s.admins.delete(b.target); } else s.bans.delete(b.target);
-      break;
-    }
     case 'agent': {
-      const b = e.b as AgentBody;
-      if (!b?.id || !b.handle) return;
-      s.agents.set(agentKey(e.a, b.id), { ...b, owner: e.a, ts: e.ts });
-      break;
-    }
-    case 'approve': {
-      const b = e.b as ApproveBody;
-      if (b?.req) s.approvals.set(b.req, b.option);
+      const { id, name, handle, runtime } = b;
+      if (typeof id !== 'string' || !id || typeof handle !== 'string' || !handle || typeof name !== 'string' || typeof runtime !== 'string') return;
+      if (!optStr(b.model) || (b.replyIn !== 'thread' && b.replyIn !== 'channel') || !(b.removed === undefined || typeof b.removed === 'boolean')) return;
+      s.agents.set(agentKey(e.a, id), { id, name, handle, runtime, model: str(b.model), replyIn: b.replyIn, removed: b.removed === true || undefined, owner: e.a, ts: e.ts });
       break;
     }
   }

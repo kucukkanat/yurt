@@ -9,5 +9,4 @@ export * from './bridge';
 export * from './seal';
 export * from './invite';
 export * from './transport';
-export * from './transports/nostr';
 export * from './blossom';

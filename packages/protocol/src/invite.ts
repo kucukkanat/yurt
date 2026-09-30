@@ -15,7 +15,13 @@ export type WsTransport =
 
 export type KeyedTransport = WsTransport & { readonly key: string };
 
-export interface Invite { readonly code: string; readonly transport: KeyedTransport }
+/**
+ * `creator` pins the workspace creator's Ed25519 public key (64 lowercase hex) so a joiner can't be
+ * fooled by a forged or backdated ws.create. Links from before it existed omit it (TOFU on first join).
+ */
+export interface Invite { readonly code: string; readonly transport: KeyedTransport; readonly creator?: string }
+
+const isPubKey = (s: string) => /^[0-9a-f]{64}$/.test(s);
 
 /** Workspaces created before invites carried keys. Kept working for existing members; can't be joined anew. */
 export const LEGACY_TRYSTERO: WsTransport = { kind: 'trystero' };
@@ -37,11 +43,14 @@ export function newNostrTransport(relays: readonly string[] = DEFAULT_RELAYS): K
 
 const sameRelays = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((u, i) => u === b[i]);
 
-/** "#/w/CODE/k/KEY" for Trystero; "#/w/CODE/k/KEY/n/<relays or ->" for Nostr ("-" = default relays). */
-export function inviteHash({ code, transport: t }: Invite): string {
+/**
+ * "#/w/CODE/k/KEY" for Trystero; "#/w/CODE/k/KEY/n/<relays or ->" for Nostr ("-" = default relays);
+ * either followed by "/o/<creator pubkey>" when the creator is known.
+ */
+export function inviteHash({ code, transport: t, creator }: Invite): string {
   const base = '#/w/' + code + '/k/' + t.key;
-  if (t.kind === 'trystero') return base;
-  return base + '/n/' + (sameRelays(t.relays, DEFAULT_RELAYS) ? '-' : encodeURIComponent(t.relays.join(',')));
+  const net = t.kind === 'trystero' ? '' : '/n/' + (sameRelays(t.relays, DEFAULT_RELAYS) ? '-' : encodeURIComponent(t.relays.join(',')));
+  return base + net + (creator ? '/o/' + creator : '');
 }
 
 /** Parses an invite link or its hash. Null for anything without a valid key: bare codes can't be joined safely. */
@@ -49,11 +58,12 @@ export function parseInvite(input: string): Invite | null {
   const code = normalizeCode(input);
   if (!code) return null;
   const seg = input.trim().replace(/^.*?#\/?/, '').split('/');
-  const at = (k: string) => { const i = seg.indexOf(k); return i >= 0 ? decodeURIComponent(seg[i + 1] ?? '') : undefined; };
-  const key = at('k');
-  if (key === undefined || !isWorkspaceKey(key)) return null;
-  const n = at('n');
-  if (n === undefined) return { code, transport: { kind: 'trystero', key } };
+  // Links are pasted by users, so a malformed percent-escape is just an invalid link: null, not a URIError.
+  const at = (k: string) => { const i = seg.indexOf(k); if (i < 0) return undefined; try { return decodeURIComponent(seg[i + 1] ?? ''); } catch { return null; } };
+  const key = at('k'), n = at('n'), o = at('o');
+  if (typeof key !== 'string' || !isWorkspaceKey(key) || n === null) return null;
+  const creator = o && isPubKey(o) ? { creator: o } : {};
+  if (n === undefined) return { code, transport: { kind: 'trystero', key }, ...creator };
   const relays = parseRelays(n);
-  return { code, transport: { kind: 'nostr', key, relays: relays.length ? relays : DEFAULT_RELAYS } };
+  return { code, transport: { kind: 'nostr', key, relays: relays.length ? relays : DEFAULT_RELAYS }, ...creator };
 }

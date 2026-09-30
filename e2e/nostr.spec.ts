@@ -78,7 +78,7 @@ test('the WebRTC switch enables calls in relay workspaces', async ({ browser }) 
   await page.getByRole('button', { name: 'Settings' }).first().click();
   await page.getByRole('tab', { name: 'Network' }).click();
   await page.getByTestId('webrtc-switch').click();
-  await page.getByRole('button', { name: 'Save network settings' }).click();
+  await page.getByTestId('network-save').click();
   await page.getByRole('dialog').press('Escape');
   await expect(page.getByTestId('huddle-button')).toBeEnabled();
 });
@@ -89,4 +89,110 @@ test('bare codes and keyless links are refused', async ({ browser }) => {
   await onboard(page, 'Cy', 'Join workspace');
   await expect(page.getByText('This link can’t be joined')).toBeVisible();
   await expect(page).not.toHaveURL(/K7QX2MPD/);
+});
+
+async function relayWorkspace(page: Page, who: string) {
+  await useLocalRelay(page);
+  await onboard(page, who, 'Start chatting');
+  await page.getByLabel('Workspace name').fill('Relay ' + Date.now());
+  await page.getByText('Encrypted on Nostr relays').click();
+  await page.getByRole('button', { name: 'Create workspace' }).click();
+  await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
+}
+
+async function openConnection(page: Page) {
+  await page.locator('[aria-haspopup="menu"]').click();
+  await page.getByTestId('menu-connection').click();
+}
+
+test('Network settings: Nostr and WebRTC sections, URL checks, and saving leaves other tabs alone', async ({ browser }) => {
+  const page = await (await browser.newContext()).newPage();
+  await useLocalRelay(page);
+  await onboard(page, 'Ed', 'Start chatting');
+  await page.getByRole('button', { name: 'Settings' }).first().click();
+  // The Network form is seeded when the dialog opens; a theme change after that must survive its save.
+  await page.getByRole('tab', { name: 'Preferences' }).click();
+  await page.getByText('Light', { exact: true }).click();
+  await page.getByRole('tab', { name: 'Network' }).click();
+
+  const nostr = page.getByTestId('network-nostr');
+  await expect(nostr.getByRole('heading')).toHaveText('Nostr (relay workspaces)');
+  await expect(nostr.getByTestId('settings-relays')).toHaveValue(RELAY);
+  await expect(nostr.getByTestId('blossom-servers')).toHaveValue(BLOSSOM);
+  await expect(nostr.getByTestId('webrtc-switch')).toBeVisible();
+  const webrtc = page.getByTestId('network-webrtc');
+  await expect(webrtc.getByRole('heading')).toHaveText('WebRTC (peer-to-peer workspaces and calls)');
+  await expect(webrtc.getByTestId('turn-off')).toBeChecked();
+
+  await nostr.getByTestId('settings-relays').fill('https://not-a-relay.example');
+  await page.getByTestId('network-save').click();
+  await expect(page.getByText('Not a ws:// or wss:// relay: https://not-a-relay.example')).toBeVisible();
+  await nostr.getByTestId('settings-relays').fill(RELAY);
+  await page.getByTestId('network-save').click();
+  await expect(page.getByText('Network settings saved')).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
+test('Connection view shows live relay status and edits relays; the invite link follows', async ({ browser }) => {
+  const page = await (await browser.newContext()).newPage();
+  await relayWorkspace(page, 'Fa');
+  await openConnection(page);
+  await expect(page.getByTestId('connection-kind')).toHaveText('Encrypted on Nostr relays');
+  await expect(page.getByTestId('connection-note')).toContainText('at least one relay in common');
+  await expect(page.locator(`[data-testid=relay-status][data-relay="${RELAY}"]`)).toHaveAttribute('data-connected', 'true');
+
+  const dead = 'ws://127.0.0.1:7779'; // nothing listens here
+  await page.getByTestId('connection-relays').fill('nope');
+  await page.getByTestId('connection-save').click();
+  await expect(page.getByText('Not a ws:// or wss:// relay: nope')).toBeVisible();
+  await page.getByTestId('connection-relays').fill(`${RELAY}, ${dead}`);
+  await page.getByTestId('connection-save').click();
+  await expect(page.getByText('Connection updated')).toBeVisible();
+  await expect(page.locator(`[data-testid=relay-status][data-relay="${RELAY}"]`)).toHaveAttribute('data-connected', 'true');
+  await expect(page.locator(`[data-testid=relay-status][data-relay="${dead}"]`)).toHaveAttribute('data-connected', 'false');
+  await expect(page.locator(`[data-testid=relay-status][data-relay="${dead}"]`)).toContainText('Disconnected');
+  await page.getByTestId('connection-relays').press('Escape');
+
+  await page.getByRole('button', { name: 'Invite people' }).first().click();
+  expect(decodeURIComponent(await page.getByTestId('invite-link').inputValue())).toContain(dead);
+  await page.getByTestId('invite-link').press('Escape');
+  // Still connected after the reconnect: a message goes out through the live relay.
+  const composer = page.getByRole('textbox', { name: 'Message #general' });
+  await composer.fill('after the relay change');
+  await composer.press('Enter');
+  await expect(page.getByText('after the relay change')).toBeVisible();
+});
+
+test('a composer draft stays in its channel', async ({ browser }) => {
+  const page = await (await browser.newContext()).newPage();
+  await relayWorkspace(page, 'Gu');
+  await page.getByRole('textbox', { name: 'Message #general' }).fill('draft meant for general');
+  await page.getByRole('button', { name: 'New channel' }).first().click();
+  await page.getByLabel('Name', { exact: true }).fill('random');
+  await page.getByRole('button', { name: 'Create channel' }).click();
+  const other = page.getByRole('textbox', { name: 'Message #random' });
+  await expect(other).toHaveValue('');
+  await other.press('Enter');
+  await expect(page.getByText('draft meant for general')).toHaveCount(0);
+});
+
+test('a failed upload keeps the text and the attachment in the composer', async ({ browser }) => {
+  const page = await (await browser.newContext()).newPage();
+  await relayWorkspace(page, 'Ha');
+  await openConnection(page);
+  await page.getByTestId('connection-blossom').fill('http://127.0.0.1:9'); // refuses connections
+  await page.getByTestId('connection-save').click();
+  await expect(page.getByText('Connection updated')).toBeVisible();
+  await page.getByTestId('connection-blossom').press('Escape');
+
+  const composer = page.getByRole('textbox', { name: 'Message #general' });
+  await page.locator('input[type=file]').setInputFiles({ name: 'lost.txt', mimeType: 'text/plain', buffer: Buffer.from('never uploaded') });
+  await composer.fill('keep me');
+  await composer.press('Enter');
+  await expect(page.getByText('Couldn’t upload lost.txt')).toBeVisible();
+  await expect(composer).toHaveValue('keep me');
+  await expect(page.getByTestId('composer').getByText('lost.txt')).toBeVisible();
+  await expect(page.locator('[data-mid]')).toHaveCount(0); // nothing was posted
 });

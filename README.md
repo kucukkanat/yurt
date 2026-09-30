@@ -25,15 +25,15 @@ When you create a workspace you choose how its messages travel. The choice is fi
 | Files | WebRTC, from members who are online | Encrypted on [Blossom](https://github.com/hzrd149/blossom) file servers |
 | Voice and video | WebRTC | WebRTC, only if you turn it on in **Settings → Network** |
 
-Invites are links only: the 8-character code is just an id, and a 256-bit key in the link's `#` fragment is what lets people in. Relays can't read Nostr workspaces: every event is sealed with that key, private messages get a second, pairwise key, and sizes and timestamps are blurred. Details and the threat model are in [docs/PROTOCOL.md](docs/PROTOCOL.md#nostr-transport). Set your own relays in **Settings → Network**.
+Invites are links only: the 8-character code is just an id, and a 256-bit key in the link's `#` fragment is what lets people in. Relays can't read Nostr workspaces: every event is sealed with that key, private messages get a second, pairwise key, and sizes and timestamps are blurred. Details and the threat model are in [docs/PROTOCOL.md](docs/PROTOCOL.md#nostr-transport). Defaults for new workspaces live in **Settings → Network**; each relay workspace's own relays and file servers can be viewed (with live relay status) and edited from the workspace menu → **Connection**. Members need at least one relay in common; the invite link carries the current list.
 
 ## Run it
 
 ```sh
-npm install
-npm run dev          # http://localhost:5173
-npm test             # protocol unit + integration tests (Vitest; local relay and real WebRTC, no network)
-npm run e2e          # Playwright: P2P chat over public relays, encrypted relay history over a local relay
+bun install
+bun run dev          # http://localhost:5173
+bun run test         # protocol + bridge unit/integration tests (Vitest; local relay, Blossom server and real WebRTC, no network)
+bun run e2e          # Playwright: P2P chat over public relays, relay workspaces over a local relay and Blossom server
 ```
 
 Open two browser profiles (or one normal + one private window), create a workspace in one and paste its invite link into the other.
@@ -60,7 +60,7 @@ That's the only terminal step. The bridge opens `http://127.0.0.1:7717`, where y
 - One ACP session per agent, kept alive across prompts.
 - Config lives in `~/.yurt/` (JSON, written by the bridge UI; you never edit it).
 
-Until `yurt-bridge` is published to npm, run it from the repo: `npm run bridge`. Publish with `npm publish -w packages/bridge` (the `prepublishOnly` script builds the UI and CLI).
+Until `yurt-bridge` is published to npm, run it from the repo: `bun run bridge`. Publish with `npm publish -w packages/bridge` (the `prepublishOnly` script builds the UI and CLI).
 
 ### Runtime commands
 
@@ -76,12 +76,12 @@ The bridge launches each CLI's ACP mode. Adapters move fast, so check these agai
 
 ## Things to know
 
-- **Room size.** Every member connects to every other member. Designed for 2–10 people.
-- **History** lives in IndexedDB and syncs from whoever is online when you join. If nobody is online, you wait.
-- **Invite code = password.** The code derives the Trystero room id and encrypts signaling. Anyone with it can join and read history. Bans are signed by admins and enforced by every peer (banned keys fail the handshake and their new events are dropped).
-- **DMs** are only ever sent to, stored by and synced between the two participants (and your own bridge, which shares your key).
-- **Files** (≤25 MB) are content-addressed (SHA-256) and fetched from any peer that has them.
+- **Room size.** In peer-to-peer workspaces every member connects to every other member. Designed for 2–10 people.
+- **History** lives in IndexedDB. Peer-to-peer workspaces sync it from whoever is online (if nobody is, you wait); relay workspaces fetch the whole encrypted history from relays, even when nobody else is online.
+- **The invite link is the key.** Anyone holding it can join and read the full history, including messages from before they joined. Bans are signed by admins and enforced by every peer: all of a banned key's events are hidden and it's disconnected, but a banned member keeps the key (no rotation yet).
+- **DMs** are sealed with a key only the two participants can derive (and your own bridge, which shares your key); other members, including later joiners, can't read them.
+- **Files** (≤25 MB) are content-addressed (SHA-256): fetched from online peers in peer-to-peer workspaces, or from Blossom servers (sealed with a per-file key) in relay workspaces.
 - **Huddles** are audio-first per channel, with video for up to 4 people and screen share.
-- **TURN.** Defaults to the free Open Relay (rate-limited). Set your own under Settings → Network.
+- **TURN.** Off by default (a TURN operator sees who connects to whom). Opt into the free Open Relay or your own server under Settings → Network → WebRTC.
 - **Browsers and the bridge.** Chrome may ask to allow access to devices on your local network the first time Yurt connects to `127.0.0.1:7717`. Safari may block `ws://127.0.0.1` from an https page; use Chrome, Edge, Firefox or Brave for agents.
 - **Identity** is a 12-word recovery phrase. Enter it on another device to be the same person.

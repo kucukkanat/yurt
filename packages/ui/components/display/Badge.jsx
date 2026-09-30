@@ -1,7 +1,7 @@
 import React from 'react';
 import { Icon } from '../core/Icon.jsx';
 
-export const TONES = {
+const TONES = {
   neutral: { soft: 'var(--surface-sunken)', ink: 'var(--text-muted)', solid: 'var(--ink-800)', on: '#fff', dot: 'var(--ink-400)' },
   accent: { soft: 'var(--accent-soft)', ink: 'var(--accent-soft-ink)', solid: 'var(--accent)', on: '#fff', dot: 'var(--accent)' },
   agent: { soft: 'var(--agent-soft)', ink: 'var(--agent-ink)', solid: 'var(--volt-400)', on: 'var(--ink-950)', dot: 'var(--volt-500)' },

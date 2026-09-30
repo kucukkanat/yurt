@@ -4,5 +4,4 @@ dist
 *.log
 test-results
 playwright-report
-packages/bridge/ui-dist
 coverage

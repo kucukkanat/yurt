@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { log } from './log';
+import { VERSION } from './version';
 
 /** Minimal Agent Client Protocol client: JSON-RPC 2.0, newline-delimited, over the agent's stdio. */
 export interface AcpUpdate {
@@ -30,6 +31,8 @@ export class AcpConnection {
     this.proc = spawn(cmd, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32', env: { ...process.env } });
     this.proc.stdout!.setEncoding('utf8');
     this.proc.stdout!.on('data', (d: string) => this.onData(d));
+    // Writing to an agent that just died raises EPIPE on stdin; unhandled, that would crash the bridge.
+    this.proc.stdin!.on('error', (e) => log('warn', label, 'stdin: ' + e.message));
     this.proc.stderr!.setEncoding('utf8');
     this.proc.stderr!.on('data', (d: string) => log('acp', label, 'stderr: ' + d.trim()));
     this.proc.on('error', (e) => { log('error', label, 'spawn failed: ' + e.message); this.fail(e); });
@@ -45,6 +48,7 @@ export class AcpConnection {
   }
 
   private write(msg: object) {
+    if (this.closed) return;
     const s = JSON.stringify({ jsonrpc: '2.0', ...msg });
     log('acp', this.label, '→ ' + s);
     this.proc.stdin!.write(s + '\n');
@@ -98,11 +102,12 @@ export class AcpConnection {
     return this.request<{ protocolVersion: number; agentCapabilities?: any; authMethods?: { id: string; name: string; description?: string }[] }>('initialize', {
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: 'yurt-bridge', version: '0.1.0' },
+      clientInfo: { name: 'yurt-bridge', version: VERSION },
     }, 60_000);
   }
 
-  close() { this.closed = true; try { this.proc.kill(); } catch { /* gone */ } }
+  /** Stops the agent and rejects in-flight requests: the exit event arrives after `closed` is set, so it can't. */
+  close() { this.fail(new Error('Agent was stopped')); try { this.proc.kill(); } catch { /* gone */ } }
 }
 
 export const isAuthError = (e: unknown) => {

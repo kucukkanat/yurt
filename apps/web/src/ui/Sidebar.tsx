@@ -2,13 +2,13 @@ import React, { useMemo, useState } from 'react';
 import { Icon, IconButton, Tooltip, Kbd, Badge, Avatar, DaemonStatus, Dialog, Button } from '@yurt/ui';
 import { liveAgents, fingerprint, formatCode, agentDmChannel } from '@yurt/protocol';
 import { useApp } from '../store';
-import { useCurrent, unread, personFor, channelTitle } from '../model';
+import { useCurrent, unread, personFor, channelTitle, othersOnline } from '../model';
 import { HuddleDock } from './Huddle';
 
-function Row({ active, onClick, children, label, dim }: { active?: boolean; onClick: () => void; children: React.ReactNode; label?: string; dim?: boolean }) {
+function Row({ active, onClick, children, label, dim, testId }: { active?: boolean; onClick: () => void; children: React.ReactNode; label?: string; dim?: boolean; testId?: string }) {
   const [h, setH] = useState(false);
   return (
-    <button type="button" onClick={onClick} aria-current={active ? 'page' : undefined} aria-label={label}
+    <button type="button" onClick={onClick} aria-current={active ? 'page' : undefined} aria-label={label} data-testid={testId}
       onPointerEnter={() => setH(true)} onPointerLeave={() => setH(false)}
       style={{ display: 'flex', alignItems: 'center', gap: 9, minHeight: 32, padding: '0 10px', border: 0, borderRadius: 8, width: '100%', cursor: 'pointer', font: 'inherit', fontSize: 14, textAlign: 'left', flexShrink: 0,
         background: active ? 'var(--surface-press)' : h ? 'var(--surface-hover)' : 'transparent', color: active ? 'var(--text-strong)' : 'var(--text-muted)', opacity: dim && !active ? 0.6 : 1, transition: 'background var(--dur-instant)' }}>
@@ -84,6 +84,8 @@ export function Sidebar() {
   const openCh = (ch: string) => go({ code, ch });
   const daemon = bridgeStatus === 'connected' ? 'connected' : bridgeStatus === 'connecting' ? 'connecting' : 'missing';
   const nAgents = bridgeState?.agents.length;
+  const relayed = rec?.transport.kind === 'nostr';
+  const others = othersOnline(peer, me);
 
   const chRow = (ch: string, label: React.ReactNode, icon: React.ReactNode, key?: string) => {
     const active = route.ch === ch;
@@ -110,9 +112,10 @@ export function Sidebar() {
         </button>
         {menu && (
           <div role="menu" onMouseLeave={() => setMenu(false)} style={{ position: 'absolute', top: 44, left: 0, right: 0, zIndex: 30, padding: 6, borderRadius: 14, background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)', animation: 'ag-rise var(--dur-fast) var(--ease-out)' }}>
-            <div style={{ padding: '6px 10px 8px', font: '400 11.5px/1.4 var(--font-mono)', color: 'var(--text-subtle)' }}>{peer?.presence.size || 0} online</div>
+            <div data-testid="ws-online" style={{ padding: '6px 10px 8px', font: '400 11.5px/1.4 var(--font-mono)', color: 'var(--text-subtle)' }}>{others ? others + (others === 1 ? ' other member' : ' other members') + ' online' : 'No other members online'}</div>
             <Row onClick={() => { setMenu(false); setDialog('invite'); }}><Icon name="user-plus" size={16} /><span>Invite people</span></Row>
             <Row onClick={() => { setMenu(false); setDialog('channel'); }}><Icon name="hash" size={16} /><span>New channel</span></Row>
+            <Row testId="menu-connection" onClick={() => { setMenu(false); setDialog('connection'); }}><Icon name="globe" size={16} /><span>Connection</span></Row>
             <Row onClick={() => { setMenu(false); setLeaving(true); }}><Icon name="log-out" size={16} /><span style={{ color: 'var(--danger-ink)' }}>Leave workspace</span></Row>
           </div>
         )}
@@ -122,7 +125,7 @@ export function Sidebar() {
       </button>
       <nav aria-label="Channels and messages" style={{ display: 'flex', flexDirection: 'column', gap: 16, minHeight: 0, overflow: 'auto', flex: 1 }}>
         <Section title="Channels" onAdd={() => setDialog('channel')} addLabel="New channel">
-          {!state?.channels.size && <div style={{ padding: '4px 10px', fontSize: 13, color: 'var(--text-subtle)' }}>Syncs when a member is online</div>}
+          {!state?.channels.size && <div style={{ padding: '4px 10px', fontSize: 13, color: 'var(--text-subtle)' }}>{relayed ? 'Syncing from relays…' : 'Syncs when a member is online'}</div>}
           {channels.map((c) => chRow(c.id, c.name, <Icon name="hash" size={16} style={{ color: 'var(--text-subtle)' }} />))}
         </Section>
         <Section title="Direct messages" onAdd={() => setDialog('jump')} addLabel="New direct message">
@@ -152,7 +155,7 @@ export function Sidebar() {
         <Tooltip content="Settings" kbd="mod+," placement="top"><IconButton icon="settings" label="Settings" size="sm" onClick={() => setDialog('settings')} /></Tooltip>
       </div>
       <Dialog open={leaving} onClose={() => setLeaving(false)} title={'Leave ' + wsName + '?'} width={440}
-        description="This device forgets the workspace and its history. Rejoin any time with the code; history syncs back from members who are online."
+        description={'This device forgets the workspace and its history. To come back you need an invite link; ' + (relayed ? 'history then comes back from the relays.' : 'history then syncs back from members who are online.')}
         footer={<><Button variant="ghost" onClick={() => setLeaving(false)}>Stay</Button><Button variant="danger" iconLeft="log-out" onClick={() => { setLeaving(false); leaveWorkspace(code); }}>Leave workspace</Button></>} />
     </aside>
   );

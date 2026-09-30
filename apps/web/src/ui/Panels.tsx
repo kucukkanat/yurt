@@ -123,10 +123,11 @@ function Profile({ id }: { id: string }) {
 function Thread({ id }: { id: string }) {
   const { state, peer, identity, route } = useCurrent();
   const [, setN] = useState(0);
-  const people = useMemo(() => roster(state, peer, identity.pub), [state, peer?.presence.size]);
+  const tick = useApp((s) => s.tick);
+  const people = useMemo(() => roster(state, peer, identity.pub), [state, peer, tick]);
   const typing = useTyping(route.ch || '');
   const parent = state?.msgs.get(id);
-  if (!state || !parent) return <div style={{ padding: 20, fontSize: 14, color: 'var(--text-muted)' }}>This thread syncs once a member who has it is online.</div>;
+  if (!state || !parent) return <div style={{ padding: 20, fontSize: 14, color: 'var(--text-muted)' }}>{peer?.transport.kind === 'nostr' ? 'This thread shows up once it arrives from the workspace’s relays.' : 'This thread syncs once a member who has it is online.'}</div>;
   const ctx: MsgCtx = { state, peer, me: identity.pub, handle: identity.handle.toLowerCase(), roster: people, code: route.code!, inThread: true, forceRender: () => setN((x) => x + 1) };
   return (
     <>
@@ -144,7 +145,7 @@ function Thread({ id }: { id: string }) {
       </div>
       <div style={{ padding: '0 12px 12px' }}>
         {typing.length > 0 && <div style={{ fontSize: 12, color: 'var(--text-subtle)', padding: '0 4px 6px' }}>{typing.map((t) => t.name).join(', ')} {typing.length === 1 ? 'is' : 'are'} typing…</div>}
-        <Composer members={people.filter((m) => !m.self)} placeholder="Reply in thread" onSend={(t, f) => useApp.getState().send(t, f, id)} onTyping={() => useApp.getState().setTyping(route.ch || null)} autoFocus />
+        <Composer key={route.code + '/' + route.ch + '/' + id} members={people.filter((m) => !m.self)} placeholder="Reply in thread" onSend={(t, f) => useApp.getState().send(t, f, id)} onTyping={() => useApp.getState().setTyping(route.ch || null)} autoFocus />
       </div>
     </>
   );

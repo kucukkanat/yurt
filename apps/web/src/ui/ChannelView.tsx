@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Icon, IconButton, Button, Tooltip, Kbd, Avatar, DayDivider, UnreadDivider, TypingIndicator, ConnectionBanner } from '@yurt/ui';
 import type { Msg } from '@yurt/protocol';
 import { useApp } from '../store';
-import { useCurrent, roster, personFor, authorKey, channelTitle } from '../model';
+import { useCurrent, roster, personFor, authorKey, channelTitle, othersOnline } from '../model';
 import { fmtDay } from '../lib/format';
 import { MessageItem, type MsgCtx } from './Message';
 import { Composer } from './Composer';
@@ -21,7 +21,7 @@ export function useTyping(ch: string) {
   return out;
 }
 
-export function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: string[]; ctx: MsgCtx; lastRead: number; emptyState?: React.ReactNode; highlight?: string | null }) {
+function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: string[]; ctx: MsgCtx; lastRead: number; emptyState?: React.ReactNode; highlight?: string | null }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [away, setAway] = useState(false);
   const toBottom = (smooth?: boolean) => { const el = scroller.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }); };
@@ -70,10 +70,12 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
   const hud = useApp((s) => s.huddle);
   const app = useApp.getState();
   const [, force] = useReducer((x: number) => x + 1, 0);
-  const [drop, setDrop] = useState<File[] | undefined>();
+  // Dropped files belong to the conversation they were dropped on, never the next one opened.
+  const [drop, setDrop] = useState<{ at: string; files: File[] } | undefined>();
   const [dragging, setDragging] = useState(false);
   const code = route.code!;
   const ch = route.ch!;
+  const draftKey = code + '/' + ch;
   const me = identity.pub;
   const isDm = ch.startsWith('dm:');
   const isAgentDm = ch.startsWith('adm:');
@@ -97,8 +99,10 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
   const agent = isAgentDm ? personFor(state, peer, agentKeyForDm, me) : null;
   const dmOther = isDm ? ch.slice(3).split(':').find((k) => k !== me) || me : '';
   const other = isDm ? personFor(state, peer, dmOther, me) : null;
+  // On Nostr the relays hold messages, so being alone is fine; only unreachable relays matter.
+  const relayed = peer?.transport.kind === 'nostr';
   if (!isDm && !isAgentDm && !channel) {
-    return <Centered title="Channel not synced yet" body="It shows up once a member who has it comes online." />;
+    return <Centered title="Channel not synced yet" body={relayed ? 'It shows up once it arrives from the workspace’s relays.' : 'It shows up once a member who has it comes online.'} />;
   }
   const ctx: MsgCtx = { state, peer, me, handle: identity.handle.toLowerCase(), roster: people, code, forceRender: force };
   const title = channelTitle(state, ch, me);
@@ -106,10 +110,8 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
   const agents = people.filter((p) => p.kind === 'agent');
   const pinnedN = state.pins.get(ch)?.size || 0;
   const togglePanel = (type: 'members' | 'pinned' | 'search') => app.setPanel(panel.type === type ? { type: null } : { type });
-  // On Nostr the relays hold messages, so being alone is fine; only unreachable relays matter.
-  const relayed = peer?.transport.kind === 'nostr';
-  const nobody = !relayed && (peer?.presence.size || 0) === 0;
-  const note = !online ? 'Offline · sends when a peer is reachable'
+  const nobody = !relayed && othersOnline(peer, me) === 0;
+  const note = !online ? (relayed ? 'Offline · sends when a relay is reachable' : 'Offline · sends when a member is reachable')
     : relayed && !peer?.connected ? 'Relays unreachable · sends when one is back'
     : isAgentDm ? (agent?.presence === 'offline' ? agent.name + ' is off. Start yurt-bridge to get replies.' : 'Only you and ' + agent?.name + ' see this')
     : nobody ? 'No one else is online · sends when someone joins'
@@ -120,13 +122,13 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
       title={'You and ' + agent!.name} body={'Only you can see this chat. ' + agent!.name + ' runs ' + (agent!.runtime || 'an agent CLI') + ' on your machine through yurt-bridge, with the tools you allowed there.'} />
   ) : isDm ? (
     <Intro avatar={<Avatar name={other!.name} self={other!.self} presence={other!.presence} size={56} decorative cutout="var(--surface-page)" />}
-      title={other!.self ? 'Notes to yourself' : 'You and ' + other!.name} body={other!.self ? 'Drafts, links, reminders. Only you see these.' : 'Only the two of you hold this conversation. It syncs directly between your devices.'} />
+      title={other!.self ? 'Notes to yourself' : 'You and ' + other!.name} body={other!.self ? 'Drafts, links, reminders. Only you see these.' : relayed ? 'Only the two of you can read this conversation. Relays keep it end-to-end encrypted.' : 'Only the two of you hold this conversation. It syncs directly between your devices.'} />
   ) : (
-    <Intro title={'#' + channel!.name + ' is ready'} body="Invite people with a link or code, then add an agent. Everyone here sees everything said, agents included."
+    <Intro title={'#' + channel!.name + ' is ready'} body="Invite people with a link, then add an agent. Everyone here sees everything said, agents included."
       actions={<><Button variant="primary" iconLeft="user-plus" onClick={() => app.setDialog('invite')}>Invite people</Button><Button variant="agent" iconLeft="sparkles" onClick={() => app.setDialog('agent')}>Add agent</Button></>} />
   );
 
-  const onDrop = (e: React.DragEvent) => { e.preventDefault(); setDragging(false); const fs = Array.from(e.dataTransfer.files || []); if (fs.length) setDrop(fs); };
+  const onDrop = (e: React.DragEvent) => { e.preventDefault(); setDragging(false); const fs = Array.from(e.dataTransfer.files || []); if (fs.length) setDrop({ at: draftKey, files: fs }); };
 
   return (
     <section aria-label={isDm || isAgentDm ? 'Conversation with ' + title : '#' + title} onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }} onDragLeave={(e) => e.currentTarget === e.target && setDragging(false)} onDrop={onDrop}
@@ -178,7 +180,8 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
       <div style={{ padding: narrow ? '0 10px 10px' : '0 20px 16px', flexShrink: 0 }}>
         {narrow && <div style={{ paddingBottom: 8 }}><HuddleDock /></div>}
         <TypingIndicator people={typing} style={{ padding: '0 4px 6px' }} />
-        <Composer members={people.filter((m) => !m.self)} dropFiles={drop} autoFocus
+        {/* Keyed per conversation so a draft or attachment can never be sent somewhere else. */}
+        <Composer key={draftKey} members={people.filter((m) => !m.self)} dropFiles={drop?.at === draftKey ? drop.files : undefined} autoFocus
           placeholder={isAgentDm ? 'Message ' + title + ' privately' : isDm ? 'Message ' + title : 'Message #' + title}
           note={note} onTyping={() => app.setTyping(ch)} onSend={(t, f) => app.send(t, f)} />
       </div>
@@ -202,12 +205,11 @@ function Intro({ avatar, title, body, actions }: { avatar?: React.ReactNode; tit
   );
 }
 
-export function Centered({ title, body, children }: { title: string; body?: string; children?: React.ReactNode }) {
+function Centered({ title, body }: { title: string; body?: string }) {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 32, textAlign: 'center' }}>
       <div style={{ font: '700 26px/1.1 var(--font-display)', letterSpacing: '-0.04em', color: 'var(--text-strong)' }}>{title}</div>
       {body && <div style={{ fontSize: 14, color: 'var(--text-muted)', maxWidth: 440 }}>{body}</div>}
-      {children}
     </div>
   );
 }

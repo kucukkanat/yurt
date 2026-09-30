@@ -11,5 +11,7 @@ export interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonEl
   active?: boolean;
   round?: boolean;
   disabled?: boolean;
+  /** Forwarded to the element, e.g. `data-testid`. */
+  [attr: `data-${string}`]: string | undefined;
 }
 export declare function IconButton(props: IconButtonProps): JSX.Element;

@@ -96,6 +96,32 @@ describe('invite', () => {
     expect(parseInvite('#/w/K7QX2MPD/k/tooshort')).toBeNull();
   });
 
+  it('pins the creator key with /o/, on either transport', () => {
+    const creator = 'ab'.repeat(32);
+    for (const transport of [newTrysteroTransport(), newNostrTransport()]) {
+      const inv = { code: 'K7QX2MPD', transport, creator };
+      const h = inviteHash(inv);
+      expect(h.endsWith('/o/' + creator)).toBe(true);
+      expect(parseInvite('https://x.io/yurt/' + h + '/c/general')).toEqual(inv);
+    }
+  });
+
+  it('treats a malformed creator as absent, so old-style TOFU applies', () => {
+    const key = newWorkspaceKey();
+    for (const o of ['AB'.repeat(32), 'ab'.repeat(31), 'zz'.repeat(32), '']) {
+      const inv = parseInvite(`#/w/K7QX2MPD/k/${key}/o/${o}`);
+      expect(inv).toEqual({ code: 'K7QX2MPD', transport: { kind: 'trystero', key } });
+      expect(inv && 'creator' in inv).toBe(false);
+    }
+  });
+
+  it('returns null, not a URIError, for malformed percent-encoding', () => {
+    const key = newWorkspaceKey();
+    expect(parseInvite(`#/w/K7QX2MPD/k/${key}/n/%E0`)).toBeNull();
+    expect(parseInvite(`#/w/K7QX2MPD/k/%E0${key}`)).toBeNull();
+    expect(parseInvite(`#/w/K7QX2MPD/k/${key}/o/%`)).toEqual({ code: 'K7QX2MPD', transport: { kind: 'trystero', key } });
+  });
+
   it('marks only keyless Trystero workspaces as legacy', () => {
     expect(isLegacy(LEGACY_TRYSTERO)).toBe(true);
     expect(isLegacy(newTrysteroTransport())).toBe(false);

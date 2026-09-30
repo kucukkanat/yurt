@@ -6,9 +6,6 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 
 export interface KeyPair { pub: string; sec: string }
 
-export const hex = bytesToHex;
-export const unhex = hexToBytes;
-
 export function sha256hex(data: string | Uint8Array): string {
   return bytesToHex(sha256(typeof data === 'string' ? utf8ToBytes(data) : data));
 }

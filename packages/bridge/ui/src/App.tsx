@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button, IconButton, Icon, Input, Select, Switch, Checkbox, Radio, Badge, Avatar, Toast, Kbd } from '@yurt/ui';
-import { fingerprint, formatCode, TOOL_KINDS, type BridgeState, type FromBridge, type ToBridge, type AgentConfig, type ToolKind, type RuntimeStatus } from '@yurt/protocol';
+import { fingerprint, formatCode, slug, TOOL_KINDS, type BridgeState, type FromBridge, type ToBridge, type AgentConfig, type ToolKind, type RuntimeStatus } from '@yurt/protocol';
 
 declare global { interface Window { __YURT_ADMIN__?: string } }
 
@@ -80,7 +80,7 @@ export function App() {
         <div style={{ maxWidth: 820, margin: '0 auto', padding: '40px 28px 64px', display: 'flex', flexDirection: 'column', gap: 24 }}>
           {!s ? <div style={{ color: 'var(--text-muted)' }}>Connecting to the bridge…</div> : <>
             {sec === 'overview' && <Overview s={s} send={b.send} go={setSec} />}
-            {sec === 'agents' && <Agents s={s} send={b.send} />}
+            {sec === 'agents' && <Agents s={s} send={b.send} error={b.error} clearError={b.clearError} />}
             {sec === 'runtimes' && <Runtimes s={s} send={b.send} />}
             {sec === 'workspaces' && <WorkspacesView s={s} send={b.send} />}
             {sec === 'activity' && <Activity logs={b.logs} />}
@@ -195,9 +195,11 @@ const blank = (s: BridgeState): AgentConfig => {
   return { id: '', name: '', handle: '', runtime: rt, model: '', workdir: (s.home || '~') + '/yurt-agents/', instructions: '', autoApprove: [...SAFE], contextSize: 20, replyIn: 'thread' };
 };
 
-function Agents({ s, send }: P) {
+type SaveAck = { error: string | null; clearError: () => void };
+
+function Agents({ s, send, error, clearError }: P & SaveAck) {
   const [edit, setEdit] = useState<AgentConfig | null>(null);
-  if (edit) return <AgentEditor s={s} send={send} agent={edit} onDone={() => setEdit(null)} />;
+  if (edit) return <AgentEditor s={s} send={send} error={error} clearError={clearError} agent={edit} onDone={() => setEdit(null)} />;
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
@@ -228,8 +230,21 @@ function Agents({ s, send }: P) {
   );
 }
 
-function AgentEditor({ s, send, agent, onDone }: P & { agent: AgentConfig; onDone: () => void }) {
+/** True once the bridge's state holds `a` as `agent.save` normalizes it (server.ts sanitize); a new agent must be new. */
+const isSaved = (a: AgentConfig, x: AgentConfig, before: readonly string[]) =>
+  (a.id ? x.id === a.id : !before.includes(x.id)) && x.handle === slug(a.handle || a.name).slice(0, 24) && x.name === a.name.trim().slice(0, 40) && x.runtime === a.runtime
+  && x.instructions === a.instructions.slice(0, 8000) && x.replyIn === a.replyIn && [...x.autoApprove].sort().join() === [...a.autoApprove].sort().join();
+
+function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck & { agent: AgentConfig; onDone: () => void }) {
   const [a, setA] = useState<AgentConfig>(agent);
+  // The bridge has no save ack: success shows up as a state holding the saved agent, failure as an error.
+  // So the editor stays open until one of those arrives, and keeps the user's input on failure.
+  const [saving, setSaving] = useState<{ before: string[] } | null>(null);
+  useEffect(() => {
+    if (!saving) return;
+    if (error) setSaving(null);
+    else if (s.agents.some((x) => isSaved(a, x, saving.before))) onDone();
+  }, [s, error]);
   const [handleTouched, setHandleTouched] = useState(!!agent.id);
   const [confirmDel, setConfirmDel] = useState(false);
   const up = (p: Partial<AgentConfig>) => setA((x) => ({ ...x, ...p }));
@@ -238,7 +253,7 @@ function AgentEditor({ s, send, agent, onDone }: P & { agent: AgentConfig; onDon
   const setName = (name: string) => up({ name, ...(handleTouched ? {} : { handle: autoHandle(name) }), ...(isNew && a.workdir.endsWith('/yurt-agents/' + a.handle) || a.workdir.endsWith('/yurt-agents/') ? { workdir: (s.home || '~') + '/yurt-agents/' + autoHandle(name) } : {}) });
   const rt = s.runtimes.find((r) => r.id === a.runtime);
   return (
-    <form onSubmit={(e) => { e.preventDefault(); send({ t: 'agent.save', agent: a }); onDone(); }} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <form data-testid="agent-editor" onSubmit={(e) => { e.preventDefault(); clearError(); setSaving({ before: s.agents.map((x) => x.id) }); send({ t: 'agent.save', agent: a }); }} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <IconButton icon="arrow-left" label="Back to agents" onClick={onDone} />
         <H1>{isNew ? 'New agent' : a.name}</H1>
@@ -281,7 +296,7 @@ function AgentEditor({ s, send, agent, onDone }: P & { agent: AgentConfig; onDon
         </div>
       </CardBox>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button type="submit" variant="agent" iconLeft="check" disabled={!a.name.trim() || !a.handle || !a.workdir.trim()}>{isNew ? 'Create agent' : 'Save changes'}</Button>
+        <Button type="submit" variant="agent" iconLeft="check" data-testid="agent-save" loading={!!saving} disabled={!a.name.trim() || !a.handle || !a.workdir.trim()}>{isNew ? 'Create agent' : 'Save changes'}</Button>
         <Button variant="ghost" onClick={onDone}>Cancel</Button>
         <span style={{ flex: 1 }} />
         {!isNew && (confirmDel
