@@ -5,7 +5,9 @@ import { acpCommand, check, detect, runtimeStatus, whichPath } from '../src/runt
 import { fakeCopilotOnPath, tempDir } from './helpers';
 
 const saved = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR };
-afterEach(() => { process.env.PATH = saved.PATH; process.env.TMPDIR = saved.TMPDIR; });
+// Assigning undefined to process.env stores the string "undefined", so unset what wasn't set.
+const restore = (k: keyof typeof saved) => { const v = saved[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+afterEach(() => { restore('PATH'); restore('TMPDIR'); });
 
 describe('acpCommand', () => {
   it('keeps native ACP commands and npx where npx exists', () => {

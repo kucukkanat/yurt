@@ -3,4 +3,14 @@
 // recurses until the stack overflows whenever a relay is unreachable.
 import WS from 'ws';
 
-(globalThis as { WebSocket?: unknown }).WebSocket = WS;
+// `ws` throws when a socket closed mid-connect emits `error` with no listener (nostr-tools drops its
+// onerror right before closing). Browsers just fire an unheard event; match that. Handlers set via
+// onerror/addEventListener still receive every error.
+class BrowserLikeWebSocket extends WS {
+  constructor(...args: ConstructorParameters<typeof WS>) {
+    super(...args);
+    this.on('error', () => {});
+  }
+}
+
+(globalThis as { WebSocket?: unknown }).WebSocket = BrowserLikeWebSocket;
