@@ -1,0 +1,35 @@
+name: Setup
+description: Bun, Node, dependencies and (optionally) Playwright's Chromium, shared by every CI job.
+
+inputs:
+  chromium:
+    description: Install Playwright's Chromium (for Vitest browser mode and E2E).
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.14
+    # Node stays: vitest, tsx and the published bridge CLI run on it.
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - run: bun install --frozen-lockfile
+      shell: bash
+    - id: pw
+      if: inputs.chromium == 'true'
+      run: echo "version=$(bunx playwright --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+      shell: bash
+    # Browsers are keyed by the Playwright version: they only change when it does.
+    - if: inputs.chromium == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+    # No --with-deps: the runner image already has what Chromium needs, and its apt step (fonts, mesa) stalled for
+    # minutes on slow Ubuntu mirrors. A no-op when the cache hit.
+    - if: inputs.chromium == 'true'
+      run: bunx playwright install chromium
+      shell: bash

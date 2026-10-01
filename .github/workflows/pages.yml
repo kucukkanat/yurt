@@ -21,20 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-      # Node stays: vitest, tsx and the published bridge CLI run on it.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup
       # Types (tests and e2e included), dead code (Knip), duplication (jscpd, max 2%), lint + format (Biome).
       - run: bun run quality
-      # Component and app tests run in real Chromium (Vitest browser mode); same Playwright version as e2e.
-      - run: bunx playwright install --with-deps chromium
-      # Unit + integration tests with 100% coverage thresholds (the bridge suite also builds and starts dist/cli.js).
-      - run: bun run test
       - run: bun run build
       - run: bun run bridge:build
       - name: Smoke-start the built bridge
@@ -50,25 +39,36 @@ jobs:
         with:
           path: apps/web/dist
 
+  # One job per package, side by side: the run takes as long as the slowest suite, not their sum.
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ['@yurt/protocol', yurt-bridge, '@yurt/web']
+    steps:
+      - uses: actions/checkout@v4
+      # Component and app tests run in real Chromium (Vitest browser mode); the protocol suite is Node only.
+      - uses: ./.github/actions/setup
+        with:
+          chromium: ${{ matrix.package != '@yurt/protocol' }}
+      # Unit + integration tests with coverage thresholds (the bridge suite also builds and starts dist/cli.js).
+      - run: bun run --filter '${{ matrix.package }}' test
+
+  # Not gated on build: it builds the app itself, so it starts right away.
   e2e:
     runs-on: ubuntu-latest
-    needs: build
     continue-on-error: true   # relies on public Nostr relays; don't block deploys on relay weather
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/setup
         with:
-          bun-version: 1.3.14
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: bun install --frozen-lockfile
-      - run: bunx playwright install --with-deps chromium
+          chromium: true
       - run: bun run e2e
 
   deploy:
     if: github.ref == 'refs/heads/main'
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
