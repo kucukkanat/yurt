@@ -19,7 +19,7 @@ export const b64 = (b: Uint8Array) => {
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 };
 export const unb64 = (s: string) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-const derive = (ikm: Uint8Array, info: string, len = 32, salt?: Uint8Array) => hkdf(sha256, ikm, salt, 'yurt-' + info + '-v1', len);
+export const derive = (ikm: Uint8Array, info: string, len = 32, salt?: Uint8Array) => hkdf(sha256, ikm, salt, 'yurt-' + info + '-v1', len);
 
 export interface WsKeys {
   /** XChaCha20-Poly1305 key for everything visible to all members. */

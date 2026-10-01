@@ -20,6 +20,7 @@ import {
   type FileRef,
   type EventFields,
   type BridgeState,
+  identityBackup,
 } from '@yurt/protocol';
 import { kv, eventsDb, blobsDb } from './lib/db';
 import { connect, getPeer, allPeers, disconnect } from './lib/net';
@@ -33,6 +34,7 @@ import { buildHash, parseHash, type Route } from './lib/route';
 import { presenceNow } from './lib/visibility';
 import { DEFAULT_SETTINGS, loadIdentity, loadSettings, loadWorkspaces, uploadServers, type Identity, type NetSettings, type Settings, type WsRecord } from './lib/stored';
 import { rememberNet, type NewWorkspaceNet } from './lib/newNet';
+import { backupConfig, docOf, ledgerFromText, ledgerOf, merge, missing, record, sameLedger, type Ledger } from './lib/backup';
 
 export type { Settings, WsRecord } from './lib/stored';
 
@@ -201,9 +203,51 @@ export const useApp = create<AppState>((set, get) => {
         get().toast({ tone: 'danger', title: 'Couldn’t save on this device', description: errorText(err), duration: 10_000 });
       },
     );
+  // The identity's workspace list, backed up on Nostr relays (lib/backup.ts): every change is recorded at once
+  // and synced shortly after, so a burst of changes is one save. Syncs run one at a time.
+  let ledger: Ledger = {};
+  let backupTimer: ReturnType<typeof setTimeout> | undefined;
+  let backupQueue = Promise.resolve();
+  const saveLedger = (next: Ledger) => {
+    ledger = next;
+    void persist('backup', docOf(next));
+  };
+  const syncBackupNow = async () => {
+    const me = get().identity;
+    if (!me) return;
+    const vault = identityBackup(me.sec, backupConfig.relays);
+    try {
+      const theirs = ledgerFromText(await vault.load());
+      if (get().identity !== me) return; // the device was reset meanwhile
+      const merged = merge(ledger, theirs);
+      if (!sameLedger(merged, ledger)) saveLedger(merged);
+      const add = missing(ledger, get().workspaces);
+      if (add.length) {
+        saveWs([...get().workspaces, ...add]);
+        add.forEach(connectWs);
+        get().toast({ title: add.length === 1 ? 'Restored a workspace from your backup' : `Restored ${add.length} workspaces from your backup` });
+      }
+      // Saved only after a load succeeded: a device that couldn't read the backup must not replace it.
+      if (!sameLedger(ledger, theirs)) await vault.save(JSON.stringify(docOf(ledger)));
+    } catch (err) {
+      // Offline, or no relay reachable: the next change, start or reconnect tries again.
+      report('backup', 'error', 'Couldn’t sync the workspace backup: ' + errorText(err));
+    } finally {
+      vault.close();
+    }
+  };
+  const syncBackup = () => {
+    backupQueue = backupQueue.then(syncBackupNow);
+    return backupQueue;
+  };
   const saveWs = (ws: WsRecord[]) => {
+    const next = record(ledger, get().workspaces, ws, Date.now());
     set({ workspaces: ws });
     void persist('workspaces', ws);
+    if (sameLedger(next, ledger)) return;
+    saveLedger(next);
+    clearTimeout(backupTimer);
+    backupTimer = setTimeout(() => void syncBackup(), backupConfig.delayMs);
   };
   const patchWs = (code: string, p: Partial<WsRecord>) => saveWs(get().workspaces.map((w) => (w.code === code ? { ...w, ...p } : w)));
   const profilePublished = new Set<string>();
@@ -332,11 +376,15 @@ export const useApp = create<AppState>((set, get) => {
     ...initialState(),
 
     async init({ clockMs = 30_000 } = {}) {
-      const [identity, workspaces, settings] = await Promise.all([
+      const [identity, workspaces, settings, savedLedger] = await Promise.all([
         kv.get('identity').then(loadIdentity),
         kv.get('workspaces').then(loadWorkspaces),
         kv.get('settings').then(loadSettings),
+        kv.get('backup'),
       ]);
+      // Before the backup existed nothing was recorded: everything this device has counts as joined now.
+      if (savedLedger === undefined) saveLedger(record({}, [], workspaces, Date.now()));
+      else ledger = ledgerOf(savedLedger);
       applyTheme(settings.theme);
       set({ identity, workspaces, settings, ready: true });
       // On each (re)connect, drop workspaces the bridge still runs but this app has left, e.g. while the bridge was down.
@@ -364,7 +412,10 @@ export const useApp = create<AppState>((set, get) => {
       });
       setInterval(() => set({ clock: Date.now() }), clockMs);
       window.addEventListener('hashchange', onRoute);
-      window.addEventListener('online', () => set({ online: true }));
+      window.addEventListener('online', () => {
+        set({ online: true });
+        void syncBackup();
+      });
       window.addEventListener('offline', () => set({ online: false }));
       document.addEventListener('visibilitychange', () => {
         for (const p of allPeers()) p.setPresence({ st: presenceNow() });
@@ -372,6 +423,7 @@ export const useApp = create<AppState>((set, get) => {
       if (identity) {
         get().workspaces.forEach(connectWs);
         startBridge(identity);
+        void syncBackup();
       }
       await onRoute();
     },
@@ -384,6 +436,8 @@ export const useApp = create<AppState>((set, get) => {
       get().workspaces.forEach(connectWs);
       startBridge(identity);
       await onRoute();
+      // An imported phrase brings back the workspaces it belongs to (in the background: relays may be slow).
+      void syncBackup();
     },
 
     async updateProfile(name, handle) {
@@ -428,6 +482,8 @@ export const useApp = create<AppState>((set, get) => {
       // Then start over in place, as a first visit: onboarding, default settings, nothing in memory.
       profilePublished.clear();
       pendingInvite = null;
+      clearTimeout(backupTimer);
+      ledger = {};
       history.replaceState(null, '', '#/');
       applyTheme(DEFAULT_SETTINGS.theme);
       set({ ...initialState(), route: {}, ready: true });

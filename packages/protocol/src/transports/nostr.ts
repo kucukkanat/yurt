@@ -24,7 +24,7 @@ const FUZZ_S = 7_200;
 // last sync mark covers both; duplicates are dropped by event id.
 const SKEW_S = 86_400;
 // nostr-tools' close reason when a relay answered a query to the end (EOSE); anything else means it didn't.
-const EOSE = 'closed automatically on eose';
+export const EOSE = 'closed automatically on eose';
 
 export interface NostrOpts {
   keys: LinkKeys;

@@ -124,9 +124,27 @@ Banning someone in a relay workspace also rotates the workspace key, so they can
 - **WebRTC.** The call room's credentials derive from the write key, so a rotation also moves calls to a room the removed member can't find.
 - **Limits.** Nothing takes back what a removed member already read or downloaded, and relays keep old ciphertext. Unbanning doesn't restore access; send a new invite. Rotation isn't used in Trystero workspaces, where a ban already stops all delivery.
 
+### Identity backup
+
+The recovery phrase restores the identity's key; the workspaces it belongs to come back from an encrypted note on the
+default relays (`wss://nos.lol`, fixed: a fresh device knows nothing else). Everything derives from the identity's
+secret `sec` with HKDF: a separate secp256k1 key `HKDF(sec, "backup-nostr")` signs the note, so relays never see the
+identity's public key; it's addressed by `d = HKDF(sec, "backup-d")[0:16]`; and sealed like workspace events with
+`HKDF(sec, "backup-enc")`. Kind 30078 (NIP-78, addressable), so relays keep only the newest.
+
+The content is `{v: 1, ws: {<code>: {at, ws}}}`: per workspace, its latest change in ms, `ws` being what rejoining takes
+(code, name, transport with its current key, creator, file servers) or `null` once left. Read positions and mutes stay
+on each device. Devices merge by the newest `at` per workspace, so they sync in any order and a workspace left on one
+device isn't restored by another's older copy; one already present elsewhere isn't removed from that device. A device
+loads before it saves, and never saves after a load no relay answered, so one that couldn't read the backup can't
+replace it. It syncs on start, after importing a phrase, on reconnect, and shortly after the workspace list changes.
+
 ### Threat model
 
 **A relay operator** sees IP addresses, when events arrive, coarse size buckets, backdated `created_at`, the workspace tag, inbox tags that receive private events, and throwaway pubkeys (one per session, one per private copy). It does **not** see the id or key, names, channels, contents, member identities, or which inboxes talk to each other, beyond what arrival timing suggests.
+
+**The backup relays** see one padded, encrypted note per identity, updated when its workspace list changes, under a
+pubkey that is in no workspace. Not the identity or its workspaces; the padded size hints only roughly at how many.
 
 **Anyone else on Nostr** can read the same stored events as the operator (minus IPs and arrival times) but can't find a workspace without its tag, and sees only padded, backdated ciphertext.
 

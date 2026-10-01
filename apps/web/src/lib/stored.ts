@@ -105,7 +105,7 @@ const TransportSchema: v.GenericSchema<unknown, WsTransport> = v.variant('kind',
   ),
 ]);
 
-const WsRecordSchema: v.GenericSchema<unknown, WsRecord> = v.pipe(
+export const WsRecordSchema: v.GenericSchema<unknown, WsRecord> = v.pipe(
   v.custom<Record<string, unknown>>(isRecord),
   v.object({
     code: v.pipe(
