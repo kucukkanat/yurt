@@ -59,7 +59,8 @@ export default defineConfig({
       include: ['src/**', 'ui/src/**'],
       // The process entry (argv, exit codes, signals) runs only as a real process: the smoke test starts the built CLI.
       exclude: ['src/cli.ts'],
-      reporter: ['text-summary'],
+      // Per-file table in CI logs, so a branch that only some machines reach can be traced (as in apps/web).
+      reporter: process.env.CI ? ['text'] : ['text-summary'],
       thresholds: { lines: 100, branches: 100, functions: 100, statements: 100 },
     },
   },
