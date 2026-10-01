@@ -1,4 +1,5 @@
-import { DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, parseRelays, parseServers, type SignalKind, type Signaling, type WsTransport } from '@yurt/protocol';
+import * as v from 'valibot';
+import { DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, SIGNAL_KINDS, isRecord, parseRelays, parseServers, type SignalKind, type Signaling, type WsTransport } from '@yurt/protocol';
 
 /** What a new workspace starts with: shared by its members, so it travels in the invite link (except file servers). */
 export type NewWorkspaceNet = { kind: 'trystero'; signal: Signaling } | { kind: 'nostr'; relays: string[]; blossom: string[] };
@@ -9,6 +10,17 @@ export interface LastNet {
   nostr?: { relays: string[]; blossom: string[] };
 }
 
+const strings = v.array(v.string());
+/** A stored `lastNet`: each mode's part is kept only if it's well-formed, so one bad half doesn't lose the other. */
+const LastNetSchema: v.GenericSchema<unknown, LastNet> = v.pipe(
+  v.custom<Record<string, unknown>>(isRecord),
+  v.object({
+    trystero: v.fallback(v.optional(v.object({ kind: v.picklist(SIGNAL_KINDS), urls: strings })), undefined),
+    nostr: v.fallback(v.optional(v.object({ relays: strings, blossom: strings })), undefined),
+  }),
+  v.transform(({ trystero, nostr }): LastNet => ({ ...(trystero ? { trystero } : {}), ...(nostr ? { nostr } : {}) })),
+);
+
 /** The create form's free text for a mode. */
 export interface NetForm {
   sigKind: SignalKind;
@@ -17,24 +29,28 @@ export interface NetForm {
   blossom: string;
 }
 
-/**
- * Empty fields mean the built-ins: Nostr relays and Nostr signaling fall back to nos.lol; trackers with
- * none listed use the strategy's public ones.
- */
-export function netFromForm(kind: WsTransport['kind'], f: NetForm): NewWorkspaceNet {
-  if (kind === 'nostr') {
-    const relays = parseRelays(f.relays);
-    return { kind, relays: relays.length ? relays : [...DEFAULT_RELAYS], blossom: parseServers(f.blossom) };
-  }
+type TrysteroNet = Extract<NewWorkspaceNet, { kind: 'trystero' }>;
+type NostrNet = Extract<NewWorkspaceNet, { kind: 'nostr' }>;
+
+/** Nostr signaling with no URLs means nos.lol; trackers with none listed use the strategy's public ones. */
+const trysteroNet = (f: Pick<NetForm, 'sigKind' | 'sigUrls'>): TrysteroNet => {
   const urls = parseRelays(f.sigUrls);
-  return { kind, signal: { kind: f.sigKind, urls: urls.length || f.sigKind !== 'nostr' ? urls : [...DEFAULT_SIGNAL_URLS] } };
-}
+  return { kind: 'trystero', signal: { kind: f.sigKind, urls: urls.length || f.sigKind !== 'nostr' ? urls : [...DEFAULT_SIGNAL_URLS] } };
+};
+
+/** No relays listed means the built-in ones; file servers may stay empty (the defaults apply at upload). */
+const nostrNet = (f: Pick<NetForm, 'relays' | 'blossom'>): NostrNet => {
+  const relays = parseRelays(f.relays);
+  return { kind: 'nostr', relays: relays.length ? relays : [...DEFAULT_RELAYS], blossom: parseServers(f.blossom) };
+};
+
+/** The create form's fields for `kind` as network settings; empty fields mean the built-ins. */
+export const netFromForm = (kind: WsTransport['kind'], f: NetForm): NewWorkspaceNet => (kind === 'nostr' ? nostrNet(f) : trysteroNet(f));
 
 /** The form prefill for a mode: the last workspace created in it, else the built-ins. */
 export function defaultNewNet(last: LastNet | undefined, kind: WsTransport['kind']): NewWorkspaceNet {
-  if (kind === 'nostr') return netFromForm(kind, { sigKind: 'nostr', sigUrls: '', relays: last?.nostr?.relays.join(', ') ?? '', blossom: last?.nostr?.blossom.join(', ') ?? '' });
-  const t = last?.trystero;
-  return netFromForm(kind, { sigKind: t?.kind ?? 'nostr', sigUrls: t?.urls.join(', ') ?? '', relays: '', blossom: '' });
+  if (kind === 'nostr') return nostrNet({ relays: last?.nostr?.relays.join(', ') ?? '', blossom: last?.nostr?.blossom.join(', ') ?? '' });
+  return trysteroNet({ sigKind: last?.trystero?.kind ?? 'nostr', sigUrls: last?.trystero?.urls.join(', ') ?? '' });
 }
 
 export const rememberNet = (last: LastNet | undefined, net: NewWorkspaceNet): LastNet =>
@@ -49,12 +65,12 @@ export const dropLegacy = (saved: Record<string, unknown>): Record<string, unkno
 
 /** `lastNet` from saved settings, seeding it once from the old defaults so a returning user keeps them. */
 export function migrateLastNet(saved: Record<string, unknown>): LastNet | undefined {
-  if (typeof saved.lastNet === 'object' && saved.lastNet !== null) return saved.lastNet as LastNet; // written by rememberNet
+  // Written by rememberNet. Its parts fall back individually, so any object parses.
+  if (isRecord(saved.lastNet)) return v.parse(LastNetSchema, saved.lastNet);
   if (!LEGACY.some((k) => typeof saved[k] === 'string' && saved[k] !== '')) return undefined;
-  const trystero = netFromForm('trystero', { sigKind: saved.signalKind === 'torrent' ? 'torrent' : 'nostr', sigUrls: text(saved.signalUrls), relays: '', blossom: '' });
-  const nostr = netFromForm('nostr', { sigKind: 'nostr', sigUrls: '', relays: text(saved.relays), blossom: text(saved.blossom) });
+  const nostr = nostrNet({ relays: text(saved.relays), blossom: text(saved.blossom) });
   return {
-    ...(trystero.kind === 'trystero' ? { trystero: trystero.signal } : {}),
-    ...(nostr.kind === 'nostr' ? { nostr: { relays: nostr.relays, blossom: nostr.blossom } } : {}),
+    trystero: trysteroNet({ sigKind: saved.signalKind === 'torrent' ? 'torrent' : 'nostr', sigUrls: text(saved.signalUrls) }).signal,
+    nostr: { relays: nostr.relays, blossom: nostr.blossom },
   };
 }

@@ -1,5 +1,10 @@
 import type { BlobRef } from './blossom';
-export type EvType = 'ws.create' | 'profile' | 'ch.create' | 'ch.update' | 'msg' | 'edit' | 'del' | 'react' | 'pin' | 'role' | 'ban' | 'agent' | 'approve' | 'rekey';
+import type { EventType } from './schemas';
+
+export type EvType = EventType;
+
+// Optional body fields also accept `undefined`: bodies are built by spreading optional values, and the
+// wire form (canonical JSON) drops undefined fields anyway. Received bodies are parsed by schemas.ts.
 
 /** A signed, immutable workspace event. Everything in a workspace is a log of these. */
 export interface Ev<B = unknown> {
@@ -7,10 +12,10 @@ export interface Ev<B = unknown> {
   ws: string; // workspace code, normalized (8 chars, no dash)
   t: EvType;
   a: string; // author public key (ed25519, hex)
-  ag?: string; // agent id when an agent authored it (signed by its owner key)
+  ag?: string | undefined; // agent id when an agent authored it (signed by its owner key)
   ts: number; // ms since epoch, author clock (integer); authors choose it, so it proves nothing
-  ch?: string; // channel id, "dm:<pubA>:<pubB>" or "adm:<owner>:<agentId>"
-  to?: string; // private recipient pubkey (DMs); only author + recipient ever hold it
+  ch?: string | undefined; // channel id, "dm:<pubA>:<pubB>" or "adm:<owner>:<agentId>"
+  to?: string | undefined; // private recipient pubkey (DMs); only author + recipient ever hold it
   b: B;
   sig: string; // ed25519 signature over id, hex
 }
@@ -23,33 +28,34 @@ export interface FileRef {
   size: number;
   type: string;
   /** Relay workspaces: the file sealed on Blossom. Absent on Trystero, where peers serve files over WebRTC. */
-  blob?: BlobRef;
+  blob?: BlobRef | undefined;
 }
 
 export interface TraceStep {
   title: string;
-  tool?: string;
+  tool?: string | undefined;
   status: 'done' | 'error' | 'running' | 'waiting' | 'skipped';
-  ms?: number;
-  detail?: string;
+  ms?: number | undefined;
+  detail?: string | undefined;
 }
 
 export interface ApprovalReq {
   req: string;
   title: string;
-  kind?: string;
+  kind?: string | undefined;
   options: { id: string; name: string; kind: string }[];
 }
 
 export interface MsgBody {
-  text: string;
-  parent?: string;
-  files?: FileRef[];
-  trace?: TraceStep[];
-  meta?: string; // "Read 6 files · 8.3s"
-  approval?: ApprovalReq;
+  /** Missing means empty (a message with only files). */
+  text?: string | undefined;
+  parent?: string | undefined;
+  files?: FileRef[] | undefined;
+  trace?: TraceStep[] | undefined;
+  meta?: string | undefined; // "Read 6 files · 8.3s"
+  approval?: ApprovalReq | undefined;
   /** A thread reply that also shows in the channel (an agent posting "in a thread + in the channel"). */
-  alsoInChannel?: true;
+  alsoInChannel?: true | undefined;
 }
 
 export interface AgentBody {
@@ -57,16 +63,16 @@ export interface AgentBody {
   name: string;
   handle: string;
   runtime: string;
-  model?: string;
+  model?: string | undefined;
   /** Kept for peers that predate `postIn`/`respondTo`: 'thread' when postIn.thread, else 'channel'. */
   replyIn: 'thread' | 'channel';
   /** What makes it answer: @mentions, and/or replies in threads it takes part in (no @ needed). */
-  respondTo?: AgentTriggers;
+  respondTo?: AgentTriggers | undefined;
   /** Where it answers: in a thread, in the channel, or both (a thread reply also shown in the channel). */
-  postIn?: AgentPlacement;
+  postIn?: AgentPlacement | undefined;
   /** Other members may find it and message it directly (their chats are visible to its owner). */
-  discoverable?: boolean;
-  removed?: boolean;
+  discoverable?: boolean | undefined;
+  removed?: boolean | undefined;
 }
 export interface AgentTriggers {
   mentions: boolean;
@@ -79,12 +85,13 @@ export interface AgentPlacement {
 
 export interface ProfileBody {
   name: string;
-  handle: string;
+  /** Missing means none yet. */
+  handle?: string | undefined;
 }
 export interface ChannelBody {
   id: string;
   name: string;
-  topic?: string;
+  topic?: string | undefined;
 }
 export interface RoleBody {
   target: string;

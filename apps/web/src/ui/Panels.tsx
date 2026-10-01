@@ -8,16 +8,18 @@ import { fmtTime, fmtDay } from '../lib/format';
 import { MessageItem, type MsgCtx } from './Message';
 import { Composer } from './Composer';
 import { useTyping } from './ChannelView';
+import { messageOf, must } from './must';
 
 export function RightPanel({ narrow }: { narrow: boolean }) {
   const panel = useApp((s) => s.panel);
   const { route } = useCurrent();
+  const code = must(route.code, 'The side panel only opens inside a workspace');
   const close = () => {
-    if (panel.type === 'thread') useApp.getState().go({ code: route.code, ch: route.ch });
+    if (panel.type === 'thread') useApp.getState().go({ code, ch: route.ch });
     useApp.getState().setPanel({ type: null });
   };
   const titles = { members: 'Members', profile: 'Profile', thread: 'Thread', pinned: 'Pinned', search: 'Search' } as const;
-  const title = panel.type ? titles[panel.type] : '';
+  const title = titles[must(panel.type, 'The side panel is mounted for an open panel')];
   return (
     <aside
       aria-label={title}
@@ -50,10 +52,10 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
       </header>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {panel.type === 'members' && <Members />}
-        {panel.type === 'profile' && panel.id && <Profile id={panel.id} />}
-        {panel.type === 'thread' && panel.id && <Thread id={panel.id} />}
-        {panel.type === 'pinned' && <Pinned />}
-        {panel.type === 'search' && <Search />}
+        {panel.type === 'profile' && panel.id && <Profile id={panel.id} code={code} />}
+        {panel.type === 'thread' && panel.id && <Thread id={panel.id} code={code} ch={must(route.ch, 'A thread route names its channel')} />}
+        {panel.type === 'pinned' && <Pinned code={code} />}
+        {panel.type === 'search' && <Search code={code} />}
       </div>
     </aside>
   );
@@ -180,7 +182,7 @@ function ProfileActions({ p, code, me }: { p: Person; code: string; me: string }
         {p.self ? 'Notes to self' : 'Message'}
       </Button>
     );
-  const agentId = p.agentId ?? '';
+  const agentId = must(p.agentId, 'an agent person carries its agent id');
   if (p.owner?.self)
     return (
       <>
@@ -232,7 +234,7 @@ function Moderation({ p, code }: { p: Person; code: string }) {
         description: 'The workspace key was rotated: they can’t read anything new, and old invite links no longer work.',
       });
     } catch (err) {
-      app.toast({ tone: 'danger', title: 'Banned, but the key wasn’t rotated', description: err instanceof Error ? err.message : String(err), duration: 10_000 });
+      app.toast({ tone: 'danger', title: 'Banned, but the key wasn’t rotated', description: messageOf(err), duration: 10_000 });
     }
   };
   const banButton = p.banned ? (
@@ -273,10 +275,9 @@ function Moderation({ p, code }: { p: Person; code: string }) {
   );
 }
 
-function Profile({ id }: { id: string }) {
-  const { state, peer, identity, route } = useCurrent();
+function Profile({ id, code }: { id: string; code: string }) {
+  const { state, peer, identity } = useCurrent();
   const p = personFor(state, peer, id, identity.pub);
-  const code = route.code ?? '';
   const canModerate = p.kind === 'human' && !p.self && !!state?.admins.has(identity.pub) && !p.creator;
   return (
     <div style={{ overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -289,12 +290,12 @@ function Profile({ id }: { id: string }) {
   );
 }
 
-function Thread({ id }: { id: string }) {
-  const { state, peer, identity, route } = useCurrent();
+function Thread({ id, code, ch }: { id: string; code: string; ch: string }) {
+  const { state, peer, identity } = useCurrent();
   const [, setN] = useState(0);
   // useCurrent re-renders on every tick, so the roster is always current.
   const people = roster(state, peer, identity.pub);
-  const typing = useTyping(route.ch || '');
+  const typing = useTyping(ch);
   const parent = state?.msgs.get(id);
   if (!state || !parent)
     return (
@@ -309,7 +310,7 @@ function Thread({ id }: { id: string }) {
     me: identity.pub,
     handle: identity.handle.toLowerCase(),
     roster: people,
-    code: route.code ?? '',
+    code,
     inThread: true,
     forceRender: () => setN((x) => x + 1),
   };
@@ -335,11 +336,11 @@ function Thread({ id }: { id: string }) {
           </div>
         )}
         <Composer
-          key={route.code + '/' + route.ch + '/' + id}
+          key={code + '/' + ch + '/' + id}
           members={people.filter((m) => !m.self)}
           placeholder="Reply in thread"
           onSend={(t, f) => useApp.getState().send(t, f, id)}
-          onTyping={() => useApp.getState().setTyping(route.ch || null)}
+          onTyping={() => useApp.getState().setTyping(ch)}
           autoFocus
         />
       </div>
@@ -392,7 +393,7 @@ function openMsg(code: string, m: Msg) {
   }
 }
 
-function Pinned() {
+function Pinned({ code }: { code: string }) {
   const { state, route } = useCurrent();
   const ids = [...(state?.pins.get(route.ch || '') || [])];
   const msgs = ids
@@ -408,27 +409,26 @@ function Pinned() {
         </div>
       )}
       {msgs.map((m) => (
-        <ResultRow key={m.id} m={m} onClick={() => openMsg(route.code ?? '', m)} />
+        <ResultRow key={m.id} m={m} onClick={() => openMsg(code, m)} />
       ))}
     </div>
   );
 }
 
-function Search() {
-  const { state, route, identity } = useCurrent();
+function Search({ code }: { code: string }) {
+  const { state } = useCurrent();
   const [q, setQ] = useState('');
-  const me = identity.pub;
+  // Everything in state is a conversation this device may read: others' DMs never arrive here.
   const results = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!state || s.length < 2) return [];
     const out: Msg[] = [];
     for (const m of state.msgs.values()) {
       if (m.deleted) continue;
-      if (m.ch.startsWith('dm:') && !m.ch.includes(me)) continue;
       if (m.text.toLowerCase().includes(s) || m.files.some((f) => f.name.toLowerCase().includes(s))) out.push(m);
     }
     return out.sort((a, b) => b.ts - a.ts).slice(0, 100);
-  }, [q, state, me]);
+  }, [q, state]);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
       <div style={{ padding: 12 }}>
@@ -447,7 +447,7 @@ function Search() {
           <div style={{ fontSize: 14, color: 'var(--text-muted)', padding: 8 }}>Nothing on this device matches “{q}”. Search covers history synced here.</div>
         )}
         {results.map((m) => (
-          <ResultRow key={m.id} m={m} onClick={() => openMsg(route.code ?? '', m)} />
+          <ResultRow key={m.id} m={m} onClick={() => openMsg(code, m)} />
         ))}
       </div>
     </div>

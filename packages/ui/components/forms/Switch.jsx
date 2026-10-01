@@ -39,8 +39,8 @@ export function Switch({ checked, defaultChecked, onChange, label, description, 
   const { fid, on, setInner, focus, focusHandlers } = useChoice({ id, checked, defaultChecked });
   const [press, setPress] = React.useState(false);
   const { w, h, top, line } = SIZES[size] || SIZES.md;
+  // A disabled native button never fires click, so no disabled check is needed here.
   const toggle = () => {
-    if (disabled) return;
     setInner(!on);
     onChange?.(!on);
   };
@@ -52,6 +52,8 @@ export function Switch({ checked, defaultChecked, onChange, label, description, 
         type="button"
         role="switch"
         aria-checked={on}
+        aria-labelledby={label ? fid + '-label' : undefined}
+        aria-describedby={description ? fid + '-desc' : undefined}
         disabled={disabled}
         onClick={toggle}
         {...focusHandlers}
@@ -78,7 +80,7 @@ export function Switch({ checked, defaultChecked, onChange, label, description, 
       </button>
       {(label || description) && (
         <label htmlFor={fid} style={{ display: 'flex', flexDirection: 'column', gap: 2, cursor: disabled ? 'not-allowed' : 'pointer' }}>
-          <ChoiceText label={label} description={description} lineHeight={line} />
+          <ChoiceText label={label} description={description} lineHeight={line} idBase={fid} />
         </label>
       )}
     </div>

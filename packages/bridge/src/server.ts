@@ -4,14 +4,16 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { slug, keyFromPhrase, isValidPhrase, TOOL_KINDS, type BridgeState, type ToBridge, type FromBridge, type AgentConfig } from '@yurt/protocol';
-import { saveConfig, saveIdentity, loadIdentity, agentRoomPrefs, type Config } from './config';
+import { keyFromPhrase, isValidPhrase, parseOr, type BridgeState, type FromBridge } from '@yurt/protocol';
+import { saveConfig, saveIdentity, loadIdentity, sanitize, type Config } from './config';
+import { ToBridgeSchema, type ToBridgeMsg } from './schemas';
 import type { Workspaces } from './workspaces';
 import type { AgentHost } from './agents';
-import { RUNTIME_IDS, runtimeStatus, install, check, login, onRuntimeChange } from './runtimes';
+import { runtimeStatus, install, check, login, onRuntimeChange } from './runtimes';
 import { setStartOnLogin } from './autostart';
 import { log, onLog, recentLogs } from './log';
 import { VERSION } from './version';
+import { errorMessage } from './util';
 
 interface Client {
   sock: WebSocket;
@@ -27,6 +29,13 @@ const CODE_MISSES = 5;
 const MINUTE_MISSES = 10;
 const LOCK_MS = 30_000;
 const MAX_LOCK_MS = 60 * 60_000;
+
+/** How often the pairing code's age is checked, and how old it may get. Tests shorten them. */
+export interface PairingTiming {
+  checkMs: number;
+  maxAgeMs: number;
+}
+const TIMING: PairingTiming = { checkMs: 30_000, maxAgeMs: 10 * 60_000 };
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -56,9 +65,12 @@ export class BridgeServer {
     private ws: Workspaces,
     private host: AgentHost,
     private uiDir: string,
+    timing: PairingTiming = TIMING,
   ) {
     this.rotate();
-    this.rotator = setInterval(() => Date.now() - this.codeAt > 10 * 60_000 && this.rotate(), 30_000);
+    this.rotator = setInterval(() => {
+      if (Date.now() - this.codeAt > timing.maxAgeMs) this.rotate();
+    }, timing.checkMs);
     onRuntimeChange(() => this.changed());
     this.unLog = onLog((e) => this.send((c) => c.admin, e));
   }
@@ -95,13 +107,14 @@ export class BridgeServer {
       runtimes: runtimeStatus(),
       startOnLogin: this.cfg.startOnLogin,
       allowedOrigins: this.cfg.allowedOrigins,
-      pairingCode: admin ? this.code : undefined,
-      home: admin ? os.homedir() : undefined,
+      // Only the local bridge UI (admin) gets these; web app clients never see the pairing code.
+      ...(admin ? { pairingCode: this.code, home: os.homedir() } : {}),
     };
   }
 
+  // ws ignores sends on a closing socket (no throw), and server-side sockets are never still connecting.
   private sendTo(c: Client, m: FromBridge) {
-    if (c.sock.readyState === 1) c.sock.send(JSON.stringify(m));
+    c.sock.send(JSON.stringify(m));
   }
   private send(pred: (c: Client) => boolean, m: FromBridge) {
     for (const c of this.clients) if (pred(c)) this.sendTo(c, m);
@@ -152,7 +165,8 @@ export class BridgeServer {
       res.writeHead(403).end();
       return;
     }
-    const url = new URL(req.url || '/', this.origin);
+    // Server-side requests always carry a url; String() only satisfies the client-side typing.
+    const url = new URL(String(req.url), this.origin);
     let rel: string;
     try {
       rel = decodeURIComponent(url.pathname);
@@ -188,21 +202,23 @@ export class BridgeServer {
     this.clients.add(c);
     sock.on('close', () => this.clients.delete(c));
     sock.on('message', (raw) => {
-      let m: ToBridge;
+      let json: unknown;
       try {
-        m = JSON.parse(String(raw));
+        json = JSON.parse(String(raw));
       } catch {
-        return;
+        json = undefined;
       }
+      const m = parseOr(ToBridgeSchema, json);
+      if (!m) return this.sendTo(c, { t: 'error', msg: 'Invalid message' });
       try {
         this.handle(c, m);
       } catch (e) {
-        this.sendTo(c, { t: 'error', msg: e instanceof Error ? e.message : String(e) });
+        this.sendTo(c, { t: 'error', msg: errorMessage(e) });
       }
     });
   }
 
-  private handle(c: Client, m: ToBridge) {
+  private handle(c: Client, m: ToBridgeMsg) {
     if (m.t === 'hello') return this.hello(c, m.token);
     if (m.t === 'pair') return this.pair(c, m.code);
     if (!c.paired) return this.sendTo(c, { t: 'error', msg: 'Not paired' });
@@ -213,9 +229,14 @@ export class BridgeServer {
       case 'ws.join':
         this.ws.join(m.code, m.name, m.creator, m.agents, m.transport);
         break;
-      case 'ws.agents':
-        this.ws.join(m.code, this.cfg.workspaces.find((w) => w.code === m.code)?.name || m.code, null, m.agents);
+      case 'ws.agents': {
+        // Only for a workspace the bridge already joined: joining an unknown code here would open a legacy
+        // (keyless, guessable) room.
+        const w = this.cfg.workspaces.find((x) => x.code === m.code);
+        if (!w) throw new Error('Unknown workspace ' + m.code);
+        this.ws.join(w.code, w.name, null, m.agents, w.transport);
         break;
+      }
       case 'ws.leave':
         this.ws.leave(m.code);
         break;
@@ -261,7 +282,7 @@ export class BridgeServer {
     }
   }
 
-  private identity(m: Extract<ToBridge, { t: 'identity' }>) {
+  private identity(m: Extract<ToBridgeMsg, { t: 'identity' }>) {
     if (!isValidPhrase(m.phrase)) throw new Error('Invalid identity');
     const cur = loadIdentity();
     if (!cur || cur.phrase !== m.phrase || cur.name !== m.name || cur.handle !== m.handle) {
@@ -284,7 +305,7 @@ export class BridgeServer {
     } else if (++this.misses >= CODE_MISSES) this.rotate();
   }
 
-  private admin(m: ToBridge) {
+  private admin(m: ToBridgeMsg) {
     switch (m.t) {
       case 'agent.save': {
         const a = sanitize(m.agent);
@@ -331,29 +352,4 @@ export class BridgeServer {
         break;
     }
   }
-}
-
-/** Validates an agent from the (paired, but still untrusted) UI and migrates older shapes. */
-export function sanitize(a: AgentConfig): AgentConfig {
-  if (!RUNTIME_IDS.includes(a.runtime)) throw new Error('Unknown runtime');
-  const name = String(a.name || '')
-    .trim()
-    .slice(0, 40);
-  if (!name) throw new Error('Give the agent a name');
-  const handle = slug(a.handle || name).slice(0, 24);
-  if (!handle) throw new Error('Give the agent a handle');
-  if (!a.workdir || !path.isAbsolute(a.workdir)) throw new Error('Pick a folder with a full path');
-  if (a.postIn && !a.postIn.thread && !a.postIn.channel) throw new Error('Pick where the agent posts: in a thread, in the channel, or both');
-  return {
-    id: a.id || handle + '-' + crypto.randomBytes(2).toString('hex'),
-    name,
-    handle,
-    runtime: a.runtime,
-    model: a.model?.trim() || undefined,
-    workdir: path.resolve(a.workdir),
-    instructions: String(a.instructions || '').slice(0, 8000),
-    autoApprove: (a.autoApprove || []).filter((k) => TOOL_KINDS.includes(k)),
-    contextSize: Math.max(1, Math.min(200, Math.round(Number(a.contextSize) || 20))),
-    ...agentRoomPrefs(a as unknown as Record<string, unknown>),
-  };
 }

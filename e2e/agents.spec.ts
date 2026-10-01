@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createWorkspace, inviteLink, onboard, pointAtLocalRelay } from './helpers';
+import { checkPage, createWorkspace, inviteLink, onboard, pointAtLocalRelay } from './helpers';
 // Node's WebSocket for the in-process peer below (same polyfill as the protocol tests).
 import '../packages/protocol/test/setup';
 import { memStore } from '../packages/protocol/test/util';
@@ -21,7 +21,7 @@ test('members can find and DM discoverable agents, and are told the owner can re
     kp: olu,
     selfId: olu.pub.slice(0, 20),
     transport: invite.transport,
-    creator: invite.creator,
+    ...(invite.creator ? { creator: invite.creator } : {}),
     store: memStore().store,
     onError: (m) => {
       throw new Error(m);
@@ -50,14 +50,17 @@ test('members can find and DM discoverable agents, and are told the owner can re
     await expect(page.getByRole('option')).toHaveCount(0);
     await jump.fill('harvey');
     await expect(page.getByRole('option', { name: /Harvey.*Olu’s agent · discoverable/ })).toBeVisible();
+    await checkPage(page, 'jump dialog › discoverable agent');
     await jump.press('Escape');
 
     // The profile says how to reach a non-discoverable agent, and offers a DM with a discoverable one.
     await page.getByRole('button', { name: 'Open profile: Mute' }).first().click();
     await expect(page.getByTestId('agent-not-discoverable')).toBeVisible();
     await expect(page.getByTestId('agent-message')).toHaveCount(0);
+    await checkPage(page, 'profile › agent, not discoverable');
     await page.getByRole('button', { name: 'Open profile: Harvey' }).first().click();
     await expect(page.getByTestId('agent-prefs')).toHaveText('answers @mentions and replies · posts in thread + channel · discoverable');
+    await checkPage(page, 'profile › agent, discoverable');
     await page.getByTestId('agent-message').click();
 
     await expect(page.getByTestId('guest-dm-notice')).toHaveText('Conversations with Harvey are visible to Olu, who runs it.');
@@ -69,9 +72,11 @@ test('members can find and DM discoverable agents, and are told the owner can re
     const fromBea = () => [...owner.state.msgs.values()].find((m) => m.text === 'hi harvey');
     await expect.poll(fromBea, { timeout: 30_000 }).toBeTruthy();
     const bea = fromBea();
-    expect(bea?.ch).toBe(guestDmChannel(bea?.a ?? '', olu.pub, 'harvey'));
-    owner.publish({ t: 'msg', ch: bea?.ch, to: bea?.a, ag: 'harvey', b: { text: 'hello Bea, Harvey here' } });
+    if (!bea) throw new Error('Bea’s message never reached the owner');
+    expect(bea.ch).toBe(guestDmChannel(bea.a, olu.pub, 'harvey'));
+    owner.publish({ t: 'msg', ch: bea.ch, to: bea.a, ag: 'harvey', b: { text: 'hello Bea, Harvey here' } });
     await expect(page.getByText('hello Bea, Harvey here')).toBeVisible();
+    await checkPage(page, 'guest DM › with the agent’s answer');
     await expect(page.getByRole('navigation', { name: 'Channels and messages' }).getByText('Harvey (Olu’s agent)')).toBeVisible();
   } finally {
     owner.leave();

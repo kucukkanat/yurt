@@ -1,48 +1,131 @@
 // A real (tiny) ACP agent for tests, run as a child process in place of an agent CLI.
-// Behaviour comes from `.fake-mode` in its working folder: ok (default) | auth-fail | hang | echo.
-// echo answers with its pid and the prompt's "Reply to …" line, so tests can see which run and session it was.
+// Behaviour comes from FAKE_ACP_MODE, else `.fake-mode` in its working folder:
+//   ok (default)  prompt asks permission to edit, then answers with the outcome
+//   auth-fail     session/new fails with the ACP auth error
+//   fail          session/new fails with another error
+//   no-session    session/new answers without a session id
+//   hang          prompts never finish
+//   echo          answers with its pid and the prompt's "Reply to …" line (tests see which run and session it was)
+//   prompt        answers with the whole prompt it was given (tests check what the agent was told)
+//   tools         a prompt reports tool calls, odd updates and a permission request, then answers
+//   one-tool      a prompt reports one finished tool call, then answers
+//   perm-exit     a prompt asks permission, then the agent exits before the answer arrives
+//   exit-on-prompt  the agent exits when prompted
+//   auth-methods  offers a sign-in method; `authenticate` succeeds
+//   crash         exits at once
+//   script        on initialize, first prints every line of `.fake-script` (raw; `#stderr ` lines go to stderr), then answers
+// While `.fake-hold` exists in its folder, a prompt waits (tests delete it to let the run go on).
+// Permission requests offer allow_once/reject_once, or the options in FAKE_ACP_OPTIONS (JSON).
+// In every mode, `test/reply` answers with its params as the response body (e.g. { error: … }), so tests can shape replies.
 import fs from 'node:fs';
 import readline from 'node:readline';
 
 if (process.argv.includes('--version')) {
-  console.log('fake-acp 9.9.9');
+  console.log(process.env.FAKE_ACP_VERSION ?? 'fake-acp 9.9.9');
   process.exit(0);
 }
 fs.writeFileSync('.fake-pid', String(process.pid));
-const mode = fs.existsSync('.fake-mode') ? fs.readFileSync('.fake-mode', 'utf8').trim() : 'ok';
+const mode = process.env.FAKE_ACP_MODE || (fs.existsSync('.fake-mode') ? fs.readFileSync('.fake-mode', 'utf8').trim() : 'ok');
+if (mode === 'crash') process.exit(3);
 const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\n');
+const update = (u) => send({ method: 'session/update', params: { sessionId: 'fake-session', update: u } });
 let promptId = null;
+
+const permission = () =>
+  send({
+    id: 'perm-1',
+    method: 'session/request_permission',
+    params: {
+      sessionId: 'fake-session',
+      toolCall: { kind: 'edit', title: 'edit notes.md' },
+      options: process.env.FAKE_ACP_OPTIONS
+        ? JSON.parse(process.env.FAKE_ACP_OPTIONS)
+        : [
+            { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+            { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+          ],
+    },
+  });
+
+const onPrompt = (m) => {
+  if (mode === 'hang') return;
+  if (mode === 'exit-on-prompt') process.exit(4);
+  if (mode === 'prompt') {
+    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: m.params.prompt.map((p) => p.text).join('\n') } });
+    send({ id: m.id, result: { stopReason: 'end_turn' } });
+    return;
+  }
+  if (mode === 'one-tool') {
+    update({ sessionUpdate: 'tool_call', toolCallId: 'only', title: 'List files', kind: 'read', status: 'completed' });
+    send({ id: m.id, result: { stopReason: 'end_turn' } });
+    return;
+  }
+  if (mode === 'echo') {
+    const text = m.params.prompt.map((p) => p.text).join('\n');
+    const ask = text.split('\n').find((l) => l.startsWith('Reply to the last message')) ?? '';
+    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `pid=${process.pid} ${ask}` } });
+    send({ id: m.id, result: { stopReason: 'end_turn' } });
+    return;
+  }
+  promptId = m.id;
+  if (mode === 'tools') {
+    update({ sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'read', status: 'in_progress' });
+    update({ sessionUpdate: 'tool_call', toolCallId: 't2', title: 'Search the web', status: 'in_progress' });
+    update({ sessionUpdate: 'tool_call', toolCallId: 't3' });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 't1', title: 'Read notes.md', status: 'completed' });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 't2', status: 'failed' });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 't3', status: 'in_progress' });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 't3' });
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 'nope', status: 'completed' });
+    update({ sessionUpdate: 'tool_call_update' });
+    update({ sessionUpdate: 'plan', entries: [] });
+    update({ sessionUpdate: 'current_mode_update', toolCallId: 't1' }); // not a tool update, despite the id
+    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'image', data: 'x' } });
+    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text' } });
+    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Read it. ' } });
+  }
+  permission();
+  if (mode === 'perm-exit') setTimeout(() => process.exit(5), 50);
+};
+
+const hold = (go) => {
+  if (!fs.existsSync('.fake-hold')) return go();
+  const t = setInterval(() => {
+    if (fs.existsSync('.fake-hold')) return;
+    clearInterval(t);
+    go();
+  }, 20);
+};
+
+const printScript = () => {
+  for (const l of fs.readFileSync('.fake-script', 'utf8').split('\n')) {
+    if (l.startsWith('#stderr ')) process.stderr.write(l.slice(8) + '\n');
+    else process.stdout.write(l + '\n');
+  }
+};
+
+/** session/new's answer in each mode. */
+const NEW_SESSION = {
+  'auth-fail': { error: { code: -32000, message: 'Authentication required' } },
+  fail: { error: { code: -32603, message: 'Internal error: disk full' } },
+  'no-session': { result: {} },
+};
+
+/** How each method is answered. */
+const METHODS = {
+  initialize(m) {
+    if (mode === 'script') printScript();
+    send({ id: m.id, result: { protocolVersion: 1, authMethods: mode === 'auth-methods' ? [{ id: 'browser', name: 'Browser' }] : [] } });
+  },
+  authenticate: (m) => send({ id: m.id, result: {} }),
+  'test/reply': (m) => send({ id: m.id, ...m.params }),
+  'session/new': (m) => send({ id: m.id, ...(NEW_SESSION[mode] ?? { result: { sessionId: 'fake-session' } }) }),
+  'session/set_model': (m) => send({ id: m.id, ...(m.params.modelId === 'bad-model' ? { error: { code: -32602, message: 'Unknown model' } } : { result: {} }) }),
+  'session/prompt': (m) => hold(() => onPrompt(m)),
+};
 
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const m = JSON.parse(line);
-  if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, authMethods: [] } });
-  else if (m.method === 'session/new') {
-    if (mode === 'auth-fail') send({ id: m.id, error: { code: -32000, message: 'Authentication required' } });
-    else send({ id: m.id, result: { sessionId: 'fake-session' } });
-  } else if (m.method === 'session/prompt') {
-    if (mode === 'hang') return;
-    if (mode === 'echo') {
-      const text = m.params.prompt.map((p) => p.text).join('\n');
-      const ask = text.split('\n').find((l) => l.startsWith('Reply to the last message')) ?? '';
-      send({
-        method: 'session/update',
-        params: { sessionId: 'fake-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `pid=${process.pid} ${ask}` } } },
-      });
-      send({ id: m.id, result: { stopReason: 'end_turn' } });
-      return;
-    }
-    promptId = m.id;
-    send({
-      id: 'perm-1',
-      method: 'session/request_permission',
-      params: {
-        sessionId: 'fake-session',
-        toolCall: { kind: 'edit', title: 'edit notes.md' },
-        options: [
-          { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
-          { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
-        ],
-      },
-    });
-  } else if (m.id === 'perm-1') send({ id: promptId, result: { stopReason: 'end_turn', permission: m.result?.outcome ?? m.error } });
+  if (m.method) METHODS[m.method]?.(m);
+  else if (m.id === 'perm-1') send({ id: promptId, result: { stopReason: 'end_turn', permission: m.result?.outcome ?? m.error } });
 });

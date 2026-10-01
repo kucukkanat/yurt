@@ -1,7 +1,9 @@
 import type { KeyPair } from './crypto';
 import type { RekeyBody } from './types';
 import type { ValidRekey } from './reduce';
+import * as v from 'valibot';
 import { isWorkspaceKey, newWorkspaceKey, open, seal, workspaceKeys, type WsKeys } from './seal';
+import { KeyHistorySchema } from './schemas';
 
 /**
  * Key rotation for relay workspaces. A workspace key is a chain: the invite key, then one key per
@@ -43,21 +45,27 @@ const keysOf = (key: string) => {
 function historyOf(k: WsKeys, r: RawRekey): { key: string; epoch: number | null }[] | null {
   const text = open(k.enc, HISTORY, r.history);
   if (text === null) return null;
+  // Authenticated but malformed (a buggy or hostile admin): the rekey still counts, with whatever history entries are valid.
+  let list: unknown;
   try {
-    const list: unknown = JSON.parse(text);
-    if (!Array.isArray(list)) return [];
-    return list.flatMap((x: unknown) => {
-      const o = typeof x === 'object' && x !== null ? (x as Record<string, unknown>) : {};
-      return typeof o.key === 'string' && isWorkspaceKey(o.key) ? [{ key: o.key, epoch: Number.isSafeInteger(o.epoch) ? (o.epoch as number) : null }] : [];
-    });
+    list = JSON.parse(text);
   } catch {
-    return []; // authenticated but malformed: a buggy or hostile admin; the rekey still counts, just without history
+    return [];
   }
+  return v.parse(KeyHistorySchema, list); // never throws: anything that isn't a list of entries is an empty list
+}
+
+type Opened = { key: string; history: { key: string; epoch: number | null }[] };
+
+/** `key` with the history it opens on `r`, if it is the key r's history is sealed under. */
+function opens(key: string | null, r: RawRekey): Opened | null {
+  const history = key !== null && isWorkspaceKey(key) ? historyOf(keysOf(key), r) : null;
+  return key !== null && history ? { key, history } : null;
 }
 
 // The rekey's author sealed my copy with the pair key salted by *their* current key, which may be
 // any key I hold; trying each is a handful of X25519 operations.
-function unwrap(ring: Map<string, RingKey>, me: KeyPair, r: RawRekey): string | null {
+function unwrap(ring: Map<string, RingKey>, me: KeyPair, r: RawRekey): Opened | null {
   const sealed = r.keys[me.pub];
   if (!sealed || !/^[0-9a-f]{64}$/.test(r.a)) return null;
   for (const e of ring.values()) {
@@ -65,9 +73,10 @@ function unwrap(ring: Map<string, RingKey>, me: KeyPair, r: RawRekey): string | 
     try {
       key = open(e.keys.pair(me.sec, r.a), WRAP, sealed);
     } catch {
-      continue;
-    } // not a curve point: junk
-    if (key && isWorkspaceKey(key) && historyOf(keysOf(key), r)) return key; // must be the key its history is sealed under
+      continue; // 64 hex characters that aren't a curve point: junk
+    }
+    const found = opens(key, r);
+    if (found) return found;
   }
   return null;
 }
@@ -97,11 +106,12 @@ function openRekeys(ring: Map<string, RingKey>, rekeys: readonly RawRekey[], me:
     for (const r of rekeys) {
       if (introduced.has(r.id)) continue;
       // I may already hold the key (from an invite, or another rekey's history); it opens the history.
-      const key = [...ring.values()].find((e) => historyOf(e.keys, r))?.key ?? unwrap(ring, me, r);
-      if (!key) continue;
-      introduced.set(r.id, key);
-      addKey(ring, key, r.epoch);
-      for (const h of historyOf(keysOf(key), r) ?? []) addKey(ring, h.key, h.epoch);
+      const held = [...ring.values()].map((e) => opens(e.key, r)).find((o) => o !== null);
+      const found = held ?? unwrap(ring, me, r);
+      if (!found) continue;
+      introduced.set(r.id, found.key);
+      addKey(ring, found.key, r.epoch);
+      for (const h of found.history) addKey(ring, h.key, h.epoch);
       changed = true;
     }
   }
@@ -109,11 +119,10 @@ function openRekeys(ring: Map<string, RingKey>, rekeys: readonly RawRekey[], me:
 }
 
 export function buildKeyring(invite: string, rekeys: readonly RawRekey[], valid: readonly ValidRekey[], me: KeyPair): Keyring {
-  const ring = new Map<string, RingKey>();
-  addKey(ring, invite, null);
+  const inviteKey: RingKey = { key: invite, keys: keysOf(invite), epoch: null };
+  // Opening rekeys only ever adds keys or learns their epochs, so the invite key's entry stays this object.
+  const ring = new Map<string, RingKey>([[invite, inviteKey]]);
   const introduced = openRekeys(ring, rekeys, me);
-  const inviteKey = ring.get(invite);
-  if (!inviteKey) throw new Error('keyring lost the invite key'); // unreachable: it's added first
   let write = inviteKey;
   let epoch = inviteKey.epoch ?? 0;
   for (const r of valid) {

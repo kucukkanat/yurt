@@ -50,7 +50,7 @@ describe('reduce on hostile bodies', () => {
     expect([...s.channels.keys()]).toEqual(['general']);
     expect(s.profiles.has(C.pub)).toBe(false);
     expect(s.channelMsgs.get('general')).toHaveLength(2); // m, plus "f" with its malformed parts dropped
-    expect(s.msgs.get(bad[11].id)).toMatchObject({ files: [], trace: [], approval: undefined });
+    expect(s.msgs.get(bad[11]?.id ?? '')).toMatchObject({ files: [], trace: [], approval: undefined });
     expect(s.pins.size + s.agents.size + s.approvals.size + s.bans.size).toBe(0);
     expect(s.name).toBe('Northwind');
   });

@@ -1,18 +1,17 @@
-import type { WorkspacePeer, HuddleState } from '@yurt/protocol';
+import * as v from 'valibot';
+import { parseOr, type HuddleState, type WorkspacePeer } from '@yurt/protocol';
 import { getPeer } from './net';
 
 export const MAX_VIDEO = 4;
 
-/** Stream metadata comes from another member: read only a known kind and a channel id. */
-function streamMeta(m: unknown): { kind: keyof RemoteMedia; ch?: string } {
-  const o = typeof m === 'object' && m !== null ? (m as Record<string, unknown>) : {};
-  return { kind: o.kind === 'cam' || o.kind === 'screen' ? o.kind : 'mic', ch: typeof o.ch === 'string' ? o.ch : undefined };
-}
+/** Stream metadata comes from another member: a known kind (anything else is their mic) and the channel it's for. */
+const StreamMetaSchema = v.object({ kind: v.fallback(v.picklist(['mic', 'cam', 'screen']), 'mic'), ch: v.fallback(v.optional(v.string()), undefined) });
+const streamMeta = (m: unknown) => parseOr(StreamMetaSchema, m) ?? { kind: 'mic' as const, ch: undefined };
 
 interface RemoteMedia {
-  mic?: MediaStream;
-  cam?: MediaStream;
-  screen?: MediaStream;
+  mic?: MediaStream | undefined;
+  cam?: MediaStream | undefined;
+  screen?: MediaStream | undefined;
 }
 export interface HuddleView {
   code: string | null;
@@ -20,9 +19,9 @@ export interface HuddleView {
   mic: boolean;
   cam: boolean;
   screen: boolean;
-  local: { cam?: MediaStream; screen?: MediaStream };
+  local: { cam?: MediaStream | undefined; screen?: MediaStream | undefined };
   remote: Record<string, RemoteMedia>;
-  error?: string;
+  error?: string | undefined;
 }
 
 type Listener = (v: HuddleView) => void;
@@ -32,7 +31,8 @@ const EMPTY: HuddleView = { code: null, ch: null, mic: false, cam: false, screen
 class Huddle {
   view: HuddleView = EMPTY;
   private peer: WorkspacePeer | null = null;
-  private streams: { mic?: MediaStream; cam?: MediaStream; screen?: MediaStream } = {};
+  /** My outgoing streams by kind, in the order they started. */
+  private streams = new Map<keyof RemoteMedia, MediaStream>();
   private sentTo = new Set<string>();
   private listeners = new Set<Listener>();
 
@@ -64,8 +64,8 @@ class Huddle {
     try {
       mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
     } catch {
-      this.emit({ error: 'Allow microphone access to join the huddle.' });
-      return;
+      /* istanbul ignore next -- the user refusing the microphone: the test browser's fake devices always allow */
+      return this.emit({ error: 'Allow microphone access to join the huddle.' });
     }
     // The permission prompt can take a while: the workspace may have reconnected (new peer) or its room been left meanwhile.
     const peer = getPeer(target.code);
@@ -76,7 +76,7 @@ class Huddle {
       return;
     }
     this.peer = peer;
-    this.streams = { mic };
+    this.streams = new Map([['mic', mic]]);
     this.sentTo.clear();
     room.onPeerStream = (stream, peerId, metadata) => {
       const { kind, ch: streamCh } = streamMeta(metadata);
@@ -93,6 +93,8 @@ class Huddle {
   /** A member's huddle state changed: send them my streams when they join mine, stop when they leave it. */
   private onPeerHuddle(peerId: string, h: HuddleState | null) {
     const room = this.peer?.room;
+    // Only set while I'm in a huddle (leave() removes it), and huddle news only arrives through the room.
+    /* istanbul ignore next -- unreachable: kept so a future caller can't send streams into no room */
     if (!room || !this.view.ch) return;
     if (h && h.ch === this.view.ch) this.withPeer(room, peerId, h);
     else if (this.sentTo.has(peerId)) this.withoutPeer(room, peerId);
@@ -101,10 +103,7 @@ class Huddle {
   private withPeer(room: NonNullable<WorkspacePeer['room']>, peerId: string, h: HuddleState) {
     if (!this.sentTo.has(peerId)) {
       this.sentTo.add(peerId);
-      for (const k of ['mic', 'cam', 'screen'] as const) {
-        const s = this.streams[k];
-        if (s) room.addStream(s, { target: peerId, metadata: { kind: k, ch: this.view.ch } });
-      }
+      for (const [kind, s] of this.streams) room.addStream(s, { target: peerId, metadata: { kind, ch: this.view.ch } });
     }
     // Drop their video tiles as soon as they say it's off, without waiting for the stream to end.
     const cur = this.view.remote[peerId];
@@ -115,13 +114,12 @@ class Huddle {
 
   private withoutPeer(room: NonNullable<WorkspacePeer['room']>, peerId: string) {
     this.sentTo.delete(peerId);
-    for (const s of Object.values(this.streams))
-      if (s)
-        try {
-          room.removeStream(s, { target: peerId });
-        } catch {
-          /* peer gone */
-        }
+    for (const s of this.streams.values())
+      try {
+        room.removeStream(s, { target: peerId });
+      } catch {
+        // Their connection already closed (they left the room too): there's nothing left to stop sending on.
+      }
     const { [peerId]: _gone, ...rest } = this.view.remote;
     this.emit({ remote: rest });
   }
@@ -131,7 +129,7 @@ class Huddle {
   }
 
   toggleMic() {
-    const t = this.streams.mic?.getAudioTracks()[0];
+    const t = this.streams.get('mic')?.getAudioTracks()[0];
     if (!t) return;
     t.enabled = !t.enabled;
     this.emit({ mic: t.enabled });
@@ -140,7 +138,7 @@ class Huddle {
 
   async toggleCam() {
     if (!this.peer || !this.view.ch) return;
-    if (this.streams.cam) return this.stopKind('cam');
+    if (this.streams.has('cam')) return this.stopKind('cam');
     if (this.videoCount(this.peer, this.view.ch) >= MAX_VIDEO) {
       this.emit({ error: `Video is capped at ${MAX_VIDEO} people. Audio still works.` });
       return;
@@ -149,24 +147,25 @@ class Huddle {
       const cam = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360 }, audio: false });
       this.startKind('cam', cam);
     } catch {
+      /* istanbul ignore next -- the user refusing the camera: the test browser's fake devices always allow */
       this.emit({ error: 'Allow camera access to turn video on.' });
     }
   }
 
   async toggleScreen() {
     if (!this.peer || !this.view.ch) return;
-    if (this.streams.screen) return this.stopKind('screen');
+    if (this.streams.has('screen')) return this.stopKind('screen');
     try {
       const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      screen.getVideoTracks()[0].addEventListener('ended', () => this.stopKind('screen'));
+      screen.getVideoTracks()[0]?.addEventListener('ended', () => this.stopKind('screen'));
       this.startKind('screen', screen);
     } catch {
-      /* picker dismissed */
+      // The user dismissed the screen picker: nothing to share, nothing to report.
     }
   }
 
   private startKind(k: 'cam' | 'screen', s: MediaStream) {
-    this.streams[k] = s;
+    this.streams.set(k, s);
     const t = this.targets();
     if (t.length) this.peer?.room?.addStream(s, { target: t, metadata: { kind: k, ch: this.view.ch } });
     this.emit({ [k]: true, local: { ...this.view.local, [k]: s }, error: undefined });
@@ -174,40 +173,42 @@ class Huddle {
   }
 
   private stopKind(k: 'cam' | 'screen') {
-    const s = this.streams[k];
-    if (!s) return;
+    const s = this.streams.get(k);
+    if (!s) return; // already stopped (the browser's "stop sharing" can come after the in-app button)
     for (const x of s.getTracks()) x.stop();
     const t = this.targets();
     if (t.length)
       try {
         this.peer?.room?.removeStream(s, { target: t });
       } catch {
-        /* ignore */
+        // A member's connection already closed: nothing left to stop sending on.
       }
-    delete this.streams[k];
+    this.streams.delete(k);
     this.emit({ [k]: false, local: { ...this.view.local, [k]: undefined } });
     this.peer?.setHuddle({ [k]: false });
   }
 
   async leave() {
     const p = this.peer;
-    for (const s of Object.values(this.streams))
-      if (s) {
-        for (const x of s.getTracks()) x.stop();
-        const t = this.targets();
-        if (p?.room && t.length)
-          try {
-            p.room.removeStream(s, { target: t });
-          } catch {
-            /* ignore */
-          }
-      }
-    this.streams = {};
+    // The room as it is now: a key rotation may have left it already, and leaving the huddle can rejoin a fresh one
+    // for others who still want calls, which never had my handler.
+    const room = p?.room;
+    for (const s of this.streams.values()) {
+      for (const x of s.getTracks()) x.stop();
+      const t = this.targets();
+      if (room && t.length)
+        try {
+          room.removeStream(s, { target: t });
+        } catch {
+          // A member's connection already closed: nothing left to stop sending on.
+        }
+    }
+    this.streams.clear();
     this.sentTo.clear();
+    if (room) room.onPeerStream = null;
     if (p) {
       p.setHuddle({ ch: null, mic: false, cam: false, screen: false });
-      p.onHuddle = undefined;
-      if (p.room) p.room.onPeerStream = null;
+      delete p.onHuddle;
     }
     this.peer = null;
     this.emit(EMPTY);

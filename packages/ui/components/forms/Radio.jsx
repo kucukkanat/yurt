@@ -17,7 +17,7 @@ export function Radio({ label, description, name, value, checked, defaultChecked
     return () => document.removeEventListener('change', f);
   }, [checked, name]);
   return (
-    <ChoiceLabel htmlFor={fid} disabled={disabled} style={style} label={label} description={description}>
+    <ChoiceLabel disabled={disabled} style={style} label={label} description={description}>
       <input
         ref={ref}
         id={fid}

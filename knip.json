@@ -1,5 +1,9 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignore": ["packages/ui/components/**/*.d.ts"],
-  "ignoreBinaries": ["osascript"]
+  "workspaces": {
+    "packages/bridge": {
+      "entry": ["test/ui/busy-bridge.ts"]
+    }
+  }
 }

@@ -15,12 +15,12 @@ export type IconName =
 export interface IconProps extends React.SVGAttributes<SVGSVGElement> {
   name: IconName;
   /** px, default 20 */
-  size?: number;
+  size?: number | undefined;
   /** default 2 — use 1.75 at 24px+, 2.25 at 14px */
-  strokeWidth?: number;
+  strokeWidth?: number | undefined;
   /** Accessible name. Omit for decorative icons next to text. */
-  label?: string;
-  color?: string;
+  label?: string | undefined;
+  color?: string | undefined;
   /** Forwarded to the element, e.g. `data-testid`. */
   [attr: `data-${string}`]: string | undefined;
 }

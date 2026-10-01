@@ -4,7 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { RuntimeId, RuntimeStatus } from '@yurt/protocol';
 import { AcpConnection, isAuthError } from './acp';
+import { compact } from './compact';
 import { log } from './log';
+import { errorMessage } from './util';
+import { RUNTIME_ID_LIST } from './schemas';
 
 interface RuntimeDef {
   name: string;
@@ -22,7 +25,6 @@ export const RUNTIMES: Record<RuntimeId, RuntimeDef> = {
   claude: { name: 'Claude Code', bin: 'claude', acp: ['npx', '-y', '@zed-industries/claude-code-acp'], npm: '@anthropic-ai/claude-code', login: 'claude' },
   pi: { name: 'Pi', bin: 'pi', acp: ['npx', '-y', 'pi-acp'], npm: '@mariozechner/pi-coding-agent', login: 'pi' },
 };
-export const RUNTIME_IDS = Object.keys(RUNTIMES) as RuntimeId[];
 
 const status = new Map<RuntimeId, RuntimeStatus>();
 let onChange: () => void = () => {};
@@ -30,14 +32,25 @@ export const onRuntimeChange = (f: () => void) => {
   onChange = f;
 };
 
-function set(id: RuntimeId, p: Partial<RuntimeStatus>) {
-  status.set(id, { ...(status.get(id) || { id, name: RUNTIMES[id].name, installed: false, auth: 'unknown' }), ...p });
+/** A status change: a key set to `undefined` clears that field (e.g. `busy` once a job ends); absent keys keep theirs. */
+type StatusPatch = { [K in keyof RuntimeStatus]?: RuntimeStatus[K] | undefined };
+
+function set(id: RuntimeId, p: StatusPatch) {
+  const cur = status.get(id) ?? { id, name: RUNTIMES[id].name, installed: false, auth: 'unknown' };
+  const pick = <K extends 'version' | 'busy' | 'loginHint'>(k: K) => (k in p ? p[k] : cur[k]);
+  status.set(id, {
+    id,
+    name: cur.name,
+    installed: p.installed ?? cur.installed,
+    auth: p.auth ?? cur.auth,
+    ...compact({ version: pick('version'), busy: pick('busy'), loginHint: pick('loginHint') }),
+  });
   onChange();
 }
 
 /** Absolute path of `bin` on PATH, or null. */
-export function whichPath(bin: string): string | null {
-  const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [bin], { encoding: 'utf8' });
+export function whichPath(bin: string, platform: NodeJS.Platform = process.platform): string | null {
+  const r = spawnSync(platform === 'win32' ? 'where' : 'which', [bin], { encoding: 'utf8' });
   return (r.status === 0 && r.stdout.trim().split(/\r?\n/)[0]) || null;
 }
 const which = (bin: string) => whichPath(bin) !== null;
@@ -56,7 +69,7 @@ export function detect(id: RuntimeId) {
   if (installed) {
     const r = spawnSync(d.bin, ['--version'], { encoding: 'utf8', timeout: 8000, shell: process.platform === 'win32' });
     version =
-      (r.stdout || '')
+      r.stdout
         .trim()
         .split('\n')[0]
         ?.replace(/^[^\d]*/, '')
@@ -66,9 +79,9 @@ export function detect(id: RuntimeId) {
 }
 
 export function detectAll() {
-  RUNTIME_IDS.forEach(detect);
+  for (const id of RUNTIME_ID_LIST) detect(id);
 }
-export const runtimeStatus = (): RuntimeStatus[] => RUNTIME_IDS.map((id) => status.get(id) || { id, name: RUNTIMES[id].name, installed: false, auth: 'unknown' });
+export const runtimeStatus = (): RuntimeStatus[] => RUNTIME_ID_LIST.map((id) => status.get(id) || { id, name: RUNTIMES[id].name, installed: false, auth: 'unknown' });
 
 export function install(id: RuntimeId): Promise<boolean> {
   const d = RUNTIMES[id];
@@ -78,6 +91,8 @@ export function install(id: RuntimeId): Promise<boolean> {
   log('info', id, `installing: ${cmd} ${args.join(' ')}`);
   return new Promise((res) => {
     const p = spawn(cmd, args, { shell: process.platform === 'win32', env: process.env });
+    // Neither npm nor bun on PATH: spawn reports ENOENT as an 'error' event (then 'close'); unhandled, it crashed the bridge.
+    p.on('error', (e) => log('error', id, `couldn't start ${cmd}: ${e.message}`));
     p.stdout.on('data', (b) => log('info', id, String(b).trim()));
     p.stderr.on('data', (b) => log('warn', id, String(b).trim()));
     p.on('close', (code) => {
@@ -101,7 +116,7 @@ export async function check(id: RuntimeId): Promise<void> {
     set(id, { auth: 'signed-in', busy: undefined });
   } catch (e) {
     set(id, { auth: isAuthError(e) ? 'signed-out' : 'unknown', busy: undefined });
-    log(isAuthError(e) ? 'info' : 'warn', id, 'check: ' + (e as Error).message);
+    log(isAuthError(e) ? 'info' : 'warn', id, 'check: ' + errorMessage(e));
   } finally {
     c.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -109,7 +124,7 @@ export async function check(id: RuntimeId): Promise<void> {
 }
 
 /** Sign in through ACP `authenticate` when offered, otherwise open the CLI's own login in a terminal window. */
-export async function login(id: RuntimeId): Promise<void> {
+export async function login(id: RuntimeId, platform: NodeJS.Platform = process.platform): Promise<void> {
   const d = RUNTIMES[id];
   set(id, { busy: 'signing-in' });
   const dir = os.tmpdir();
@@ -124,24 +139,29 @@ export async function login(id: RuntimeId): Promise<void> {
       return;
     }
   } catch (e) {
-    log('warn', id, 'ACP sign-in unavailable: ' + (e as Error).message);
+    log('warn', id, 'ACP sign-in unavailable: ' + errorMessage(e));
   }
   c.close();
-  openTerminal(d.login);
+  openTerminal(d.login, platform);
   set(id, { busy: undefined });
 }
 
-function openTerminal(command: string) {
+/** What opens a terminal running `command` on this platform; null on a Linux box without a known terminal. */
+function terminalCommand(command: string, platform: NodeJS.Platform): [string, string[]] | null {
+  if (platform === 'darwin')
+    return ['osascript', ['-e', `tell application "Terminal" to do script "${command.replace(/"/g, '\\"')}"`, '-e', 'tell application "Terminal" to activate']];
+  if (platform === 'win32') return ['cmd', ['/c', 'start', 'cmd', '/k', command]];
+  const t = ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xterm'].find((x) => which(x));
+  if (!t) return null;
+  return [t, t === 'gnome-terminal' ? ['--', 'sh', '-c', command + '; exec sh'] : ['-e', 'sh', '-c', command + '; exec sh']];
+}
+
+export function openTerminal(command: string, platform: NodeJS.Platform) {
   log('info', 'bridge', 'opening a terminal for: ' + command);
-  if (process.platform === 'darwin')
-    spawn('osascript', ['-e', `tell application "Terminal" to do script "${command.replace(/"/g, '\\"')}"`, '-e', 'tell application "Terminal" to activate']);
-  else if (process.platform === 'win32') spawn('cmd', ['/c', 'start', 'cmd', '/k', command], { shell: true });
-  else {
-    for (const t of ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xterm']) {
-      if (!which(t)) continue;
-      spawn(t, t === 'gnome-terminal' ? ['--', 'sh', '-c', command + '; exec sh'] : ['-e', 'sh', '-c', command + '; exec sh'], { detached: true, stdio: 'ignore' }).unref();
-      return;
-    }
-    log('warn', 'bridge', 'No terminal found. Run this yourself: ' + command);
-  }
+  const tc = terminalCommand(command, platform);
+  if (!tc) return log('warn', 'bridge', 'No terminal found. Run this yourself: ' + command);
+  const p = spawn(tc[0], tc[1], { detached: true, stdio: 'ignore', shell: platform === 'win32' });
+  // A missing launcher is reported as an 'error' event; unhandled, it would crash the bridge.
+  p.on('error', (e) => log('warn', 'bridge', `couldn't open a terminal (${e.message}). Run this yourself: ${command}`));
+  p.unref();
 }

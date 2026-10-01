@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { createWorkspace, inviteLink, onboard, pointAtLocalRelay, RELAY, BLOSSOM } from './helpers';
+import { checkPage, createWorkspace, inviteLink, onboard, pointAtLocalRelay, RELAY, BLOSSOM } from './helpers';
 
 test('relay workspace keeps encrypted history for members who join after everyone left', async ({ browser }) => {
   const actx = await browser.newContext();
@@ -49,6 +49,7 @@ test('the WebRTC switch enables calls in relay workspaces', async ({ browser }) 
   await page.getByTestId('network-save').click();
   await page.getByRole('dialog').press('Escape');
   await expect(page.getByTestId('huddle-button')).toBeEnabled();
+  await checkPage(page, 'relay workspace › calls enabled');
 });
 
 test('bare codes and keyless links are refused', async ({ browser }) => {
@@ -69,7 +70,7 @@ async function relayWorkspace(page: Page, who: string) {
 }
 
 async function openConnection(page: Page) {
-  await page.locator('[aria-haspopup="menu"]').click();
+  await page.getByTestId('ws-menu-button').click();
   await page.getByTestId('menu-connection').click();
 }
 
@@ -103,7 +104,7 @@ test('inside a workspace, Settings adds its own group for its mode, and the work
   await relayWorkspace(page, 'Lu');
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(1);
   await expect(page.getByTestId('mode-chip').first()).toHaveText('Nostr relays');
-  await page.locator('[aria-haspopup="menu"]').click();
+  await page.getByTestId('ws-menu-button').click();
   await page.getByTestId('menu-settings').click();
   await expect(page.getByTestId('settings-section-ws-general')).toBeVisible();
   await expect(page.getByTestId('ws-mode')).toContainText('fixed');
@@ -125,7 +126,7 @@ test('inside a workspace, Settings adds its own group for its mode, and the work
   await page.keyboard.press('Escape'); // like a user: focus is already inside the dialog
 
   // Leaving happens in General, with a confirmation.
-  await page.locator('[aria-haspopup="menu"]').click();
+  await page.getByTestId('ws-menu-button').click();
   await page.getByTestId('menu-leave').click();
   await page.getByTestId('ws-leave').click();
   await page.getByTestId('ws-leave-confirm').click();
@@ -160,12 +161,14 @@ test('a relay workspace’s network settings show live relay status and edit rel
   await page.getByTestId('connection-relays').fill('nope');
   await page.getByTestId('connection-save').click();
   await expect(page.getByText('Not a ws:// or wss:// relay: nope')).toBeVisible();
+  await checkPage(page, 'network settings › invalid relay error');
   await page.getByTestId('connection-relays').fill(`${RELAY}, ${dead}`);
   await page.getByTestId('connection-save').click();
   await expect(page.getByText('Network settings saved')).toBeVisible();
   await expect(page.locator(`[data-testid=relay-status][data-relay="${RELAY}"]`)).toHaveAttribute('data-connected', 'true');
   await expect(page.locator(`[data-testid=relay-status][data-relay="${dead}"]`)).toHaveAttribute('data-connected', 'false');
   await expect(page.locator(`[data-testid=relay-status][data-relay="${dead}"]`)).toContainText('Disconnected');
+  await checkPage(page, 'network settings › live relay status');
   await page.getByTestId('connection-relays').press('Escape');
 
   await page.getByRole('button', { name: 'Invite people' }).first().click();
@@ -259,6 +262,7 @@ test('banning in a relay workspace rotates the key: the removed member gets noth
   await a.getByRole('button', { name: /Cy/ }).first().click();
   await a.getByTestId('ban-button').click();
   await expect(a.getByTestId('ban-warning')).toBeVisible();
+  await checkPage(a, 'profile › moderation, ban confirmation');
   await a.getByTestId('ban-confirm').click();
   await expect(a.getByText('Cy was removed')).toBeVisible();
 
@@ -267,6 +271,7 @@ test('banning in a relay workspace rotates the key: the removed member gets noth
   await expect(b.getByText('after the ban')).toBeVisible({ timeout: 30_000 });
   await expect(c.getByTestId('removed-banner')).toBeVisible({ timeout: 30_000 });
   await expect(c.getByText('after the ban')).toHaveCount(0);
+  await checkPage(c, 'removed member banner');
 
   // New invites carry the new key; the old link no longer gets anyone into new conversations.
   await a.getByRole('button', { name: 'Invite people' }).first().click();
@@ -287,6 +292,7 @@ test('edit window: the Edit action counts down, then explains instead of doing n
   await expect(page.getByTestId('msg-edit')).toHaveAttribute('aria-label', /Edit · 15 min left/);
   await page.getByTestId('msg-edit').click();
   await expect(page.getByTestId('edit-time-left')).toHaveText(/15 min left/);
+  await checkPage(page, 'message › inline editor');
   await page.getByRole('textbox', { name: 'Edit message' }).press('Escape');
 
   await page.clock.fastForward('16:00');
@@ -294,6 +300,7 @@ test('edit window: the Edit action counts down, then explains instead of doing n
   await expect(page.getByTestId('msg-edit')).toHaveCount(0);
   await page.getByTestId('msg-edit-locked').click();
   await expect(page.getByText('This message can’t be changed anymore')).toBeVisible();
+  await checkPage(page, 'message › edit window closed toast');
   await expect(page.getByRole('button', { name: 'Reply in thread' }).last()).toBeVisible();
   await composer.press('ArrowUp');
   await expect(page.getByText('Your last message can’t be edited anymore')).toBeVisible();

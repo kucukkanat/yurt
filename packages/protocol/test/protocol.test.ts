@@ -19,6 +19,8 @@ import {
   newInviteCode,
   dmChannel,
   mentions,
+  parseOr,
+  SyncMsgSchema,
   type Ev,
 } from '../src';
 import { eventClock, northwind } from './util';
@@ -49,7 +51,7 @@ describe('identity', () => {
 describe('events', () => {
   it('stamps events from one device in strictly increasing order', () => {
     const ts = Array.from({ length: 50 }, () => makeEvent(A, { ws: WS, t: 'msg', b: {} }).ts);
-    expect(ts.every((t, i) => i === 0 || t > ts[i - 1])).toBe(true);
+    expect(ts.every((t, i) => i === 0 || t > (ts[i - 1] ?? Number.POSITIVE_INFINITY))).toBe(true);
   });
 
   it('rejects tampered events', () => {
@@ -135,13 +137,14 @@ describe('sync', () => {
     expect(days.length).toBeGreaterThan(0);
     const { want, give } = reconcile(mine, idsByDays(theirs, days), () => false);
     expect(new Set(want)).toEqual(new Set(all.slice(3).map((e) => e.id)));
-    expect(give).toEqual([all[0].id]);
+    expect(give.map((e) => e.id)).toEqual([all[0]?.id]);
   });
   it('ignores hostile day keys and values from the other side', () => {
     const mine = base();
-    const theirs = JSON.parse('{"__proto__":[1],"constructor":5,"x":["a"],"1":{"length":1}}') as Record<string, string[]>;
-    expect(reconcile(mine, theirs, () => false)).toEqual({ want: [], give: [] });
-    const sum = JSON.parse('{"__proto__":"1:1","toString":"x"}') as Record<string, string>;
-    expect(diffDays(summarize(mine), sum)).toEqual(Object.keys(summarize(mine)));
+    // As they arrive: parsed by the wire schema first, then compared.
+    const ids = parseOr(SyncMsgSchema, { k: 'ids', d: JSON.parse('{"__proto__":[1],"constructor":5,"x":["a"],"1":{"length":1}}') });
+    expect(ids?.k === 'ids' && reconcile(mine, ids.d, () => false)).toEqual({ want: [], give: [] });
+    const sum = parseOr(SyncMsgSchema, { k: 'sum', s: JSON.parse('{"__proto__":"1:1","toString":"x"}') });
+    expect(sum?.k === 'sum' && diffDays(summarize(mine), sum.s)).toEqual(Object.keys(summarize(mine)));
   });
 });

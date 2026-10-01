@@ -2,15 +2,12 @@ import { joinRoom as joinNostr, selfId } from 'trystero';
 import { joinRoom as joinTorrent } from '@trystero-p2p/torrent';
 import { WorkspacePeer, signalingOf, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport } from '@yurt/protocol';
 import { peerStore } from './db';
+import type { NetSettings } from './stored';
 
-export interface NetSettings {
-  turn: 'default' | 'custom' | 'off';
-  turnUrls: string;
-  turnUser: string;
-  turnPass: string;
-  /** Relay workspaces use WebRTC (voice and video) only when this is on. Trystero workspaces always use it. */
-  webrtc: boolean;
-}
+export type { NetSettings } from './stored';
+
+/** The dev server and tests run a local http file server; production only trusts https ones. */
+export const isLocalHost = (hostname: string) => hostname === 'localhost' || hostname === '127.0.0.1';
 
 // Free public TURN (Open Relay by Metered). Rate-limited; set your own in Settings → Network.
 const DEFAULT_TURN = [
@@ -29,13 +26,17 @@ function rtcOptions(n: NetSettings): Record<string, unknown> {
   return o;
 }
 
-interface NetHandlers {
+export interface NetHandlers {
   onState(code: string, s: WsState, fresh: Ev[]): void;
   onPeers(code: string): void;
   onCreator(code: string, pub: string): void;
   onKey(code: string, key: string): void;
   onBlob(id: string): void;
   onBlobProgress(id: string, p: number): void;
+  /** A member's WebRTC handshake was refused or failed (e.g. a banned member, or someone on an old key). */
+  onJoinError(code: string, details: unknown): void;
+  /** Something failed that the user should know about (e.g. this device couldn't save). */
+  onError(code: string, msg: string): void;
 }
 
 const peers = new Map<string, WorkspacePeer>();
@@ -51,7 +52,7 @@ export function connect(code: string, kp: KeyPair, creator: string | null, trans
     transport,
     // No mixing: a relay workspace gets no WebRTC at all unless the user opted in. The Trystero strategy
     // follows the workspace's signaling method, since members only meet over the same one.
-    joinRoom: transport.kind === 'trystero' || net.webrtc ? ((signalingOf(transport).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom) : undefined,
+    ...(transport.kind === 'trystero' || net.webrtc ? { joinRoom: (signalingOf(transport).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom } : {}),
     store: peerStore,
     rtc: rtcOptions(net),
     onState: (s, fresh) => h.onState(code, s, fresh),
@@ -60,10 +61,9 @@ export function connect(code: string, kp: KeyPair, creator: string | null, trans
     onKey: (key) => h.onKey(code, key),
     onBlob: h.onBlob,
     onBlobProgress: h.onBlobProgress,
-    onJoinError: (d) => console.warn('[yurt] join error', d),
-    onError: (msg) => console.error('[yurt]', msg),
-    // The dev server and e2e run a local http Blossom server; production only trusts https ones.
-    devFileServers: ['localhost', '127.0.0.1'].includes(location.hostname),
+    onJoinError: (d) => h.onJoinError(code, d),
+    onError: (msg) => h.onError(code, msg),
+    devFileServers: isLocalHost(location.hostname),
   });
   peers.set(code, p);
   p.start();

@@ -3,9 +3,10 @@ import { ChatMessage, MentionText, ApprovalCard, Button, Kbd, Icon, IconButton, 
 import { EDIT_WINDOW_MS, mentions, type Msg, type WsState, type WorkspacePeer, type FileRef } from '@yurt/protocol';
 import { editLeft, editLeftLabel, EDIT_CLOSED } from '../lib/editWindow';
 import { useApp } from '../store';
-import { privateTarget } from '../lib/private';
+import { addressed } from '../lib/private';
 import { personFor, authorKey, type Person } from '../model';
 import { blobsDb } from '../lib/db';
+import { must } from './must';
 import { fmtTime, fmtBytes } from '../lib/format';
 
 const pendingDeletes = new Set<string>();
@@ -177,12 +178,12 @@ function InlineEditor({ initial, left, onSave, onCancel }: { initial: string; le
 
 export interface MsgCtx {
   state: WsState;
-  peer?: WorkspacePeer;
+  peer?: WorkspacePeer | undefined;
   me: string;
   handle: string;
   roster: Person[];
   code: string;
-  inThread?: boolean;
+  inThread?: boolean | undefined;
   forceRender(): void;
 }
 
@@ -240,20 +241,20 @@ function Approval({ approval, state, author }: { approval: NonNullable<Msg['appr
   );
 }
 
+/** A message's thread replies; the reducer only lists replies it holds. */
+const repliesOf = (m: Msg, ctx: MsgCtx): Msg[] => m.replies.map((id) => must(ctx.state.msgs.get(id), 'a listed reply is held'));
+
 /** Up to three distinct people who replied in a message's thread. */
-function replyPeople(m: Msg, ctx: MsgCtx): Person[] {
-  const keys = new Set<string>();
-  for (const id of m.replies) {
-    const r = ctx.state.msgs.get(id);
-    if (r) keys.add(authorKey(r));
-  }
-  return [...keys].slice(0, 3).map((k) => personFor(ctx.state, ctx.peer, k, ctx.me));
+function replyPeople(replies: Msg[], ctx: MsgCtx): Person[] {
+  const keys = [...new Set(replies.map(authorKey))];
+  return keys.slice(0, 3).map((k) => personFor(ctx.state, ctx.peer, k, ctx.me));
 }
 
 function threadSummary(m: Msg, ctx: MsgCtx) {
-  if (ctx.inThread || !m.replies.length) return undefined;
-  const last = ctx.state.msgs.get(m.replies[m.replies.length - 1] ?? '');
-  return { count: m.replies.length, last: last ? 'Last reply ' + fmtTime(last.ts) : undefined, people: replyPeople(m, ctx) };
+  const replies = repliesOf(m, ctx);
+  const last = replies.at(-1);
+  if (ctx.inThread || !last) return undefined;
+  return { count: replies.length, last: 'Last reply ' + fmtTime(last.ts), people: replyPeople(replies, ctx) };
 }
 
 function activityOf(m: Msg) {
@@ -283,7 +284,7 @@ function deleteWithUndo(m: Msg, ctx: MsgCtx) {
     onDismiss: () => {
       if (undone) return;
       pendingDeletes.delete(m.id);
-      app.publish(ctx.code, { t: 'del', b: { target: m.id }, ch: m.ch, to: privateTarget(m.ch, ctx.me) });
+      app.publish(ctx.code, { t: 'del', b: { target: m.id }, ch: m.ch, ...addressed(m.ch, ctx.me) });
     },
   });
 }
@@ -327,7 +328,7 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
       explainClosed();
       return;
     }
-    app.publish(code, { t: 'edit', ch: m.ch, to: privateTarget(m.ch, me), b: { target: m.id, text: t } });
+    app.publish(code, { t: 'edit', ch: m.ch, ...addressed(m.ch, me), b: { target: m.id, text: t } });
   };
   return (
     <div data-mid={m.id}>
@@ -344,7 +345,7 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
         pinned={pinned}
         status={peer?.queued.has(m.id) ? 'queued' : 'sent'}
         reactions={reactions}
-        onReact={(icon) => app.publish(code, { t: 'react', ch: m.ch, to: privateTarget(m.ch, me), b: { target: m.id, icon, on: !m.reactions[icon]?.includes(me) } })}
+        onReact={(icon) => app.publish(code, { t: 'react', ch: m.ch, ...addressed(m.ch, me), b: { target: m.id, icon, on: !m.reactions[icon]?.includes(me) } })}
         onPin={m.ch.includes(':') ? undefined : () => app.publish(code, { t: 'pin', b: { target: m.id, on: !pinned } })}
         replies={threadSummary(m, ctx)}
         onReplies={openThread}
@@ -356,7 +357,6 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
         lockedLabel="Edit window closed"
         onLocked={explainClosed}
         onAuthor={() => app.setPanel({ type: 'profile', id: authorKey(m) })}
-        onMention={(mm) => app.setPanel({ type: 'profile', id: mm.id })}
         activity={activityOf(m)}
         highlighted={highlight === m.id}
         editor={editing === m.id ? <InlineEditor initial={text} left={left} onSave={saveEdit} onCancel={() => useApp.setState({ editing: null })} /> : undefined}

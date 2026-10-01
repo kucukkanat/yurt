@@ -2,11 +2,11 @@
 export interface TooltipProps {
   content: React.ReactNode;
   /** Shortcut shown after the label, e.g. "mod+enter" */
-  kbd?: string;
-  placement?: 'top' | 'bottom';
-  delay?: number;
+  kbd?: string | undefined;
+  placement?: 'top' | 'bottom' | undefined;
+  delay?: number | undefined;
   /** For specimens/docs */
-  forceOpen?: boolean;
+  forceOpen?: boolean | undefined;
   children: React.ReactElement;
 }
 export declare function Tooltip(props: TooltipProps): JSX.Element;

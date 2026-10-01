@@ -2,12 +2,13 @@ import type React from 'react';
 import { useEffect, useReducer, useState } from 'react';
 import { Dialog, Button, Input, Switch, Checkbox, Radio, Icon, Avatar, IconButton } from '@yurt/ui';
 import { fingerprint, inviteHash, parseRelays, parseServers, signalingOf, formatCode, agentPrefs, type SignalKind } from '@yurt/protocol';
-import { useApp, type SettingsSection } from '../store';
+import { useApp, type SettingsSection, type WsRecord } from '../store';
 import { useCurrent, useMedia, prefsLine } from '../model';
 import { bridge } from '../lib/bridge';
 import type { NetSettings } from '../lib/net';
 import { Row, Section } from './Nav';
 import { ModeChip } from './Sidebar';
+import { messageOf, must } from './must';
 
 /**
  * The one Settings window. "You" holds your account and this device; the workspace group (only inside
@@ -17,21 +18,31 @@ import { ModeChip } from './Sidebar';
 /** Entries of a free-text URL list that `parse` rejects, so a typo is reported instead of silently dropped. */
 export const rejected = (text: string, parse: (s: string) => string[]) => text.split(/[\s,]+/).filter((t) => t && !parse(t).length);
 export const listError = (bad: string[], what: string) => (bad.length ? 'Not ' + what + ': ' + bad.join(', ') : undefined);
-function copy(text: string, what: string) {
-  navigator.clipboard?.writeText(text).then(() => useApp.getState().toast({ tone: 'success', title: what + ' copied', duration: 2500 }));
+/** Copies `text` and says so; a refused clipboard (no permission, or none at all) is reported, not swallowed. */
+export function copy(text: string, what: string) {
+  const { toast } = useApp.getState();
+  navigator.clipboard.writeText(text).then(
+    () => toast({ tone: 'success', title: what + ' copied', duration: 2500 }),
+    (e: unknown) => toast({ tone: 'danger', title: 'Couldn’t copy ' + what.toLowerCase(), description: messageOf(e) }),
+  );
 }
 type Turn = Pick<NetSettings, 'turn' | 'turnUrls' | 'turnUser' | 'turnPass'>;
 const pickTurn = (s: Turn): Turn => ({ turn: s.turn, turnUrls: s.turnUrls, turnUser: s.turnUser, turnPass: s.turnPass });
 const sameTurn = (a: Turn, b: Turn) => a.turn === b.turn && a.turnUrls === b.turnUrls && a.turnUser === b.turnUser && a.turnPass === b.turnPass;
 
-const YOU: { id: SettingsSection; label: string; icon: React.ComponentProps<typeof Icon>['name'] }[] = [
-  { id: 'profile', label: 'Profile', icon: 'user' },
+/** Workspace sections are listed (so mounted) only inside a workspace whose record this device has. */
+const WS_ONLY = 'Workspace settings only show inside a workspace';
+
+type Item = { id: SettingsSection; label: string; icon: React.ComponentProps<typeof Icon>['name'] };
+const PROFILE: Item = { id: 'profile', label: 'Profile', icon: 'user' };
+const YOU: Item[] = [
+  PROFILE,
   { id: 'identity', label: 'Identity', icon: 'key-round' },
   { id: 'preferences', label: 'Preferences', icon: 'bell' },
   { id: 'connection', label: 'Connection', icon: 'globe' },
   { id: 'agents', label: 'Agents & bridge', icon: 'sparkles' },
 ];
-const WORKSPACE: typeof YOU = [
+const WORKSPACE: Item[] = [
   { id: 'ws-general', label: 'General', icon: 'settings' },
   { id: 'ws-network', label: 'Network', icon: 'link' },
   { id: 'ws-agents', label: 'Agents', icon: 'sparkles' },
@@ -45,7 +56,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const [listing, setListing] = useState(narrow);
   const inWs = !!route.code && !!rec;
   const items = [...YOU, ...(inWs ? WORKSPACE : [])];
-  const current = items.find((i) => i.id === section) ?? YOU[0];
+  const current = items.find((i) => i.id === section) ?? PROFILE;
   const pick = (id: SettingsSection) => {
     useApp.setState({ settingsSection: id });
     setListing(false);
@@ -149,10 +160,10 @@ const SubHead = ({ children }: { children: React.ReactNode }) => (
 /* ---------- You ---------- */
 
 function ProfileSection() {
-  const identity = useApp((s) => s.identity);
+  const { identity } = useCurrent();
   const app = useApp.getState();
-  const [name, setName] = useState(identity?.name ?? '');
-  const [handle, setHandle] = useState(identity?.handle ?? '');
+  const [name, setName] = useState(identity.name);
+  const [handle, setHandle] = useState(identity.handle);
   return (
     <form
       onSubmit={(e) => {
@@ -180,11 +191,10 @@ function ProfileSection() {
 }
 
 function IdentitySection() {
-  const identity = useApp((s) => s.identity);
+  const { identity } = useCurrent();
   const app = useApp.getState();
   const [reveal, setReveal] = useState(false);
   const [reset, setReset] = useState(false);
-  if (!identity) return null;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
@@ -491,7 +501,10 @@ export function InviteBody() {
       </div>
     );
   // A rotation may have landed before the record caught up; the peer always knows the current key.
-  const link = location.origin + location.pathname + inviteHash({ code, transport: { ...t, key: peer?.inviteKey ?? t.key }, creator: rec?.creator ?? undefined });
+  const link =
+    location.origin +
+    location.pathname +
+    inviteHash({ code, transport: { ...t, key: must(peer?.inviteKey, 'a keyed workspace’s peer knows its invite key') }, ...(rec?.creator ? { creator: rec.creator } : {}) });
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
       <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
@@ -515,10 +528,10 @@ function GeneralSection() {
   const { route, state, rec } = useCurrent();
   const app = useApp.getState();
   const [leaving, setLeaving] = useState(false);
-  const code = route.code;
-  if (!code || !rec) return null;
-  const relayed = rec.transport.kind === 'nostr';
-  const name = state?.name || rec.name;
+  const code = must(route.code, WS_ONLY);
+  const record = must(rec, WS_ONLY);
+  const relayed = record.transport.kind === 'nostr';
+  const name = state?.name || record.name;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <Fact k="Name" v={name} />
@@ -581,7 +594,10 @@ const Fact = ({ k, v, testId }: { k: string; v: React.ReactNode; testId?: string
 );
 
 /** What's wrong with typed network settings, per field; every value undefined means they can be saved. */
-function networkErrors(nostr: boolean, f: { relays: string; blossom: string; sigUrls: string }): { relays?: string; blossom?: string; signal?: string } {
+function networkErrors(
+  nostr: boolean,
+  f: { relays: string; blossom: string; sigUrls: string },
+): { relays?: string | undefined; blossom?: string | undefined; signal?: string | undefined } {
   if (!nostr) return { signal: listError(rejected(f.sigUrls, parseRelays), 'a ws:// or wss:// server') };
   return {
     relays: listError(rejected(f.relays, parseRelays), 'a ws:// or wss:// relay') ?? (parseRelays(f.relays).length ? undefined : 'Add at least one ws:// or wss:// relay.'),
@@ -591,7 +607,12 @@ function networkErrors(nostr: boolean, f: { relays: string; blossom: string; sig
 
 /** This workspace's own network, for its mode only. Device settings (TURN, calls) are under You → Connection. */
 function NetworkSection() {
-  const { route, rec, peer } = useCurrent();
+  const { route, rec } = useCurrent();
+  return <NetworkForm code={must(route.code, WS_ONLY)} rec={must(rec, WS_ONLY)} />;
+}
+
+function NetworkForm({ code, rec }: { code: string; rec: WsRecord }) {
+  const { peer } = useCurrent();
   const app = useApp.getState();
   // Relay sockets and peers come and go without an app event, so poll their status while this is open.
   const [, refresh] = useReducer((x: number) => x + 1, 0);
@@ -599,30 +620,26 @@ function NetworkSection() {
     const t = setInterval(refresh, 1500);
     return () => clearInterval(t);
   }, []);
-  const t = rec?.transport;
-  const sig = t ? signalingOf(t) : { kind: 'nostr' as const, urls: [] };
-  const [relays, setRelays] = useState(t?.kind === 'nostr' ? t.relays.join(', ') : '');
-  const [blossom, setBlossom] = useState(rec?.blossom?.join(', ') ?? '');
+  const t = rec.transport;
+  const sig = signalingOf(t);
+  const [relays, setRelays] = useState(t.kind === 'nostr' ? t.relays.join(', ') : '');
+  const [blossom, setBlossom] = useState(rec.blossom?.join(', ') ?? '');
   const [sigKind, setSigKind] = useState<SignalKind>(sig.kind);
   const [sigUrls, setSigUrls] = useState(sig.urls.join(', '));
-  const [err, setErr] = useState<{ relays?: string; blossom?: string; signal?: string }>({});
+  const [err, setErr] = useState<{ relays?: string | undefined; blossom?: string | undefined; signal?: string | undefined }>({});
   const [busy, setBusy] = useState(false);
-  const code = route.code;
-  if (!rec || !t || !code) return null;
   const nostr = t.kind === 'nostr';
   const save = async () => {
     const errs = networkErrors(nostr, { relays, blossom, sigUrls });
     setErr(errs);
     if (Object.values(errs).some(Boolean)) return;
     setBusy(true);
+    // networkErrors already refused everything updateConnection rejects; anything else is a bug, so it surfaces.
     try {
       await app.updateConnection(
         code,
         nostr ? { kind: 'nostr', relays: parseRelays(relays), blossom: parseServers(blossom) } : { kind: 'trystero', signal: { kind: sigKind, urls: parseRelays(sigUrls) } },
       );
-    } catch (e) {
-      setErr({ [nostr ? 'relays' : 'signal']: e instanceof Error ? e.message : String(e) });
-      return;
     } finally {
       setBusy(false);
     }
@@ -656,7 +673,7 @@ function NetworkSection() {
         <div>{toDevice}</div>
       </div>
     );
-  const status = peer?.relayStatus() ?? new Map<string, boolean>();
+  const status = must(peer, 'every workspace record has a running peer').relayStatus();
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <Fact k="Mode" testId="connection-kind" v="Nostr relays" />
@@ -733,7 +750,7 @@ function WsAgentsSection() {
   const { status, bs } = useBridge();
   const { route, state } = useCurrent();
   const app = useApp.getState();
-  const code = route.code;
+  const code = must(route.code, WS_ONLY);
   // What the bridge has saved for this workspace. Unsaved picks reset only when that changes (another workspace,
   // the bridge's list arriving, a save), not on every bridge status update.
   const saved = (bs?.workspaces.find((w) => w.code === code)?.agents ?? []).join(',');
@@ -741,7 +758,6 @@ function WsAgentsSection() {
   useEffect(() => {
     setPicked(saved ? saved.split(',') : []);
   }, [saved]);
-  if (!code) return null;
   if (status !== 'connected' || !bs)
     return (
       <div data-testid="ws-agents-nobridge" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
@@ -886,7 +902,7 @@ export function SignalFields({
   prefix: string;
   kind: SignalKind;
   urls: string;
-  error?: string;
+  error?: string | undefined;
   onKind: (k: SignalKind) => void;
   onUrls: (u: string) => void;
 }) {

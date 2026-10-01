@@ -271,6 +271,30 @@ function MessageBody({ editor, text, members, meId, onMention, children }) {
   return children;
 }
 
+/** The left column: the author's avatar, or for a grouped message its time on hover (and its pin, which has no header). */
+function Gutter({ continued, pinned, hover, time, author, onAuthor }) {
+  return (
+    <div style={{ paddingTop: 2 }}>
+      {continued ? (
+        // A grouped message has no header, so its pin is marked here; the time shows on hover.
+        <span style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 2, font: '400 10px/20px var(--font-mono)', color: 'var(--text-subtle)' }}>
+          {pinned && <Icon name="pin" size={11} label="Pinned" style={{ display: hover ? 'none' : 'block' }} />}
+          <span style={{ opacity: hover ? 1 : 0 }}>{time}</span>
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onAuthor}
+          aria-label={'Open profile: ' + author.name}
+          style={{ padding: 0, border: 0, background: 'none', cursor: onAuthor ? 'pointer' : 'default', borderRadius: 999, display: 'flex' }}
+        >
+          <Avatar {...author} size={32} decorative cutout="var(--surface-page)" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ChatMessage({
   author,
   time,
@@ -335,21 +359,9 @@ export function ChatMessage({
         ...style,
       }}
     >
-      <div style={{ paddingTop: 2 }}>
-        {continued ? (
-          <span style={{ display: 'block', font: '400 10px/20px var(--font-mono)', color: 'var(--text-subtle)', opacity: h ? 1 : 0, textAlign: 'right' }}>{time}</span>
-        ) : (
-          <button
-            type="button"
-            onClick={onAuthor}
-            aria-label={'Open profile: ' + author.name}
-            style={{ padding: 0, border: 0, background: 'none', cursor: onAuthor ? 'pointer' : 'default', borderRadius: 999, display: 'flex' }}
-          >
-            <Avatar {...author} size={32} decorative cutout="var(--surface-page)" />
-          </button>
-        )}
-      </div>
-      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4, opacity: status === 'queued' ? 0.6 : 1 }}>
+      <Gutter continued={continued} pinned={pinned} hover={h} time={time} author={author} onAuthor={onAuthor} />
+      {/* A queued message stays at full contrast (fading it made its text unreadable); "Sends when you reconnect" marks it. */}
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
         {!continued && <MessageHeader author={author} agent={agent} time={time} edited={edited} pinned={pinned} onAuthor={onAuthor} />}
         <div style={{ fontSize: 14.5, lineHeight: 1.55, color: 'var(--text-body)', textWrap: 'pretty', overflowWrap: 'anywhere' }}>
           <MessageBody editor={editor} text={text} members={members} meId={meId} onMention={onMention}>
@@ -389,17 +401,15 @@ export function ChatMessage({
   );
 }
 
-// A divider's line: a real <hr> (one per divider, labelled), so assistive tech hears one separator.
+// A divider's line: a real <hr> (a separator), followed by its text, which screen readers read as is.
 const RULE = { flex: 1, height: 1, margin: 0, border: 0 };
 
 /** "New" divider for the first unread message. */
 export function UnreadDivider({ label = 'New' }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 16px' }}>
-      <hr aria-label="New messages" style={{ ...RULE, background: 'var(--human)' }} />
-      <span aria-hidden="true" style={{ font: '700 11px/1 var(--font-body)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--human-ink)' }}>
-        {label}
-      </span>
+      <hr style={{ ...RULE, background: 'var(--human)' }} />
+      <span style={{ font: '700 11px/1 var(--font-body)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--human-ink)' }}>{label}</span>
     </div>
   );
 }
@@ -407,10 +417,8 @@ export function UnreadDivider({ label = 'New' }) {
 export function DayDivider({ label }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px 4px' }}>
-      <hr aria-label={label} style={{ ...RULE, background: 'var(--border-subtle)' }} />
-      <span aria-hidden="true" style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-subtle)' }}>
-        {label}
-      </span>
+      <hr style={{ ...RULE, background: 'var(--border-subtle)' }} />
+      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-subtle)' }}>{label}</span>
       <span aria-hidden="true" style={{ ...RULE, background: 'var(--border-subtle)' }} />
     </div>
   );

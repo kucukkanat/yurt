@@ -153,6 +153,26 @@ export function HuddleStage() {
   );
 }
 
+/**
+ * The video button: off when the huddle already shows MAX_VIDEO cameras (counting mine), unless mine is one of them.
+ * `cameras` is huddle.videoCount: every camera that's on in this huddle.
+ */
+function camButton(mine: boolean, cameras: number): { label: string; disabled: boolean } {
+  if (mine) return { label: 'Turn video off', disabled: false };
+  if (cameras >= MAX_VIDEO) return { label: 'Video is full (' + MAX_VIDEO + ')', disabled: true };
+  return { label: 'Turn video on', disabled: false };
+}
+
+/** An error while in a huddle (outside one, the store toasts it instead). */
+function HuddleError({ error }: { error?: string | undefined }) {
+  if (!error) return null;
+  return (
+    <div role="alert" style={{ fontSize: 12, color: 'var(--danger-ink)' }}>
+      {error}
+    </div>
+  );
+}
+
 export function HuddleDock() {
   const hud = useApp((s) => s.huddle);
   const states = useApp((s) => s.states);
@@ -164,7 +184,7 @@ export function HuddleDock() {
   const peer = getPeer(hud.code);
   const state = states[hud.code];
   const n = peer ? [...peer.huddles.values()].filter((h) => h.ch === hud.ch).length + 1 : 1;
-  const camCap = !hud.cam && huddle.videoCount(peer, hud.ch) >= MAX_VIDEO;
+  const cam = camButton(hud.cam, huddle.videoCount(peer, hud.ch));
   const where = hud.ch.includes(':') ? channelTitle(state, hud.ch, identity.pub) : '#' + channelTitle(state, hud.ch, identity.pub);
   return (
     <div
@@ -200,21 +220,10 @@ export function HuddleDock() {
         </span>
         <span style={{ font: '400 11px var(--font-mono)', color: 'var(--text-subtle)' }}>{n}</span>
       </button>
-      {hud.error && (
-        <div role="alert" style={{ fontSize: 12, color: 'var(--danger-ink)' }}>
-          {hud.error}
-        </div>
-      )}
+      <HuddleError error={hud.error} />
       <div style={{ display: 'flex', gap: 4 }}>
         <IconButton icon={hud.mic ? 'mic' : 'mic-off'} label={hud.mic ? 'Mute' : 'Unmute'} size="sm" active={!hud.mic} onClick={() => huddle.toggleMic()} />
-        <IconButton
-          icon={hud.cam ? 'video' : 'video-off'}
-          label={camCap ? 'Video is full (' + MAX_VIDEO + ')' : hud.cam ? 'Turn video off' : 'Turn video on'}
-          size="sm"
-          active={hud.cam}
-          disabled={camCap}
-          onClick={() => huddle.toggleCam()}
-        />
+        <IconButton icon={hud.cam ? 'video' : 'video-off'} label={cam.label} size="sm" active={hud.cam} disabled={cam.disabled} onClick={() => huddle.toggleCam()} />
         <IconButton icon="monitor-up" label={hud.screen ? 'Stop sharing' : 'Share screen'} size="sm" active={hud.screen} onClick={() => huddle.toggleScreen()} />
         <span style={{ flex: 1 }} />
         <IconButton icon="phone-off" label="Leave huddle" size="sm" variant="danger" onClick={() => huddle.leave()} />

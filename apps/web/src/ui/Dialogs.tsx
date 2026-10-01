@@ -19,7 +19,7 @@ import {
 } from '@yurt/protocol';
 import { useApp, type WsRecord } from '../store';
 import { useCurrent, roster } from '../model';
-import { defaultNewNet, netFromForm } from '../lib/newNet';
+import { defaultNewNet, netFromForm, type LastNet, type NetForm, type NewWorkspaceNet } from '../lib/newNet';
 import { Settings, SignalFields, InviteBody, listError, rejected } from './Settings';
 
 export function Dialogs() {
@@ -37,6 +37,20 @@ export function Dialogs() {
   );
 }
 
+/** One mode's network settings as the create form's text fields. */
+const formText = (n: NewWorkspaceNet): Partial<NetForm> =>
+  n.kind === 'nostr' ? { relays: n.relays.join(', '), blossom: n.blossom.join(', ') } : { sigKind: n.signal.kind, sigUrls: n.signal.urls.join(', ') };
+
+/** The create form's fields, each mode prefilled from what the last workspace in it used (or the built-ins). */
+const startForm = (last: LastNet | undefined): NetForm => ({
+  sigKind: 'nostr',
+  sigUrls: '',
+  relays: '',
+  blossom: '',
+  ...formText(defaultNewNet(last, 'trystero')),
+  ...formText(defaultNewNet(last, 'nostr')),
+});
+
 export function CreateJoin({ onDone }: { onDone?: () => void }) {
   const [tab, setTab] = useState('create');
   const [name, setName] = useState('');
@@ -46,14 +60,13 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
   const app = useApp.getState();
   // The new workspace's own network settings, prefilled from the last workspace created in each mode.
   const settings = useApp((x) => x.settings);
-  const [p2p] = useState(() => defaultNewNet(settings.lastNet, 'trystero'));
-  const [relay] = useState(() => defaultNewNet(settings.lastNet, 'nostr'));
-  const [sigKind, setSigKind] = useState<SignalKind>(p2p.kind === 'trystero' ? p2p.signal.kind : 'nostr');
-  const [sigUrls, setSigUrls] = useState(p2p.kind === 'trystero' ? p2p.signal.urls.join(', ') : '');
-  const [relays, setRelays] = useState(relay.kind === 'nostr' ? relay.relays.join(', ') : '');
-  const [blossom, setBlossom] = useState(relay.kind === 'nostr' ? relay.blossom.join(', ') : '');
+  const [start] = useState(() => startForm(settings.lastNet));
+  const [sigKind, setSigKind] = useState<SignalKind>(start.sigKind);
+  const [sigUrls, setSigUrls] = useState(start.sigUrls);
+  const [relays, setRelays] = useState(start.relays);
+  const [blossom, setBlossom] = useState(start.blossom);
   const [netOpen, setNetOpen] = useState(false);
-  const [netErr, setNetErr] = useState<{ signal?: string; relays?: string; blossom?: string }>({});
+  const [netErr, setNetErr] = useState<{ signal?: string | undefined; relays?: string | undefined; blossom?: string | undefined }>({});
   const list = (urls: string[], none: string) => (urls.length ? urls.join(', ') : none);
   const summary =
     kind === 'nostr'
@@ -252,11 +265,10 @@ function ChannelDialog({ onClose }: { onClose: () => void }) {
     <Dialog open onClose={onClose} title="New channel" width={460} description="Everyone in the workspace can see and join it.">
       <form
         onSubmit={(e) => {
+          // Submitting needs a name: the button is disabled without one, which also blocks Enter.
           e.preventDefault();
-          if (name.trim()) {
-            useApp.getState().createChannel(name, topic);
-            onClose();
-          }
+          useApp.getState().createChannel(name, topic);
+          onClose();
         }}
         style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
       >
@@ -395,7 +407,7 @@ function JumpDialog({ onClose }: { onClose: () => void }) {
     }
   };
   return (
-    <Dialog open onClose={onClose} width={560} dismissible>
+    <Dialog open onClose={onClose} width={560} label="Jump to" dismissible>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: -20 }}>
         <Input
           autoFocus

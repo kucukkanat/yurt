@@ -1,11 +1,12 @@
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { Icon, IconButton, Tooltip, Kbd, Badge, Avatar, DaemonStatus } from '@yurt/ui';
 import { liveAgents, fingerprint, formatCode, agentDmChannel, agentKey, parseGuestDm, type WsState } from '@yurt/protocol';
 import { useApp, type WsRecord } from '../store';
 import { useCurrent, unread, personFor, channelTitle, othersOnline } from '../model';
 import { HuddleDock } from './Huddle';
 import { Row, Section } from './Nav';
+import { must } from './must';
 
 const initialsOf = (s: string) =>
   s
@@ -71,9 +72,11 @@ export function Rail() {
   const workspaces = useApp((s) => s.workspaces);
   const states = useApp((s) => s.states);
   const route = useApp((s) => s.route);
-  const identity = useApp((s) => s.identity);
+  const identity = must(
+    useApp((s) => s.identity),
+    'The workspace rail only shows after onboarding',
+  );
   const { setDialog, openSettings } = useApp.getState();
-  if (!identity) return null;
   return (
     <nav
       aria-label="Workspaces"
@@ -144,13 +147,16 @@ function ChannelRow({ ch, label, icon, inCall }: { ch: string; label: React.Reac
 function WorkspaceMenu({ name, relayed, others }: { name: string; relayed: boolean; others: number }) {
   const { setDialog, openSettings } = useApp.getState();
   const [menu, setMenu] = useState(false);
+  const menuId = useId();
+  // A disclosure (a button that shows a list of buttons), not an ARIA menu: Tab moves through it like any buttons.
   return (
     <div style={{ position: 'relative' }}>
       <button
         type="button"
+        data-testid="ws-menu-button"
         onClick={() => setMenu((m) => !m)}
         aria-expanded={menu}
-        aria-haspopup="menu"
+        aria-controls={menu ? menuId : undefined}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -175,8 +181,10 @@ function WorkspaceMenu({ name, relayed, others }: { name: string; relayed: boole
       </button>
       <ModeChip relayed={relayed} onClick={() => openSettings('ws-network')} />
       {menu && (
+        // biome-ignore lint/a11y/noStaticElementInteractions: closing when the pointer leaves is a pointer convenience; keyboard users close it with its toggle or by choosing an item
         <div
-          role="menu"
+          id={menuId}
+          data-testid="ws-menu"
           onMouseLeave={() => setMenu(false)}
           style={{
             position: 'absolute',
@@ -272,7 +280,7 @@ export function Sidebar() {
   const myAgents = state ? liveAgents(state).filter((a) => a.owner === me) : [];
   const huddleChs = new Set<string>();
   if (peer) for (const h of peer.huddles.values()) if (h.ch) huddleChs.add(h.ch);
-  const code = route.code ?? '';
+  const code = must(route.code, 'The sidebar only shows inside a workspace');
   const wsName = state?.name || rec?.name || formatCode(code);
   const daemon = bridgeStatus === 'connected' ? 'connected' : bridgeStatus === 'connecting' ? 'connecting' : 'missing';
   const nAgents = bridgeState?.agents.length;
@@ -283,6 +291,7 @@ export function Sidebar() {
 
   return (
     <aside
+      aria-label="Workspace"
       style={{
         width: 'var(--layout-sidebar)',
         maxWidth: 'calc(100vw - 64px)',
@@ -411,12 +420,16 @@ export function Sidebar() {
         }}
       >
         <Avatar name={identity.name} self presence="online" size={30} cutout="var(--surface-sunken)" />
-        <div style={{ flex: 1, lineHeight: 1.25, minWidth: 0 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-strong)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{identity.name}</div>
-          <div style={{ font: '400 11px/1.3 var(--font-mono)', color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <span style={{ display: 'block', flex: 1, lineHeight: 1.25, minWidth: 0 }}>
+          <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: 'var(--text-strong)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {identity.name}
+          </span>
+          <span
+            style={{ display: 'block', font: '400 11px/1.3 var(--font-mono)', color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+          >
             @{identity.handle} · {fingerprint(me)}
-          </div>
-        </div>
+          </span>
+        </span>
       </button>
     </aside>
   );

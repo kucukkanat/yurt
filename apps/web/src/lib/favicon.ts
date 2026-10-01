@@ -96,6 +96,9 @@ export function installFavicon(read: () => FaviconState): { update(): void } {
   let drawn = false;
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = SIZE;
+  const ctx = canvas.getContext('2d');
+  /* istanbul ignore next -- every browser the app supports has a 2D canvas; without one the tab icon just stays plain */
+  if (!ctx) return { update: () => {} };
 
   /** Picks up a newly chosen icon as the base; false when nothing changed (including our own writes). */
   const adopt = (): boolean => {
@@ -108,7 +111,7 @@ export function installFavicon(read: () => FaviconState): { update(): void } {
     base = null;
     drawn = false;
     const img = new Image();
-    img.crossOrigin = 'anonymous'; // a cross-origin icon without CORS taints the canvas; we then draw badges alone
+    img.crossOrigin = 'anonymous'; // a cross-origin icon without CORS fails to load (onerror): badges are drawn alone
     img.onload = () => {
       base = img;
       render(true);
@@ -129,17 +132,10 @@ export function installFavicon(read: () => FaviconState): { update(): void } {
       link.href = baseHref;
       return;
     }
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
     paint(ctx, SIZE, base, s, palette());
-    let href: string;
-    try {
-      href = canvas.toDataURL('image/png');
-    } catch {
-      base = null;
-      paint(ctx, SIZE, null, s, palette());
-      href = canvas.toDataURL('image/png');
-    }
+    // The base is loaded with CORS (crossOrigin below): an icon that doesn't allow it never loads, so the canvas
+    // can't be tainted and toDataURL can't throw.
+    const href = canvas.toDataURL('image/png');
     ours.add(href);
     link.href = href;
   };

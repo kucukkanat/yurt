@@ -8,17 +8,17 @@ export interface ApprovalChange { label: string; before?: string; after: string 
 export interface ApprovalCardProps {
   /** Phrase as the action: "Send invoice to Acme" */
   title: React.ReactNode;
-  description?: React.ReactNode;
-  risk?: 'low' | 'medium' | 'high';
-  changes?: ApprovalChange[];
-  status?: 'pending' | 'approved' | 'rejected';
-  onApprove?: () => void;
-  onReject?: () => void;
-  onEdit?: () => void;
-  onUndo?: () => void;
-  approveLabel?: string;
+  description?: React.ReactNode | undefined;
+  risk?: 'low' | 'medium' | 'high' | undefined;
+  changes?: ApprovalChange[] | undefined;
+  status?: 'pending' | 'approved' | 'rejected' | undefined;
+  onApprove?: (() => void) | undefined;
+  onReject?: (() => void) | undefined;
+  onEdit?: (() => void) | undefined;
+  onUndo?: (() => void) | undefined;
+  approveLabel?: string | undefined;
   /** ⌘↵ / Esc while focus is inside the card */
-  shortcuts?: boolean;
-  style?: React.CSSProperties;
+  shortcuts?: boolean | undefined;
+  style?: React.CSSProperties | undefined;
 }
 export declare function ApprovalCard(props: ApprovalCardProps): JSX.Element;

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
+import { Relay } from 'nostr-tools/relay';
 import {
   WorkspacePeer,
   keyFromPhrase,
@@ -12,6 +13,9 @@ import {
   uploadFile,
   sha256Buf,
   seal,
+  sign,
+  buildKeyring,
+  makeRekey,
   type KeyPair,
   type WsTransport,
   type KeyedTransport,
@@ -25,6 +29,7 @@ const CODE = 'K7QX2MPD';
 const A = keyFromPhrase(newRecoveryPhrase());
 const B = keyFromPhrase(newRecoveryPhrase());
 const C = keyFromPhrase(newRecoveryPhrase());
+const D = keyFromPhrase(newRecoveryPhrase());
 
 let relay: TestRelay;
 let transport: KeyedTransport;
@@ -158,13 +163,14 @@ describe('nostr transport', () => {
       expect(e.created_at).toBeLessThanOrEqual(now);
       expect(e.created_at).toBeGreaterThan(now - 7_200 - 10);
     }
-    const [pub, longer] = relay.stored.filter((e) => e.tags[0][1] === k.tag);
-    const toB = relay.stored.find((e) => e.tags[0][1] === k.inbox(B.pub));
-    const toA = relay.stored.find((e) => e.tags[0][1] === k.inbox(A.pub));
-    expect(pub && toA && toB).toBeTruthy();
-    expect(new Set([pub.pubkey, toA?.pubkey, toB?.pubkey]).size).toBe(3);
+    const tagOf = (e: { tags: string[][] }) => e.tags[0]?.[1];
+    const [pub, longer] = relay.stored.filter((e) => tagOf(e) === k.tag);
+    const toB = relay.stored.find((e) => tagOf(e) === k.inbox(B.pub));
+    const toA = relay.stored.find((e) => tagOf(e) === k.inbox(A.pub));
+    if (!pub || !longer || !toA || !toB) throw new Error('expected two public and two private copies on the relay');
+    expect(new Set([pub.pubkey, toA.pubkey, toB.pubkey]).size).toBe(3);
     expect(pub.content.length).toBe(longer.content.length); // length hidden within a size bucket
-    expect(toA?.content.length).toBe(toB?.content.length);
+    expect(toA.content.length).toBe(toB.content.length);
   });
 
   it('ignores a workspace with the same code but a different key', async () => {
@@ -338,6 +344,18 @@ describe('files in relay workspaces', () => {
   }
   const read = (b: ArrayBuffer | null) => (b ? new TextDecoder().decode(b) : null);
 
+  it('report a download it could not store on this device', async () => {
+    const a = await join(A);
+    const f = await attach('kept elsewhere');
+    a.publish({ t: 'ch.create', b: { id: 'general', name: 'general' } });
+    a.publish({ t: 'msg', ch: 'general', b: { text: 'here', files: [f] } });
+    const b = await join(B, transport, { ...memStore().store, putBlob: () => Promise.reject(new Error('quota exceeded')) });
+    await until(() => b.state.msgs.size === 1);
+    expect(await b.fetchFile(f.id)).toBeNull();
+    expect(errors).toEqual([`Couldn't download file ${f.id}: quota exceeded`]);
+    errors = [];
+  });
+
   it('reach members who join after the sender left, without WebRTC', async () => {
     const a = await join(A);
     const f = await attach('the plan');
@@ -405,5 +423,149 @@ describe('workspace peer', () => {
     b.receive([{ ...good, id: 'x'.repeat(32) }, { ...good, ws: 'OTHERWSX' }, null, 'junk', { ...good, b: { text: 'tampered' } }]);
     b.receive('not an array');
     expect(b.events.size).toBe(n);
+  });
+});
+
+describe('relay link edge cases', () => {
+  const k = () => workspaceKeys(transport.key);
+  const sees = (p: WorkspacePeer, pub: string) => [...p.presence.values()].some((x) => x.pub === pub);
+  /** A presence event as a member's client would publish it, with the parts under the test's control. */
+  const presence = (who: KeyPair, j: string, t = Date.now(), signer = who) =>
+    finalizeEvent(
+      {
+        kind: 24344,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [['y', k().tag]],
+        content: seal(k().enc, k().tag, JSON.stringify({ j, t, s: sign(signer.sec, `yurt-pres:${CODE}:${t}:${j}`) })),
+      },
+      generateSecretKey(),
+    );
+
+  it('expires members who stop sending heartbeats, but keeps those who need the room or run a bridge', async () => {
+    const timing = { beatMs: 100, presenceTtlMs: 800, sweepMs: 100 };
+    const b = await join(B, transport, memStore().store, { timing });
+    const a = await join(A, transport, memStore().store, { timing });
+    const c = await join(C, transport, memStore().store, { timing, isBridge: true });
+    const d = await join(D, transport, memStore().store, { timing });
+    await until(() => [A, C, D].every((x) => sees(b, x.pub)));
+    a.setPresence({ st: 'away', rtc: true }); // in a huddle: keeps beating
+    c.setPresence({ st: 'away' }); // a bridge: keeps beating
+    d.setPresence({ st: 'away' }); // just away: goes quiet
+    await until(() => !sees(b, D.pub), 5_000);
+    expect(sees(b, A.pub) && sees(b, C.pub)).toBe(true);
+  });
+
+  it('ignores stale, forged and malformed presence, and drops malformed fields from the rest', async () => {
+    const b = await join(B);
+    const r = await Relay.connect(relay.url);
+    const real = JSON.stringify({ pub: C.pub, st: 'online' });
+    await r.publish(presence(C, real, Date.now() - 10 * 60_000)); // stale (or replayed)
+    await r.publish(presence(C, real, Date.now(), D)); // signed by someone else
+    await r.publish(presence(C, 'not json'));
+    await r.publish(presence(C, JSON.stringify({ pub: 7 })));
+    // Valid, with fields of the wrong type: once read straight into the UI, `'x' in "a string"` threw there.
+    await r.publish(presence(D, JSON.stringify({ pub: D.pub, st: 'busy', agents: 'not a map', typing: 5 })));
+    await until(() => sees(b, D.pub));
+    expect(sees(b, C.pub)).toBe(false);
+    expect([...b.presence.values()].find((x) => x.pub === D.pub)).toEqual({ pub: D.pub, st: 'online', agents: undefined, typing: undefined });
+    r.close();
+  });
+
+  it('ignores junk under the workspace tag and wrappers addressed to other pairs', async () => {
+    const tag = k().tag;
+    const sealed = (x: string) => seal(k().enc, tag, x);
+    relay.stored.push(
+      rawEvent('not sealed for us', tag),
+      rawEvent(sealed('not json'), tag),
+      rawEvent(sealed('42'), tag),
+      rawEvent(sealed(JSON.stringify({ a: C.pub, to: D.pub, c: 'x' })), k().inbox(B.pub)),
+      finalizeEvent(
+        {
+          kind: 4344,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [
+            ['p', 'x'],
+            ['y', tag],
+          ],
+          content: sealed(JSON.stringify(makeEvent(A, { ws: CODE, t: 'ws.create', b: { name: 'Tagged twice' } }))),
+        },
+        generateSecretKey(),
+      ),
+    );
+    const b = await join(B);
+    await until(() => b.state.name === 'Tagged twice');
+    expect(b.events.size).toBe(1);
+  });
+
+  it('reports a sync mark it could not save', async () => {
+    await join(A, transport, {
+      ...memStore().store,
+      saveMark: () => Promise.reject('disk full'),
+    });
+    await until(() => errors.includes("Couldn't save the sync mark: disk full"));
+    errors = [];
+    // A store that throws on the spot (IndexedDB does while closing) still surfaces as a failed sync, never unhandled.
+    await join(B, transport, {
+      ...memStore().store,
+      saveMark: () => {
+        throw new Error('database closing');
+      },
+    });
+    await until(() => errors.includes('Relay sync failed: database closing'));
+    errors = [];
+  });
+
+  it('works with a store that keeps no sync mark', async () => {
+    const { load, save } = memStore().store;
+    const a = await join(A, transport, { load, save });
+    a.publish({ t: 'ws.create', b: { name: 'No marks' } });
+    await until(() => a.queued.size === 0);
+  });
+
+  it('opens no relay link when left while reading the sync mark', async () => {
+    const gate: { release?: () => void } = {};
+    const p = peer(A, transport, { ...memStore().store, loadMark: () => new Promise<number>((r) => (gate.release = () => r(0))) });
+    const started = p.start();
+    await until(() => gate.release !== undefined);
+    p.leave();
+    gate.release?.();
+    await started;
+    expect(p.connected).toBe(false);
+    expect(p['data']).toBeNull();
+  });
+
+  it('catches up on what it missed after the relay connection drops and comes back', async () => {
+    const b = await join(B, transport, memStore().store, { timing: { sweepMs: 100 } });
+    relay.dropClients();
+    await until(() => !b.connected, 5_000);
+    // Written while B was cut off (through another connection): only a backfill brings it.
+    relay.stored.push(rawEvent(seal(k().enc, k().tag, JSON.stringify(makeEvent(A, { ws: CODE, t: 'ws.create', b: { name: 'Missed it' } }))), k().tag));
+    await until(() => b.state.name === 'Missed it', 25_000); // nostr-tools reconnects after 10 s
+  }, 30_000);
+
+  it('runs one backfill at a time, even when checks come faster than a slow relay answers', async () => {
+    await useRelay({ delayMs: 300 });
+    relay.stored.push(rawEvent(seal(k().enc, k().tag, JSON.stringify(makeEvent(A, { ws: CODE, t: 'ws.create', b: { name: 'Slow' } }))), k().tag));
+    const s = memStore();
+    const b = await join(B, transport, s.store, { timing: { sweepMs: 10 } });
+    await until(() => b.state.name === 'Slow' && s.mark() > 0);
+  });
+
+  it('writes with a rotation that becomes valid later, which needs no new keys', async () => {
+    const a = await join(A);
+    a.publish({ t: 'ws.create', b: { name: 'W' } });
+    const b = await join(B);
+    const c = await join(C);
+    // B isn't an admin yet: its rotation reaches A and C, but doesn't count.
+    const { key, body } = makeRekey(buildKeyring(transport.key, [], [], B), B, [A.pub, C.pub]);
+    b.publish({ t: 'rekey', b: body });
+    await until(() => [a, c].every((p) => p['ring']?.keys.has(key)));
+    expect(a.inviteKey).toBe(transport.key);
+    // Made admin, B's rotation counts: everyone writes with the key they already hold.
+    a.publish({ t: 'role', b: { target: B.pub, admin: true } });
+    await until(() => [a, b, c].every((p) => p.inviteKey === key));
+    a.publish({ t: 'ws.create', b: { name: 'ignored: the name is set' } });
+    const m = c.publish({ t: 'profile', b: { name: 'Cy' } });
+    await until(() => a.events.has(m.id));
   });
 });

@@ -1,11 +1,9 @@
 import type { Ev } from '../types';
-import type { TAction, TRoom } from '../peer';
-import type { DataLink, LinkHost, Presence } from '../transport';
+import type { TAction, TCtx, TRoom } from '../peer';
+import type { DataLink, LinkHost, LinkTiming, Presence } from '../transport';
 import { visibleTo } from '../events';
-import { summarize, diffDays, idsByDays, reconcile, type Summary } from '../sync';
-import { isObj } from '../util';
-
-type SyncMsg = { k: 'sum'; s: Summary } | { k: 'ids'; d: Record<string, string[]> } | { k: 'want'; ids: string[] };
+import { summarize, diffDays, idsByDays, reconcile } from '../sync';
+import { PresenceSchema, SyncMsgSchema, parseOr, type SyncMsg } from '../schemas';
 
 /**
  * Events and presence straight between online peers over the Trystero room. History exists
@@ -17,27 +15,28 @@ export class TrysteroData implements DataLink {
   private ev: TAction<Ev[]>;
   private sync: TAction<SyncMsg>;
   private pres: TAction<Presence>;
-  private me: Presence | null = null;
+  private me: Presence;
   private beat: ReturnType<typeof setInterval>;
 
   constructor(
     private host: LinkHost,
     room: TRoom,
+    presence: Presence,
+    timing?: Partial<LinkTiming>,
   ) {
+    this.me = presence;
     this.ev = room.makeAction<Ev[]>('ev');
     this.sync = room.makeAction<SyncMsg>('sync');
     this.pres = room.makeAction<Presence>('pres');
-    this.ev.onMessage = (evs, { peerId }) => {
-      if (this.member(peerId)) host.receive(evs);
-    };
-    this.sync.onMessage = (m, { peerId }) => this.onSync(m, peerId);
-    this.pres.onMessage = (p, { peerId }) => {
-      const who = this.member(peerId);
-      if (!who || !isObj(p) || p.pub !== who.pub) return;
+    this.ev.onMessage = this.fromMember((evs) => host.receive(evs));
+    this.sync.onMessage = this.fromMember((m, who, peerId) => this.onSync(m, who, peerId));
+    this.pres.onMessage = this.fromMember((raw, who, peerId) => {
+      const p = parseOr(PresenceSchema, raw);
+      if (!p || p.pub !== who.pub) return;
       this.presence.set(peerId, p);
       host.changed();
-    };
-    this.beat = setInterval(() => this.me && this.broadcast(this.pres, this.me), 30_000);
+    });
+    this.beat = setInterval(() => this.broadcast(this.pres, this.me), timing?.beatMs ?? 30_000);
   }
 
   get connected() {
@@ -69,7 +68,7 @@ export class TrysteroData implements DataLink {
     // Count them as online right away; their own presence message refines it.
     this.presence.set(peerId, { pub, st: 'online' });
     this.sync.send({ k: 'sum', s: summarize(this.host.visibleFor(pub)) }, { target: peerId });
-    if (this.me) this.pres.send(this.me, { target: peerId });
+    this.pres.send(this.me, { target: peerId });
     // The sync just started hands them whatever of my queue they may see (public events, or
     // private ones they're a party to); nothing else in the queue got any closer to delivery.
     const { events, queued } = this.host;
@@ -90,10 +89,18 @@ export class TrysteroData implements DataLink {
     this.presence.clear();
   }
 
-  /** The handshaked peer's identity, unless it's banned. */
-  private member(peerId: string): { pub: string } | null {
-    const who = this.host.peers.get(peerId);
-    return who && !this.host.isBanned(who.pub) ? who : null;
+  /**
+   * A message handler that only runs for handshaked, unbanned members. Trystero delivers only from
+   * peers that passed our handshake, and the peer drops banned ones as it learns of the ban, so this
+   * is defence in depth against a change in either.
+   */
+  private fromMember(f: (data: unknown, who: { pub: string }, peerId: string) => void) {
+    return (data: unknown, { peerId }: TCtx) => {
+      const who = this.host.peers.get(peerId);
+      /* v8 ignore next -- unreachable while Trystero honours the handshake (see above) */
+      if (!who || this.host.isBanned(who.pub)) return;
+      f(data, who, peerId);
+    };
   }
 
   private targets(want: (pub: string) => boolean): string[] {
@@ -111,25 +118,22 @@ export class TrysteroData implements DataLink {
     for (let i = 0; i < evs.length; i += 100) this.ev.send(evs.slice(i, i + 100), { target: peerId });
   }
 
-  private onSync(m: unknown, peerId: string) {
-    const who = this.member(peerId);
-    if (!who || !isObj(m)) return;
+  private onSync(raw: unknown, who: { pub: string }, peerId: string) {
+    const m = parseOr(SyncMsgSchema, raw);
+    if (!m) return;
     const { events } = this.host;
     const vis = this.host.visibleFor(who.pub);
-    if (m.k === 'sum' && isObj(m.s)) {
-      const days = diffDays(summarize(vis), m.s as Summary);
+    if (m.k === 'sum') {
+      const days = diffDays(summarize(vis), m.s);
       if (days.length) this.sync.send({ k: 'ids', d: idsByDays(vis, days) }, { target: peerId });
-    } else if (m.k === 'ids' && isObj(m.d)) {
-      const { want, give } = reconcile(vis, m.d as Record<string, string[]>, (id) => events.has(id));
+    } else if (m.k === 'ids') {
+      const { want, give } = reconcile(vis, m.d, (id) => events.has(id));
       if (want.length) this.sync.send({ k: 'want', ids: want }, { target: peerId });
-      this.sendEvents(
-        give.flatMap((id) => events.get(id) ?? []),
-        peerId,
-      );
-    } else if (m.k === 'want' && Array.isArray(m.ids)) {
+      this.sendEvents(give, peerId);
+    } else {
       this.sendEvents(
         m.ids.flatMap((id) => {
-          const e = typeof id === 'string' ? events.get(id) : undefined;
+          const e = events.get(id);
           return e && visibleTo(e, who.pub) ? [e] : [];
         }),
         peerId,

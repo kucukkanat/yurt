@@ -14,7 +14,7 @@ export function normalizeCode(input: string): string | null {
   const s = input
     .trim()
     .replace(/^.*#\/w\//, '')
-    .split('/')[0]
+    .replace(/\/[\s\S]*$/, '')
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
   if (s.length !== 8) return null;

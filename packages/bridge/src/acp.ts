@@ -1,59 +1,33 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
+import * as v from 'valibot';
+import { parseOr } from '@yurt/protocol';
 import { log } from './log';
 import { VERSION } from './version';
+import { InitializeResultSchema, RpcErrorSchema, RpcMessageSchema, SessionUpdateSchema, type AcpUpdate, type RpcMessage } from './schemas';
+
+export type { AcpUpdate } from './schemas';
 
 /** Minimal Agent Client Protocol client: JSON-RPC 2.0, newline-delimited, over the agent's stdio. */
-export interface AcpUpdate {
-  sessionUpdate: string;
-  content?: { type: string; text?: string };
-  toolCallId?: string;
-  title?: string;
-  kind?: string;
-  status?: string;
-  entries?: { content: string; status: string }[];
-}
-
-/** A JSON-RPC message from the agent, checked only as far as routing needs; fields stay untrusted. */
-interface RpcMessage {
-  id?: unknown;
-  method?: unknown;
-  params?: unknown;
-  result?: unknown;
-  error?: unknown;
-}
-
-export const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
-const str = (x: unknown): string | undefined => (typeof x === 'string' ? x : undefined);
-const isRpcId = (x: unknown): x is number | string => typeof x === 'number' || typeof x === 'string';
-
-/** A `session/update` notification's payload, or null when it isn't one. */
-function parseUpdate(params: unknown): { sessionId: string; update: AcpUpdate } | null {
-  if (!isRecord(params) || !isRecord(params.update)) return null;
-  const u = params.update;
-  const sessionUpdate = str(u.sessionUpdate);
-  if (!sessionUpdate) return null;
-  const content = isRecord(u.content) ? { type: str(u.content.type) ?? '', text: str(u.content.text) } : undefined;
-  return {
-    sessionId: str(params.sessionId) ?? '',
-    update: { sessionUpdate, content, toolCallId: str(u.toolCallId), title: str(u.title), kind: str(u.kind), status: str(u.status) },
-  };
-}
-
 class AcpError extends Error {
   constructor(
     msg: string,
     public code?: number,
-    public data?: unknown,
   ) {
     super(msg);
   }
 }
 
+interface Pending {
+  res: (v: unknown) => void;
+  rej: (e: Error) => void;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
 export class AcpConnection {
   private proc: ChildProcessByStdio<Writable, Readable, Readable>;
   private nextId = 1;
-  private pending = new Map<number, { res: (v: unknown) => void; rej: (e: Error) => void }>();
+  private pending = new Map<number, Pending>();
   private buf = '';
   closed = false;
   onUpdate?: (sessionId: string, u: AcpUpdate) => void;
@@ -86,13 +60,16 @@ export class AcpConnection {
   private fail(e: Error) {
     if (this.closed) return;
     this.closed = true;
-    for (const p of this.pending.values()) p.rej(e);
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer);
+      p.rej(e);
+    }
     this.pending.clear();
     this.onExit?.();
   }
 
   private write(msg: object) {
-    if (this.closed) return;
+    if (this.closed) return; // e.g. an approval answered after the agent died
     const s = JSON.stringify({ jsonrpc: '2.0', ...msg });
     log('acp', this.label, '→ ' + s);
     this.proc.stdin.write(s + '\n');
@@ -105,62 +82,63 @@ export class AcpConnection {
       this.buf = this.buf.slice(i + 1);
       if (!line) continue;
       log('acp', this.label, '← ' + line);
-      let m: unknown;
+      let raw: unknown;
       try {
-        m = JSON.parse(line);
+        raw = JSON.parse(line);
       } catch {
         continue; // not JSON-RPC (agents sometimes print banners); the line is logged above
       }
-      if (isRecord(m)) this.handle(m);
+      const m = parseOr(RpcMessageSchema, raw);
+      if (m) void this.handle(m);
     }
   }
 
   private async handle(m: RpcMessage) {
-    if (m.id != null && !m.method) return this.settle(m);
+    if (m.id != null && m.method === undefined) return this.settle(m.id, m);
     if (m.method === 'session/update') {
-      const u = parseUpdate(m.params);
+      const u = parseOr(SessionUpdateSchema, m.params);
       if (u) this.onUpdate?.(u.sessionId, u.update);
       return;
     }
-    if (!isRpcId(m.id)) return;
+    // A notification we don't handle needs no answer.
+    if (m.id == null) return;
     try {
       if (m.method === 'session/request_permission' && this.onPermission) this.write({ id: m.id, result: await this.onPermission(m.params) });
-      else this.write({ id: m.id, error: { code: -32601, message: 'Yurt bridge does not provide ' + String(m.method) } });
+      else this.write({ id: m.id, error: { code: -32601, message: 'Yurt bridge does not provide ' + m.method } });
     } catch (e) {
       this.write({ id: m.id, error: { code: -32603, message: (e instanceof Error && e.message) || 'failed' } });
     }
   }
 
-  /** A response to one of our requests. */
-  private settle(m: RpcMessage) {
-    const p = typeof m.id === 'number' ? this.pending.get(m.id) : undefined;
-    if (!p || typeof m.id !== 'number') return;
-    this.pending.delete(m.id);
+  /** A response to one of our requests (ids we send are numbers; anything else isn't ours). */
+  private settle(id: number | string, m: RpcMessage) {
+    const p = typeof id === 'number' ? this.pending.get(id) : undefined;
+    if (!p || typeof id !== 'number') return;
+    this.pending.delete(id);
+    clearTimeout(p.timer);
     if (m.error == null) return p.res(m.result);
-    const err = isRecord(m.error) ? m.error : {};
-    p.rej(new AcpError(str(err.message) || 'ACP error', typeof err.code === 'number' ? err.code : undefined, err.data));
+    const err = v.parse(RpcErrorSchema, m.error);
+    p.rej(new AcpError(err.message || 'ACP error', err.code));
   }
 
-  /** Sends a request. `T` is the result shape the ACP spec promises for `method`; agents are trusted that far. */
-  request<T = unknown>(method: string, params: unknown, timeoutMs = 0): Promise<T> {
+  /** Sends a request; callers parse the parts of the result they rely on. */
+  request(method: string, params: unknown, timeoutMs = 0): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error('Agent is not running'));
     const id = this.nextId++;
-    return new Promise<T>((res, rej) => {
-      this.pending.set(id, { res: (v) => res(v as T), rej });
-      this.write({ id, method, params });
+    return new Promise((res, rej) => {
+      const p: Pending = { res, rej };
       if (timeoutMs)
-        setTimeout(() => {
-          if (this.pending.delete(id)) rej(new Error(method + ' timed out'));
+        p.timer = setTimeout(() => {
+          this.pending.delete(id);
+          rej(new Error(method + ' timed out'));
         }, timeoutMs);
+      this.pending.set(id, p);
+      this.write({ id, method, params });
     });
   }
 
-  notify(method: string, params: unknown) {
-    if (!this.closed) this.write({ method, params });
-  }
-
   async initialize() {
-    return this.request<{ protocolVersion: number; agentCapabilities?: unknown; authMethods?: { id: string; name: string; description?: string }[] }>(
+    const r = await this.request(
       'initialize',
       {
         protocolVersion: 1,
@@ -169,16 +147,13 @@ export class AcpConnection {
       },
       60_000,
     );
+    return v.parse(InitializeResultSchema, r);
   }
 
   /** Stops the agent and rejects in-flight requests: the exit event arrives after `closed` is set, so it can't. */
   close() {
     this.fail(new Error('Agent was stopped'));
-    try {
-      this.proc.kill();
-    } catch {
-      /* gone */
-    }
+    this.proc.kill();
   }
 }
 

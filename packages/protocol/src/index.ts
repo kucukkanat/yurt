@@ -11,3 +11,4 @@ export * from './invite';
 export * from './transport';
 export * from './blossom';
 export * from './rekey';
+export * from './schemas';

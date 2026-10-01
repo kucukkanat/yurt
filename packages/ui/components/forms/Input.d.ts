@@ -3,15 +3,15 @@ import type { IconName } from '../core/Icon';
 
 /** Text field with label, hint and inline error. Focus = cobalt border + 3px soft halo; error slides in with an icon. */
 export interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size'> {
-  label?: string;
-  hint?: string;
+  label?: string | undefined;
+  hint?: string | undefined;
   /** Replaces hint, sets aria-invalid, announced via role=alert */
-  error?: string;
-  optional?: boolean;
-  iconLeft?: IconName;
+  error?: string | undefined;
+  optional?: boolean | undefined;
+  iconLeft?: IconName | undefined;
   /** Trailing slot — a Kbd, unit, or IconButton */
-  suffix?: React.ReactNode;
-  size?: 'sm' | 'md' | 'lg';
+  suffix?: React.ReactNode | undefined;
+  size?: 'sm' | 'md' | 'lg' | undefined;
 }
 export declare function Input(props: InputProps): JSX.Element;
 

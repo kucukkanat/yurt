@@ -1,16 +1,18 @@
-import type { Ev, FileRef, MsgBody, RekeyBody } from './types';
-import { makeEvent, verifyEvent, visibleTo, MAX_FILE_BYTES, type EventFields } from './events';
+import type { Ev, FileRef, RekeyBody } from './types';
+import { makeEvent, verifyEvent, visibleTo, isEventShape, MAX_FILE_BYTES, type EventFields } from './events';
 import { reduce, members, parseRekey, type WsState, type ValidRekey } from './reduce';
 import { buildKeyring, makeRekey, type Keyring } from './rekey';
-import { APP_ID, roomIdFor } from './codes';
 import { sign, verify, type KeyPair } from './crypto';
-import { workspaceKeys } from './seal';
 import { downloadFile } from './blossom';
-import { LEGACY_TRYSTERO, signalingOf, type WsTransport } from './invite';
-import type { DataLink, LinkHost, LinkKeys, Presence } from './transport';
+import { LEGACY_TRYSTERO, type WsTransport } from './invite';
+import { roomConfig } from './room';
+
+type NostrTransport = Extract<WsTransport, { kind: 'nostr' }>;
+import type { DataLink, LinkHost, LinkKeys, LinkTiming, Presence } from './transport';
 import { TrysteroData } from './transports/trystero';
 import { NostrData } from './transports/nostr';
-import { isObj, errMsg } from './util';
+import { errMsg } from './util';
+import { FileIdSchema, HandshakeSchema, HuddleStateSchema, parseBody, parseOr, type HuddleState } from './schemas';
 
 export type { Presence } from './transport';
 
@@ -20,7 +22,10 @@ export interface TCtx {
   metadata?: unknown;
 }
 export interface TAction<T = unknown> {
-  send(data: T, opts?: { target?: string | string[] | null; metadata?: unknown; onProgress?: (p: number, c: { peerId: string }) => void }): Promise<unknown>;
+  send(
+    data: T,
+    opts?: { target?: string | string[] | null | undefined; metadata?: unknown; onProgress?: ((p: number, c: { peerId: string }) => void) | undefined },
+  ): Promise<unknown>;
   onMessage: ((data: T, ctx: TCtx) => void) | null;
   onReceiveProgress?: ((p: number, ctx: TCtx) => void) | null;
 }
@@ -41,13 +46,6 @@ export interface TJoinCallbacks {
 }
 export type JoinRoom = (config: Record<string, unknown>, roomId: string, callbacks?: TJoinCallbacks) => TRoom;
 
-export interface HuddleState {
-  ch: string | null;
-  mic: boolean;
-  cam: boolean;
-  screen: boolean;
-}
-
 export interface PeerStore {
   load(ws: string): Promise<Ev[]>;
   save(evs: Ev[]): Promise<void>;
@@ -63,44 +61,43 @@ export interface WorkspacePeerOpts {
   kp: KeyPair;
   selfId: string;
   /** How events travel. Defaults to Trystero. */
-  transport?: WsTransport;
+  transport?: WsTransport | undefined;
   /**
    * WebRTC room. Required for Trystero, which carries events, files and huddles over it. Relay
    * workspaces use it only for voice and video, and only when given (the user's opt-in). Must be the
    * Trystero strategy named by `signalingOf(transport).kind`.
    */
-  joinRoom?: JoinRoom;
+  joinRoom?: JoinRoom | undefined;
   store: PeerStore;
-  creator?: string | null;
+  creator?: string | null | undefined;
   /** This device's WebRTC config: turnConfig / rtcConfig / rtcPolyfill. Signaling servers come from the transport. */
-  rtc?: Record<string, unknown>;
-  isBridge?: boolean;
+  rtc?: Record<string, unknown> | undefined;
+  isBridge?: boolean | undefined;
   /** Relay workspaces leave the WebRTC room after it's been unneeded this long. Default 60 s. */
-  roomIdleMs?: number;
+  roomIdleMs?: number | undefined;
   /** Trystero workspaces stop looking for a file among peers after this long. Default 60 s. */
-  fetchMs?: number;
+  fetchMs?: number | undefined;
+  /** Shorter heartbeats, retries and expiry (tests); defaults suit real use. */
+  timing?: Partial<LinkTiming> | undefined;
   /** Allow `http://` Blossom servers in file refs (local development and tests). Otherwise only `https://` ones are fetched. */
-  devFileServers?: boolean;
-  onState?(s: WsState, fresh: Ev[]): void;
-  onPeers?(): void;
-  onCreator?(pub: string): void;
-  onBlob?(id: string): void;
-  onBlobProgress?(id: string, p: number): void;
-  onJoinError?(d: unknown): void;
+  devFileServers?: boolean | undefined;
+  onState?: ((s: WsState, fresh: Ev[]) => void) | undefined;
+  onPeers?: (() => void) | undefined;
+  onCreator?: ((pub: string) => void) | undefined;
+  onBlob?: ((id: string) => void) | undefined;
+  onBlobProgress?: ((id: string, p: number) => void) | undefined;
+  onJoinError?: ((d: unknown) => void) | undefined;
   /** Failures the user should hear about: relays refusing an event, a failed save or download. */
   onError(msg: string): void;
   /** Relay workspaces: the key new events are written with changed (a rotation); invite links should use it. */
-  onKey?(key: string): void;
+  onKey?: ((key: string) => void) | undefined;
 }
 
 const hsMsg = (code: string, from: string, to: string) => `yurt-hs:${code}:${from}>${to}`;
 
-/** A peer's handshake reply, if it has the expected shape (it comes from an unauthenticated peer). */
-function handshakeOf(d: unknown): { pub: string; sig: string } | null {
-  if (!isObj(d)) return null;
-  const { pub, sig } = d;
-  return typeof pub === 'string' && typeof sig === 'string' ? { pub, sig } : null;
-}
+/** File bytes as WebRTC delivers them. Never a SharedArrayBuffer, which a Blob couldn't take. */
+type Bytes = ArrayBuffer | Uint8Array<ArrayBuffer>;
+const isBytes = (d: unknown): d is Bytes => d instanceof ArrayBuffer || (d instanceof Uint8Array && d.buffer instanceof ArrayBuffer);
 const FUTURE_SKEW_MS = 10 * 60 * 1000;
 const NO_PRESENCE: ReadonlyMap<string, Presence> = new Map();
 const NO_RELAYS: ReadonlyMap<string, boolean> = new Map();
@@ -147,9 +144,16 @@ export class WorkspacePeer implements LinkHost {
   private fresh: Ev[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  /** How events travel: relays, or the Trystero room (which then always exists). */
+  private readonly link: { kind: 'nostr'; t: NostrTransport } | { kind: 'trystero'; join: JoinRoom };
+  private readonly roomIdleMs: number;
 
   constructor(public o: WorkspacePeerOpts) {
-    if ((o.transport ?? LEGACY_TRYSTERO).kind === 'trystero' && !o.joinRoom) throw new Error('Trystero workspaces need joinRoom');
+    const t = o.transport ?? LEGACY_TRYSTERO;
+    if (t.kind === 'nostr') this.link = { kind: 'nostr', t };
+    else if (o.joinRoom) this.link = { kind: 'trystero', join: o.joinRoom };
+    else throw new Error('Trystero workspaces need joinRoom');
+    this.roomIdleMs = o.roomIdleMs ?? ROOM_IDLE_MS;
     this.state = reduce(o.code, [], { creator: o.creator });
     this.myPresence = { pub: o.kp.pub, st: 'online', bridge: o.isBridge || undefined };
   }
@@ -229,12 +233,16 @@ export class WorkspacePeer implements LinkHost {
     return { all: [...ring.keys.values()].map((k) => ({ key: k.key, epoch: k.epoch })), write: ring.write.key };
   }
 
-  private updateKeyring() {
-    const t = this.transport;
-    if (t.kind !== 'nostr') return;
+  /** The key chain from the invite key and every rekey in the log (see rekey.ts). */
+  private ringFor(t: NostrTransport): Keyring {
     const raw = [...this.events.values()].flatMap((e) => (e.t === 'rekey' ? [parseRekey(e)] : [])).filter((r): r is ValidRekey => !!r);
+    return buildKeyring(t.key, raw, this.state.rekeys, this.o.kp);
+  }
+
+  private updateKeyring() {
+    if (this.link.kind !== 'nostr') return;
     const before = this.ring;
-    const ring = buildKeyring(t.key, raw, this.state.rekeys, this.o.kp);
+    const ring = this.ringFor(this.link.t);
     this.ring = ring;
     if (before && before.write.key === ring.write.key && before.keys.size === ring.keys.size) return;
     this.data?.setKeys?.(this.linkKeys(ring));
@@ -251,54 +259,38 @@ export class WorkspacePeer implements LinkHost {
     if (this.closed) return;
     for (const e of evs) this.events.set(e.id, e);
     this.recompute();
-    const t = this.transport;
-    if (t.kind === 'nostr') {
+    if (this.link.kind === 'nostr') {
+      const { t } = this.link;
       const { code, store } = this.o;
       const mark = (await store.loadMark?.(code)) ?? 0;
       if (this.closed) return;
       const saveMark = (sec: number) => {
         store.saveMark?.(code, sec).catch((err: unknown) => this.error(`Couldn't save the sync mark: ${errMsg(err)}`));
       };
-      const ring = this.ring;
-      if (!ring) throw new Error('keyring missing after the first recompute'); // unreachable: recompute builds it
-      this.data = new NostrData(this, { keys: this.linkKeys(ring), relays: t.relays, mark, saveMark });
-      if (this.o.joinRoom) this.roomTimer = setInterval(() => this.syncRoom(), Math.min(5_000, this.o.roomIdleMs ?? 5_000));
-    } else {
-      const room = this.joinMedia();
-      if (room) this.data = new TrysteroData(this, room);
-    }
-    this.data?.setPresence(this.myPresence);
+      this.data = new NostrData(this, { keys: this.linkKeys(this.ringFor(t)), relays: t.relays, mark, saveMark, presence: this.myPresence, timing: this.o.timing });
+      if (this.o.joinRoom) this.roomTimer = setInterval(() => this.syncRoom(), Math.min(5_000, this.roomIdleMs));
+    } else this.data = new TrysteroData(this, this.joinMedia(this.link.join), this.myPresence, this.o.timing);
     // Events published while the link was still starting (e.g. ws.create right after creation).
-    const early = [...this.queued].flatMap((id) => this.events.get(id) ?? []);
-    if (early.length) this.data?.send(early);
+    const early = [...this.events.values()].filter((e) => this.queued.has(e.id));
+    if (early.length) this.data.send(early);
   }
 
   /** The WebRTC room, joining it now if needed (huddles call this). Null when this peer has no WebRTC. */
   ensureRoom(): TRoom | null {
-    return this.room ?? this.joinMedia();
+    if (this.room) return this.room;
+    const join = this.o.joinRoom;
+    return join ? this.joinMedia(join) : null;
   }
 
-  private joinMedia(): TRoom | null {
-    const { code, kp, selfId, joinRoom } = this.o;
-    if (!joinRoom) return null;
-    const t = this.transport;
-    // Keyed workspaces derive every room credential from the 256-bit key; only legacy ones use the code.
-    const key = t.kind === 'nostr' ? this.inviteKey : t.key;
-    const signal = signalingOf(t);
-    const k = key ? workspaceKeys(key) : null;
-    const config = {
-      appId: k?.app ?? APP_ID,
-      password: k?.password ?? code,
-      ...(this.o.rtc || {}),
-      // Signaling servers belong to the workspace (members must share them); relay workspaces use
-      // their own relays, so no other relay learns anything about them. Empty = strategy defaults.
-      ...(signal.urls.length ? { relayConfig: { urls: [...signal.urls] } } : {}),
-    };
-    const room = joinRoom(config, k?.room ?? roomIdFor(code), {
+  private joinMedia(joinRoom: JoinRoom): TRoom {
+    const { code, kp, selfId } = this.o;
+    const { config, roomId } = roomConfig(code, this.transport, this.inviteKey, this.o.rtc);
+    const room = joinRoom(config, roomId, {
       onJoinError: (d: unknown) => this.o.onJoinError?.(d),
       onPeerHandshake: async (peerId, send, receive) => {
         await send({ pub: kp.pub, sig: sign(kp.sec, hsMsg(code, selfId, peerId)) });
-        const data = handshakeOf((await receive()).data);
+        // From an unauthenticated peer: checked for shape, then for a valid signature by the key it claims.
+        const data = parseOr(HandshakeSchema, (await receive()).data);
         if (!data || !verify(data.pub, hsMsg(code, peerId, selfId), data.sig)) throw new Error('identity check failed');
         if (this.state.bans.has(data.pub)) throw new Error('banned');
         this.pendingPub.set(peerId, data.pub);
@@ -307,8 +299,9 @@ export class WorkspacePeer implements LinkHost {
     this.room = room;
     const hud = room.makeAction<HuddleState>('hud');
     this.hud = hud;
-    hud.onMessage = (h, { peerId }) => {
-      if (!this.peers.has(peerId)) return;
+    hud.onMessage = (raw: unknown, { peerId }) => {
+      const h = parseOr(HuddleStateSchema, raw);
+      if (!h || !this.peers.has(peerId)) return;
       this.huddles.set(peerId, h);
       this.onHuddle?.(peerId, h);
       this.o.onPeers?.();
@@ -316,6 +309,7 @@ export class WorkspacePeer implements LinkHost {
     if (!this.lazyRoom) this.files = this.wireFiles(room);
     room.onPeerJoin = (peerId) => {
       const pub = this.pendingPub.get(peerId);
+      /* v8 ignore next -- Trystero activates a peer only after our onPeerHandshake resolved, which recorded its key */
       if (!pub) return;
       this.pendingPub.delete(peerId);
       if (this.isBanned(pub)) {
@@ -358,8 +352,8 @@ export class WorkspacePeer implements LinkHost {
     const file = room.makeAction<ArrayBuffer>('file');
     fwant.onMessage = (m: unknown, { peerId }) => {
       const who = this.peers.get(peerId);
-      const id = isObj(m) ? m.id : undefined;
-      if (!who || typeof id !== 'string' || !this.canSeeFile(id, who.pub)) return;
+      const id = parseOr(FileIdSchema, m)?.id;
+      if (!who || id === undefined || !this.canSeeFile(id, who.pub)) return;
       this.o.store
         .getBlob?.(id)
         .then((b) => {
@@ -368,23 +362,23 @@ export class WorkspacePeer implements LinkHost {
         .catch((err: unknown) => this.error(`Couldn't serve file ${id}: ${errMsg(err)}`));
     };
     file.onMessage = (data: unknown, { peerId, metadata }) => {
-      const id = isObj(metadata) ? metadata.id : undefined;
+      const id = parseOr(FileIdSchema, metadata)?.id;
       const who = this.peers.get(peerId);
       // Only files I'm fetching, from a member who may see them: anything else is a peer pushing bytes at me.
-      if (!who || typeof id !== 'string' || !this.fetching.has(id) || !this.canSeeFile(id, who.pub)) return;
-      if (!(data instanceof ArrayBuffer || ArrayBuffer.isView(data)) || data.byteLength > MAX_FILE_BYTES) return;
-      // Browsers deliver an ArrayBuffer; Node (the bridge, via werift) delivers a Uint8Array.
-      const buf = data instanceof ArrayBuffer ? data : new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice().buffer;
-      this.storeFile(id, buf).catch((err: unknown) => this.error(`Couldn't store file ${id}: ${errMsg(err)}`));
+      if (!who || id === undefined || !this.fetching.has(id) || !this.canSeeFile(id, who.pub)) return;
+      if (!isBytes(data) || data.byteLength > MAX_FILE_BYTES) return;
+      this.storeFile(id, data).catch((err: unknown) => this.error(`Couldn't store file ${id}: ${errMsg(err)}`));
     };
     file.onReceiveProgress = (p, { metadata }) => {
-      const id = isObj(metadata) ? metadata.id : undefined;
-      if (typeof id === 'string' && this.fetching.has(id)) this.o.onBlobProgress?.(id, p);
+      const id = parseOr(FileIdSchema, metadata)?.id;
+      if (id !== undefined && this.fetching.has(id)) this.o.onBlobProgress?.(id, p);
     };
     return { fwant, file };
   }
 
-  private async storeFile(id: string, buf: ArrayBuffer) {
+  private async storeFile(id: string, data: Bytes) {
+    // Browsers deliver an ArrayBuffer; Node (the bridge, via werift) a Uint8Array. A Blob takes either and copies it.
+    const buf = await new Blob([data]).arrayBuffer();
     if ((await this.o.store.getBlob?.(id)) || (await sha256Buf(buf)) !== id) return;
     await this.gotBlob(id, buf);
   }
@@ -430,7 +424,7 @@ export class WorkspacePeer implements LinkHost {
       this.ensureRoom();
     } else if (this.room) {
       if (!this.idleSince) this.idleSince = now;
-      else if (now - this.idleSince >= (this.o.roomIdleMs ?? ROOM_IDLE_MS)) this.leaveMedia();
+      else if (now - this.idleSince >= this.roomIdleMs) this.leaveMedia();
     }
   }
 
@@ -459,10 +453,8 @@ export class WorkspacePeer implements LinkHost {
     if (!Array.isArray(evs)) return;
     const fresh: Ev[] = [];
     const now = Date.now();
-    for (const e of evs as unknown[]) {
-      if (!e || typeof e !== 'object') continue;
-      const ev = e as Ev;
-      if (typeof ev.id !== 'string' || this.events.has(ev.id) || ev.ws !== this.o.code) continue;
+    for (const ev of evs as unknown[]) {
+      if (!isEventShape(ev) || this.events.has(ev.id) || ev.ws !== this.o.code) continue;
       if (ev.to && ev.a !== this.me && ev.to !== this.me) continue;
       if (ev.ts > now + FUTURE_SKEW_MS) continue;
       if (!verifyEvent(ev)) continue;
@@ -476,7 +468,9 @@ export class WorkspacePeer implements LinkHost {
   }
 
   private save(evs: Ev[]) {
-    this.o.store.save(evs).catch((err: unknown) => this.error(`Couldn't save ${evs.length} event(s) on this device: ${errMsg(err)}`));
+    // Async, so a store that throws synchronously (IndexedDB does while its connection closes) is
+    // reported like any failed save instead of aborting receive() or publish() halfway.
+    void (async () => this.o.store.save(evs))().catch((err: unknown) => this.error(`Couldn't save ${evs.length} event(s) on this device: ${errMsg(err)}`));
   }
 
   delivered(ids: readonly string[]) {
@@ -508,8 +502,7 @@ export class WorkspacePeer implements LinkHost {
   private fileRef(id: string, pub: string): FileRef | null {
     for (const e of this.events.values()) {
       if (e.t !== 'msg' || !visibleTo(e, pub)) continue;
-      const files = (e.b as MsgBody | undefined)?.files;
-      const f = Array.isArray(files) ? files.find((x) => x?.id === id) : undefined;
+      const f = parseBody('msg', e.b)?.files.find((x) => x.id === id);
       if (f) return f;
     }
     return null;

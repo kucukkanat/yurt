@@ -9,16 +9,16 @@ export interface TabItem { id: string; label: React.ReactNode; icon?: IconName; 
  */
 export interface TabsProps {
   items: TabItem[];
-  value?: string;
-  defaultValue?: string;
-  onChange?: (id: string) => void;
+  value?: string | undefined;
+  defaultValue?: string | undefined;
+  onChange?: ((id: string) => void) | undefined;
   /** pill = segmented control on sunken track; underline = page-level section tabs */
-  variant?: 'pill' | 'underline';
-  size?: 'sm' | 'md';
+  variant?: 'pill' | 'underline' | undefined;
+  size?: 'sm' | 'md' | undefined;
   /** Stretch tabs to fill the container (still scrolls if they can't fit) */
-  fullWidth?: boolean;
+  fullWidth?: boolean | undefined;
   /** aria-label for the tablist */
-  label?: string;
-  style?: React.CSSProperties;
+  label?: string | undefined;
+  style?: React.CSSProperties | undefined;
 }
 export declare function Tabs(props: TabsProps): JSX.Element;

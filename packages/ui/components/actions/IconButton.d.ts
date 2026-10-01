@@ -5,12 +5,12 @@ import type { IconName } from '../core/Icon';
 export interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   icon: IconName;
   label: string;
-  variant?: 'primary' | 'agent' | 'secondary' | 'ghost' | 'inverse' | 'danger';
-  size?: 'sm' | 'md' | 'lg';
+  variant?: 'primary' | 'agent' | 'secondary' | 'ghost' | 'inverse' | 'danger' | undefined;
+  size?: 'sm' | 'md' | 'lg' | undefined;
   /** Toggled-on state (sets aria-pressed). */
-  active?: boolean;
-  round?: boolean;
-  disabled?: boolean;
+  active?: boolean | undefined;
+  round?: boolean | undefined;
+  disabled?: boolean | undefined;
   /** Forwarded to the element, e.g. `data-testid`. */
   [attr: `data-${string}`]: string | undefined;
 }

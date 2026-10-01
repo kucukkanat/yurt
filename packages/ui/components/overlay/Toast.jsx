@@ -10,9 +10,26 @@ const T = {
   danger: { icon: 'circle-alert', c: 'var(--red-500)' },
 };
 
+/** Calls `onClose` after `duration` ms of not being paused (hover or focus); 0 = stays until closed. */
+function useAutoClose(duration, paused, onClose) {
+  const close = React.useRef(onClose);
+  close.current = onClose;
+  const left = React.useRef(duration);
+  React.useEffect(() => {
+    if (duration <= 0 || paused) return undefined;
+    const started = Date.now();
+    const timer = setTimeout(() => close.current?.(), left.current);
+    return () => {
+      clearTimeout(timer);
+      left.current -= Date.now() - started;
+    };
+  }, [duration, paused]);
+}
+
 export function Toast({ tone = 'neutral', title, description, actionLabel, onAction, onClose, duration = 0, icon, style }) {
   const t = T[tone] || T.neutral;
   const [paused, setPaused] = React.useState(false);
+  useAutoClose(duration, paused, onClose);
   return (
     <div
       role="status"
@@ -79,9 +96,9 @@ export function Toast({ tone = 'neutral', title, description, actionLabel, onAct
         />
       )}
       {duration > 0 && (
+        // Purely visual: closing runs on a timer. Reduced motion sets animations to 0 ms, which would close it at once.
         <span
           aria-hidden="true"
-          onAnimationEnd={() => onClose?.()}
           style={{
             position: 'absolute',
             left: 0,

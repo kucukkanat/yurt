@@ -1,22 +1,23 @@
-import type { Ev, EvType, AgentBody, AgentTriggers, AgentPlacement, ProfileBody, FileRef, TraceStep, ApprovalReq } from './types';
+import type { Ev, EvType, AgentBody, AgentTriggers, AgentPlacement, FileRef, TraceStep, ApprovalReq } from './types';
 import { EDIT_WINDOW_MS, sortEvents, isEventShape } from './events';
+import { parseBody, type ParsedBody } from './schemas';
 import { isPrivateChannel, dmChannel, parseGuestDm } from './codes';
 
 export interface Msg {
   id: string;
   ch: string;
   a: string;
-  ag?: string;
+  ag?: string | undefined;
   ts: number;
-  to?: string;
+  to?: string | undefined;
   /** A thread reply that is also listed in the channel. */
-  alsoInChannel?: boolean;
+  alsoInChannel?: boolean | undefined;
   text: string;
-  parent?: string;
+  parent?: string | undefined;
   files: FileRef[];
-  trace?: TraceStep[];
-  meta?: string;
-  approval?: ApprovalReq;
+  trace?: TraceStep[] | undefined;
+  meta?: string | undefined;
+  approval?: ApprovalReq | undefined;
   edited: boolean;
   deleted: boolean;
   reactions: Record<string, string[]>; // icon → reactor keys ("pub" or "pub/agentId"); null-prototype, so any icon is a safe key
@@ -42,7 +43,9 @@ export interface Agent extends AgentBody {
   owner: string;
   ts: number;
 }
-export interface Profile extends ProfileBody {
+export interface Profile {
+  name: string;
+  handle: string; // '' when the member set none
   ts: number;
 }
 
@@ -83,51 +86,6 @@ export function emptyState(ws: string): WsState {
   };
 }
 
-// Bodies are attacker-controlled JSON, so every field is read through these: wrong types are ignored, never coerced.
-type Obj = Readonly<Record<string, unknown>>;
-const obj = (x: unknown): Obj | undefined => (x !== null && typeof x === 'object' && !Array.isArray(x) ? (x as Obj) : undefined);
-const str = (x: unknown): string | undefined => (typeof x === 'string' ? x : undefined);
-const optStr = (x: unknown): boolean => x === undefined || typeof x === 'string';
-const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
-const TRACE_STATUS = new Set(['done', 'error', 'running', 'waiting', 'skipped']);
-
-function blobRef(x: unknown): FileRef['blob'] | false {
-  if (x === undefined) return undefined;
-  const o = obj(x);
-  if (!o || typeof o.key !== 'string' || typeof o.hash !== 'string' || !Array.isArray(o.servers) || !o.servers.every((u) => typeof u === 'string')) return false;
-  return { key: o.key, hash: o.hash, servers: o.servers as string[] };
-}
-function fileRef(x: unknown): FileRef | undefined {
-  const o = obj(x);
-  const blob = o && blobRef(o.blob);
-  if (!o || blob === false || typeof o.id !== 'string' || typeof o.name !== 'string' || typeof o.type !== 'string' || !num(o.size)) return undefined;
-  return { id: o.id, name: o.name, size: o.size, type: o.type, ...(blob ? { blob } : {}) };
-}
-function traceStep(x: unknown): TraceStep | undefined {
-  const o = obj(x);
-  if (
-    !o ||
-    typeof o.title !== 'string' ||
-    typeof o.status !== 'string' ||
-    !TRACE_STATUS.has(o.status) ||
-    !optStr(o.tool) ||
-    !optStr(o.detail) ||
-    !(o.ms === undefined || num(o.ms))
-  )
-    return undefined;
-  return { title: o.title, status: o.status as TraceStep['status'], tool: str(o.tool), ms: num(o.ms) ? o.ms : undefined, detail: str(o.detail) };
-}
-function approvalReq(x: unknown): ApprovalReq | undefined {
-  const o = obj(x);
-  if (!o || typeof o.req !== 'string' || typeof o.title !== 'string' || !optStr(o.kind) || !Array.isArray(o.options)) return undefined;
-  const options = o.options.flatMap((x) => {
-    const p = obj(x);
-    return p && typeof p.id === 'string' && typeof p.name === 'string' && typeof p.kind === 'string' ? [{ id: p.id, name: p.name, kind: p.kind }] : [];
-  });
-  return { req: o.req, title: o.title, kind: str(o.kind), options };
-}
-const list = <T>(x: unknown, f: (y: unknown) => T | undefined): T[] => (Array.isArray(x) ? x.map(f).filter((y): y is T => y !== undefined) : []);
-
 /**
  * Private channels carry their parties in the id, so a message only belongs there when its author is
  * one of them and it's addressed to the other; otherwise a public message could pose as a DM.
@@ -156,7 +114,7 @@ function privateOk(e: Ev, ch: string): boolean {
  * events computes the same state. `creator` pins the creator key (from the invite link, else the
  * one seen on first join: TOFU). Without a pin, the earliest ws.create wins.
  */
-export function reduce(ws: string, events: Ev[], opts: { creator?: string | null } = {}): WsState {
+export function reduce(ws: string, events: Ev[], opts: { creator?: string | null | undefined } = {}): WsState {
   const s = emptyState(ws);
   const evs = sortEvents(events.filter((e) => isEventShape(e) && e.ws === ws));
   s.creator = opts.creator ?? evs.find((e) => e.t === 'ws.create')?.a ?? null;
@@ -177,7 +135,10 @@ export function reduce(ws: string, events: Ev[], opts: { creator?: string | null
         const r = parseRekey(e);
         if (r && everAdmins.has(e.a)) s.rekeys.push(r);
       });
-    else guarded(() => apply(s, e));
+    else {
+      const t = e.t; // narrowed: role, ban, approve and rekey are handled above
+      guarded(() => applyAs(s, e, t));
+    }
   }
   settleApprovals(s, approves);
   return s;
@@ -187,9 +148,8 @@ export function reduce(ws: string, events: Ev[], opts: { creator?: string | null
 function everAdminsOf(creator: string | null, evs: readonly Ev[]): Set<string> {
   const out = new Set(creator ? [creator] : []);
   for (const e of evs) {
-    const b = obj(e.b);
-    const t = str(b?.target);
-    if (e.t === 'role' && e.a === creator && b?.admin === true && t) out.add(t);
+    const b = e.t === 'role' && e.a === creator ? parseBody('role', e.b) : null;
+    if (b?.admin) out.add(b.target);
   }
   return out;
 }
@@ -199,28 +159,19 @@ function settleApprovals(s: WsState, approves: readonly Ev[]) {
   const reqOwners = new Map<string, Set<string>>();
   for (const m of s.msgs.values()) if (m.approval) reqOwners.set(m.approval.req, (reqOwners.get(m.approval.req) ?? new Set()).add(m.a));
   for (const e of approves) {
-    const b = obj(e.b);
-    const req = str(b?.req);
-    const option = str(b?.option);
-    if (req && option !== undefined && !e.ag && reqOwners.get(req)?.has(e.a)) s.approvals.set(req, option);
+    const b = parseBody('approve', e.b);
+    if (b && !e.ag && reqOwners.get(b.req)?.has(e.a)) s.approvals.set(b.req, b.option);
   }
 }
 
-const HEX64 = /^[0-9a-f]{64}$/;
-
 /** A rekey event's body, validated; undefined if malformed. Authority is checked separately. */
 export function parseRekey(e: Ev): ValidRekey | undefined {
-  const b = obj(e.b),
-    keys = obj(b?.keys),
-    history = str(b?.history);
-  if (!b || !keys || history === undefined || !Number.isSafeInteger(b.epoch) || (b.epoch as number) < 1) return;
-  const clean: Record<string, string> = Object.create(null);
-  for (const [pub, k] of Object.entries(keys)) if (HEX64.test(pub) && typeof k === 'string') clean[pub] = k;
-  return { id: e.id, a: e.a, ts: e.ts, epoch: b.epoch as number, keys: clean, history };
+  const b = parseBody('rekey', e.b);
+  return b ? { id: e.id, a: e.a, ts: e.ts, epoch: b.epoch, keys: b.keys, history: b.history } : undefined;
 }
 
 // Every member reduces the same log, so an event that throws would break the workspace for all of
-// them, permanently. The validation above should make this unreachable; this is the backstop.
+// them, permanently. The schemas should make this unreachable; this is the backstop.
 function guarded(f: () => void) {
   try {
     f();
@@ -231,60 +182,98 @@ function guarded(f: () => void) {
 
 /** Only the creator promotes or demotes, and bans admins. Admins ban non-admins, never the creator or themselves. */
 function authority(s: WsState, e: Ev) {
-  const b = obj(e.b);
-  const target = str(b?.target);
-  if (!b || !target || target === s.creator || target === e.a) return;
   if (e.t === 'role') {
-    if (e.a !== s.creator || typeof b.admin !== 'boolean') return;
-    if (b.admin) s.admins.add(target);
-    else s.admins.delete(target);
+    const b = parseBody('role', e.b);
+    if (!b || e.a !== s.creator || b.target === s.creator || b.target === e.a) return;
+    if (b.admin) s.admins.add(b.target);
+    else s.admins.delete(b.target);
     return;
   }
-  if (!s.admins.has(e.a) || typeof b.on !== 'boolean') return;
-  if (s.admins.has(target) && e.a !== s.creator) return;
+  const b = parseBody('ban', e.b);
+  if (!b || b.target === s.creator || b.target === e.a || !s.admins.has(e.a)) return;
+  if (s.admins.has(b.target) && e.a !== s.creator) return;
   if (b.on) {
-    s.bans.add(target);
-    s.admins.delete(target);
-  } else s.bans.delete(target);
+    s.bans.add(b.target);
+    s.admins.delete(b.target);
+  } else s.bans.delete(b.target);
 }
 
-// One handler per event type; each validates its own body (untrusted) and ignores what doesn't fit.
-function onWsCreate(s: WsState, e: Ev, b: Obj) {
-  if (e.a === s.creator && !s.name) s.name = (str(b.name) || 'Workspace').slice(0, 64);
-}
+// One handler per event type that changes state directly, given its body checked against the type's schema.
+type Applied = Exclude<EvType, 'role' | 'ban' | 'approve' | 'rekey'>;
+type Handlers = { [T in Applied]: (s: WsState, e: Ev, b: ParsedBody<T>) => void };
 
-function onProfile(s: WsState, e: Ev, b: Obj) {
-  const name = str(b.name);
-  if (!e.ag && name && optStr(b.handle)) s.profiles.set(e.a, { name: name.slice(0, 64), handle: (str(b.handle) ?? '').slice(0, 32), ts: e.ts });
-}
+const APPLY: Handlers = {
+  'ws.create': (s, e, b) => {
+    if (e.a === s.creator && !s.name) s.name = (b.name || 'Workspace').slice(0, 64);
+  },
+  profile: (s, e, b) => {
+    if (!e.ag) s.profiles.set(e.a, { name: b.name.slice(0, 64), handle: (b.handle ?? '').slice(0, 32), ts: e.ts });
+  },
+  'ch.create': (s, e, b) => {
+    if (!isPrivateChannel(b.id) && !s.channels.has(b.id)) s.channels.set(b.id, { id: b.id, name: b.name.slice(0, 60), topic: b.topic ?? '', ts: e.ts, a: e.a });
+  },
+  'ch.update': (s, _e, b) => {
+    const c = s.channels.get(b.id);
+    if (!c) return;
+    if (b.name) c.name = b.name.slice(0, 60);
+    if (b.topic !== undefined) c.topic = b.topic;
+  },
+  msg: onMsg,
+  edit: (s, e, b) => {
+    const m = editable(s, e, b.target);
+    if (!m) return;
+    m.text = b.text;
+    m.edited = true;
+  },
+  del: (s, e, b) => {
+    const m = editable(s, e, b.target);
+    if (!m) return;
+    m.deleted = true;
+    m.text = '';
+    m.files = [];
+  },
+  react: (s, e, b) => {
+    const m = s.msgs.get(b.target);
+    if (!m || m.deleted) return;
+    const who = reactorKey(e);
+    const set = new Set(Object.hasOwn(m.reactions, b.icon) ? m.reactions[b.icon] : []);
+    if (b.on) set.add(who);
+    else set.delete(who);
+    if (set.size) m.reactions[b.icon] = [...set];
+    else delete m.reactions[b.icon];
+  },
+  pin: (s, _e, b) => {
+    const m = s.msgs.get(b.target);
+    if (!m) return;
+    const set = s.pins.get(m.ch) ?? new Set<string>();
+    if (b.on) set.add(m.id);
+    else set.delete(m.id);
+    s.pins.set(m.ch, set);
+  },
+  agent: (s, e, b) => {
+    s.agents.set(agentKey(e.a, b.id), {
+      id: b.id,
+      name: b.name,
+      handle: b.handle,
+      runtime: b.runtime,
+      model: b.model,
+      replyIn: b.replyIn,
+      removed: b.removed === true || undefined,
+      owner: e.a,
+      ts: e.ts,
+      ...(b.respondTo ? { respondTo: b.respondTo } : {}),
+      ...(b.postIn ? { postIn: b.postIn } : {}),
+      ...(b.discoverable ? { discoverable: true } : {}),
+    });
+  },
+};
 
-function onChannelCreate(s: WsState, e: Ev, b: Obj) {
-  const id = str(b.id),
-    name = str(b.name);
-  if (id && name && optStr(b.topic) && !isPrivateChannel(id) && !s.channels.has(id))
-    s.channels.set(id, { id, name: name.slice(0, 60), topic: str(b.topic) ?? '', ts: e.ts, a: e.a });
-}
-
-function onChannelUpdate(s: WsState, _e: Ev, b: Obj) {
-  const c = s.channels.get(str(b.id) ?? '');
-  const name = str(b.name),
-    topic = str(b.topic);
-  if (c) {
-    if (name) c.name = name.slice(0, 60);
-    if (topic !== undefined) c.topic = topic;
-  }
-}
-
-function onMsg(s: WsState, e: Ev, b: Obj) {
+function onMsg(s: WsState, e: Ev, b: ParsedBody<'msg'>) {
   const ch = e.ch;
-  if (!ch || s.msgs.has(e.id) || !optStr(b.text) || !optStr(b.parent) || !optStr(b.meta)) return;
+  if (!ch || s.msgs.has(e.id)) return;
   if (isPrivateChannel(ch) ? !privateOk(e, ch) : !s.channels.has(ch)) return;
-  const parentId = str(b.parent);
-  const parent = parentId !== undefined ? s.msgs.get(parentId) : undefined;
-  if (parentId !== undefined && (!parent || parent.ch !== ch)) return;
-  const trace = b.trace === undefined ? undefined : list(b.trace, traceStep);
-  // Approval prompts come only from agents to their owner, in the owner's private agent channel.
-  const approval = ch.startsWith('adm:') ? approvalReq(b.approval) : undefined;
+  const parent = b.parent === undefined ? undefined : s.msgs.get(b.parent);
+  if (b.parent !== undefined && parent?.ch !== ch) return;
   const m: Msg = {
     id: e.id,
     ch,
@@ -292,17 +281,18 @@ function onMsg(s: WsState, e: Ev, b: Obj) {
     ag: e.ag,
     ts: e.ts,
     to: e.to,
-    text: str(b.text) ?? '',
+    text: b.text ?? '',
     parent: parent?.id,
-    files: list(b.files, fileRef),
-    trace,
-    meta: str(b.meta),
-    approval,
+    files: b.files,
+    trace: b.trace,
+    meta: b.meta,
+    // Approval prompts come only from agents to their owner, in the owner's private agent channel.
+    approval: ch.startsWith('adm:') ? b.approval : undefined,
     edited: false,
     deleted: false,
     reactions: Object.create(null) as Record<string, string[]>,
     replies: [],
-    ...(parent && b.alsoInChannel === true ? { alsoInChannel: true } : {}),
+    ...(parent && b.alsoInChannel ? { alsoInChannel: true } : {}),
   };
   s.msgs.set(e.id, m);
   if (parent) parent.replies.push(e.id);
@@ -310,88 +300,18 @@ function onMsg(s: WsState, e: Ev, b: Obj) {
   if (!parent || m.alsoInChannel) s.channelMsgs.set(ch, [...(s.channelMsgs.get(ch) ?? []), e.id]);
 }
 
-function onEditOrDelete(s: WsState, e: Ev, b: Obj) {
-  const m = s.msgs.get(str(b.target) ?? '');
-  if (!m || m.deleted || m.a !== e.a || (m.ag || '') !== (e.ag || '')) return;
+/** The message `target`, when `e` may still edit or delete it: its own author (and agent), inside the edit window. */
+function editable(s: WsState, e: Ev, target: string): Msg | undefined {
+  const m = s.msgs.get(target);
+  if (!m || m.deleted || m.a !== e.a || (m.ag || '') !== (e.ag || '')) return undefined;
   // Advisory only: authors choose their own ts, so a late edit can simply claim an early time.
   // Honest clients enforce the window in the UI; this just keeps them consistent with each other.
-  if (e.ts - m.ts > EDIT_WINDOW_MS || e.ts < m.ts) return;
-  if (e.t === 'edit') {
-    const text = str(b.text);
-    if (text === undefined) return;
-    m.text = text;
-    m.edited = true;
-  } else {
-    m.deleted = true;
-    m.text = '';
-    m.files = [];
-  }
+  return e.ts - m.ts > EDIT_WINDOW_MS || e.ts < m.ts ? undefined : m;
 }
 
-function onReact(s: WsState, e: Ev, b: Obj) {
-  const m = s.msgs.get(str(b.target) ?? '');
-  const icon = str(b.icon);
-  if (!m || m.deleted || !icon || icon.length > 64 || typeof b.on !== 'boolean') return;
-  const who = reactorKey(e);
-  const set = new Set(Object.hasOwn(m.reactions, icon) ? m.reactions[icon] : []);
-  if (b.on) set.add(who);
-  else set.delete(who);
-  if (set.size) m.reactions[icon] = [...set];
-  else delete m.reactions[icon];
-}
-
-function onPin(s: WsState, _e: Ev, b: Obj) {
-  const m = s.msgs.get(str(b.target) ?? '');
-  if (!m || typeof b.on !== 'boolean') return;
-  const set = s.pins.get(m.ch) || new Set<string>();
-  if (b.on) set.add(m.id);
-  else set.delete(m.id);
-  s.pins.set(m.ch, set);
-}
-
-function onAgent(s: WsState, e: Ev, b: Obj) {
-  const { id, name, handle, runtime } = b;
-  if (typeof id !== 'string' || !id || typeof handle !== 'string' || !handle || typeof name !== 'string' || typeof runtime !== 'string') return;
-  if (!optStr(b.model) || (b.replyIn !== 'thread' && b.replyIn !== 'channel') || !(b.removed === undefined || typeof b.removed === 'boolean')) return;
-  // Newer fields are optional (older bridges don't send them); wrong types are ignored, never coerced.
-  const flags = <K extends string>(x: unknown, keys: readonly K[]) => {
-    const o = obj(x);
-    return o && keys.every((k) => typeof o[k] === 'boolean') ? (Object.fromEntries(keys.map((k) => [k, o[k] as boolean])) as Record<K, boolean>) : undefined;
-  };
-  const respondTo = flags(b.respondTo, ['mentions', 'replies'] as const);
-  const postIn = flags(b.postIn, ['thread', 'channel'] as const);
-  s.agents.set(agentKey(e.a, id), {
-    id,
-    name,
-    handle,
-    runtime,
-    model: str(b.model),
-    replyIn: b.replyIn,
-    removed: b.removed === true || undefined,
-    owner: e.a,
-    ts: e.ts,
-    ...(respondTo ? { respondTo } : {}),
-    ...(postIn ? { postIn } : {}),
-    ...(b.discoverable === true ? { discoverable: true } : {}),
-  });
-}
-
-const APPLY: Partial<Record<EvType, (s: WsState, e: Ev, b: Obj) => void>> = {
-  'ws.create': onWsCreate,
-  profile: onProfile,
-  'ch.create': onChannelCreate,
-  'ch.update': onChannelUpdate,
-  msg: onMsg,
-  edit: onEditOrDelete,
-  del: onEditOrDelete,
-  react: onReact,
-  pin: onPin,
-  agent: onAgent,
-};
-
-function apply(s: WsState, e: Ev) {
-  const b = obj(e.b);
-  if (b) APPLY[e.t]?.(s, e, b);
+function applyAs<T extends Applied>(s: WsState, e: Ev, t: T) {
+  const b = parseBody(t, e.b);
+  if (b) APPLY[t](s, e, b);
 }
 
 /** People who have introduced themselves and aren't banned. */
@@ -404,7 +324,8 @@ export function liveAgents(s: WsState): Agent[] {
 }
 
 export function mentions(text: string): string[] {
-  return [...text.matchAll(/(^|[^\w])@([a-z0-9][\w-]{0,31})/gi)].map((m) => m[2].toLowerCase());
+  // Lookbehind instead of a capture group, so every match is the handle itself (no optional groups to unpack).
+  return (text.match(/(?<!\w)@[a-z0-9][\w-]{0,31}/gi) ?? []).map((h) => h.slice(1).toLowerCase());
 }
 
 /** An agent's triggers and placement, with older agents (only `replyIn`) filled in the way they behaved. */

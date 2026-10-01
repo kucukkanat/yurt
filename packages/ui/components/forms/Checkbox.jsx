@@ -5,12 +5,13 @@ import { ChoiceLabel, HIDDEN_INPUT, useChoice } from './Choice.jsx';
 export function Checkbox({ label, description, checked, defaultChecked, indeterminate = false, onChange, disabled, id, style, ...rest }) {
   const { fid, on, setInner, focus, focusHandlers } = useChoice({ id, checked, defaultChecked });
   const ref = React.useRef(null);
+  // `indeterminate` is a DOM property with no attribute; the input is always mounted when this runs.
   React.useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate;
+    ref.current.indeterminate = indeterminate;
   }, [indeterminate]);
   const filled = on || indeterminate;
   return (
-    <ChoiceLabel htmlFor={fid} disabled={disabled} style={{ minHeight: 24, ...style }} label={label} description={description}>
+    <ChoiceLabel disabled={disabled} style={{ minHeight: 24, ...style }} label={label} description={description}>
       <input
         ref={ref}
         id={fid}

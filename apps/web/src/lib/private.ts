@@ -23,6 +23,12 @@ export function privateTarget(ch: string, me: string): string | undefined {
   return parseGuestDm(ch)?.owner;
 }
 
+/** `{ to }` for a private event in `ch`, or nothing for a public channel (events carry no `to` key at all then). */
+export function addressed(ch: string, me: string): { to?: string } {
+  const to = privateTarget(ch, me);
+  return to ? { to } : {};
+}
+
 /** "answers @mentions and replies · posts in thread + channel · discoverable" */
 export function prefsLine(p: AgentPrefs): string {
   const when = [p.respondTo.mentions && '@mentions', p.respondTo.replies && 'replies'].filter(Boolean).join(' and ') || 'only private chats';

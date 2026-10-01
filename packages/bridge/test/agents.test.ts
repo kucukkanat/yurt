@@ -58,10 +58,10 @@ describe('AgentHost sessions', () => {
       () => {},
     );
     const s = await host['session'](agent(d));
-    const run = () => s.conn.request<{ permission: { outcome: string } }>('session/prompt', { sessionId: s.id, prompt: [] }, 10_000);
-    expect((await run()).permission.outcome).toBe('selected');
+    const run = () => s.conn.request('session/prompt', { sessionId: s.id, prompt: [] }, 10_000);
+    expect(await run()).toMatchObject({ permission: { outcome: 'selected' } });
     cfg.agents[0] = agent(d, { autoApprove: [] }); // what agent.save does: a new object
-    expect((await run()).permission.outcome).toBe('cancelled'); // asks the owner; no run in progress → cancelled
+    expect(await run()).toMatchObject({ permission: { outcome: 'cancelled' } }); // asks the owner; no run in progress → cancelled
     host.drop('scout-1');
   });
 

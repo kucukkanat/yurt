@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  WorkspacePeer,
+  type WorkspacePeer,
   keyFromPhrase,
   newRecoveryPhrase,
   newNostrTransport,
@@ -20,7 +20,7 @@ import { startRelay, type TestRelay } from '../../protocol/test/relay';
 import type { Config } from '../src/config';
 import type { Workspaces } from '../src/workspaces';
 import { placement, repliedAgents } from '../src/agents';
-import { fakeCopilotOnPath, memStore, startBridge, tempDir, until } from './helpers';
+import { answersOf, askAgent, fakeCopilotOnPath, memberPeer, must, startBridge, tempDir, until } from './helpers';
 
 const CODE = 'TRIG2RSX';
 const agentCfg = (p: Partial<AgentConfig> = {}): AgentConfig => ({
@@ -114,32 +114,17 @@ describe('agent triggers, end to end', () => {
   let restorePath: () => void;
   let owner = '';
 
-  const member = async (kp: KeyPair) => {
-    const p = new WorkspacePeer({
-      code: CODE,
-      kp,
-      selfId: kp.pub.slice(0, 20),
-      transport,
-      store: memStore().store,
+  const member = (kp: KeyPair) =>
+    memberPeer(kp, CODE, transport, {
       onError: (m) => {
         throw new Error(m);
       },
     });
-    await p.start();
-    await until(() => p.connected, 8000);
-    return p;
-  };
   const set = (p: Partial<AgentConfig>) => {
-    cfg.agents[0] = { ...cfg.agents[0], ...p };
+    cfg.agents[0] = { ...must(cfg.agents[0], 'the test agent'), ...p };
   };
-  const answers = (p: WorkspacePeer, ch: string) => [...p.state.msgs.values()].filter((m) => m.ag === 'scout-1' && m.ch === ch);
-  /** Sends `text` and waits for the agent's answer to it (answers are queued, so earlier triggers answer first). */
-  const ask = async (p: WorkspacePeer, ch: string, text: string, extra: { parent?: string; to?: string } = {}) => {
-    const before = answers(p, ch).length;
-    const e = p.publish({ t: 'msg', ch, to: extra.to, b: { text, parent: extra.parent } });
-    await until(() => answers(p, ch).length > before, 15_000);
-    return { trigger: e, answers: answers(p, ch).slice(before) };
-  };
+  const answers = (p: WorkspacePeer, ch: string) => answersOf(p, 'scout-1', ch);
+  const ask = (p: WorkspacePeer, ch: string, text: string, extra: { parent?: string; to?: string } = {}) => askAgent(p, 'scout-1', ch, text, extra);
   const pidOf = (m: Msg) => /pid=(\d+)/.exec(m.text)?.[1];
 
   beforeAll(async () => {
@@ -152,7 +137,7 @@ describe('agent triggers, end to end', () => {
     b.publish({ t: 'profile', b: { name: 'Bea', handle: 'bea' } });
     c = await member(C);
     c.publish({ t: 'profile', b: { name: 'Cy', handle: 'cy' } });
-    ({ cfg, ws } = await startBridge(home, (c) => c.agents.push(agentCfg({ workdir }))));
+    ({ cfg, ws } = await startBridge(home, { prepare: (c) => c.agents.push(agentCfg({ workdir })) }));
     owner = ws.me ?? '';
     ws.join(CODE, 'Triggers', B.pub, ['scout-1'], transport);
     await until(() => !!b.state.agents.size && !!c.state.agents.size, 10_000);
@@ -167,15 +152,12 @@ describe('agent triggers, end to end', () => {
   });
 
   it('announces its settings, and answers a mention in a thread by default', async () => {
-    const announced = [...b.state.agents.values()][0];
+    const announced = must([...b.state.agents.values()][0], 'the announced agent');
     expect([announced.replyIn, agentPrefs(announced)]).toEqual([
       'thread',
       { respondTo: { mentions: true, replies: false }, postIn: { thread: true, channel: false }, discoverable: false },
     ]);
-    const {
-      trigger,
-      answers: [a],
-    } = await ask(b, 'general', 'hey @scout');
+    const { trigger, answer: a } = await ask(b, 'general', 'hey @scout');
     expect(a.parent).toBe(trigger.id);
     expect(a.alsoInChannel).toBeUndefined();
     expect(a.text).toContain('which mentions you');
@@ -183,12 +165,9 @@ describe('agent triggers, end to end', () => {
 
   it('posts at the top for "channel", and in both places for "thread + channel"', async () => {
     set({ postIn: { thread: false, channel: true } });
-    expect((await ask(b, 'general', '@scout top please')).answers[0].parent).toBeUndefined();
+    expect((await ask(b, 'general', '@scout top please')).answer.parent).toBeUndefined();
     set({ postIn: { thread: true, channel: true } });
-    const {
-      trigger,
-      answers: [a],
-    } = await ask(b, 'general', '@scout both please');
+    const { trigger, answer: a } = await ask(b, 'general', '@scout both please');
     expect([a.parent, a.alsoInChannel]).toEqual([trigger.id, true]);
     expect(b.state.channelMsgs.get('general')).toContain(a.id);
     set({ postIn: { thread: true, channel: false } });
@@ -202,7 +181,7 @@ describe('agent triggers, end to end', () => {
     const { answers: got } = await ask(b, 'general', 'a follow-up without any mention', { parent: root.id });
     // Queued in order, so had the mention been answered, that answer would have come first.
     expect(got.map((m) => m.parent)).toEqual([root.id]);
-    expect(got[0].text).toContain('a follow-up in a thread you take part in');
+    expect(must(got[0]).text).toContain('a follow-up in a thread you take part in');
     expect(answers(b, 'general').some((m) => m.parent === ignored.id)).toBe(false);
     set({ respondTo: { mentions: true, replies: false } });
   }, 40_000);
@@ -215,22 +194,14 @@ describe('agent triggers, end to end', () => {
     // a moment after the raw event arrives.
     await until(() => !!ws.peers.get(CODE)?.state.msgs.has(unanswered.id));
     set({ discoverable: true });
-    const {
-      answers: [toB],
-    } = await ask(b, chB, 'now?', { to: owner });
+    const { answer: toB } = await ask(b, chB, 'now?', { to: owner });
     expect(answers(b, chB)).toHaveLength(1); // the message sent while not discoverable stays unanswered
     expect(b.state.msgs.get(unanswered.id)).toBeDefined();
     expect([toB.to, toB.parent]).toEqual([B.pub, undefined]);
     expect(toB.text).toContain('from Bea');
-    const {
-      answers: [toC],
-    } = await ask(c, chC, 'me too', { to: owner });
-    const {
-      answers: [toB2],
-    } = await ask(b, chB, 'again', { to: owner });
-    const {
-      answers: [inRoom],
-    } = await ask(b, 'general', '@scout and in the room?');
+    const { answer: toC } = await ask(c, chC, 'me too', { to: owner });
+    const { answer: toB2 } = await ask(b, chB, 'again', { to: owner });
+    const { answer: inRoom } = await ask(b, 'general', '@scout and in the room?');
     expect(pidOf(toB2)).toBe(pidOf(toB)); // B keeps their session
     expect(new Set([pidOf(toB), pidOf(toC), pidOf(inRoom)]).size).toBe(3);
     expect(answers(c, chB)).toEqual([]); // C never sees B's conversation

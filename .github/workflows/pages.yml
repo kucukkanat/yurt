@@ -31,7 +31,9 @@ jobs:
       - run: bun install --frozen-lockfile
       # Types (tests and e2e included), dead code (Knip), duplication (jscpd, max 2%), lint + format (Biome).
       - run: bun run quality
-      # Protocol + bridge unit/integration tests (the bridge suite also builds and starts dist/cli.js).
+      # Component and app tests run in real Chromium (Vitest browser mode); same Playwright version as e2e.
+      - run: bunx playwright install --with-deps chromium
+      # Unit + integration tests with 100% coverage thresholds (the bridge suite also builds and starts dist/cli.js).
       - run: bun run test
       - run: bun run build
       - run: bun run bridge:build

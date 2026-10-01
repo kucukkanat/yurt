@@ -1,5 +1,7 @@
 import { BRIDGE_URL, type BridgeState, type FromBridge, type ToBridge } from '@yurt/protocol';
+import { parseBridgeMessage } from './bridgeMessages';
 import { kv } from './db';
+import { loadToken } from './stored';
 
 export type BridgeStatus = 'off' | 'missing' | 'connecting' | 'unpaired' | 'connected';
 
@@ -11,6 +13,8 @@ type Listener = (status: BridgeStatus, state: BridgeState | null) => void;
  */
 class BridgeClient {
   status: BridgeStatus = 'off';
+  /** Where the bridge listens. Tests point it at a bridge on another port, so they never touch the user's own. */
+  url = BRIDGE_URL;
   state: BridgeState | null = null;
   private ws: WebSocket | null = null;
   private token: string | null = null;
@@ -31,7 +35,7 @@ class BridgeClient {
 
   async autoStart(identity: { phrase: string; name: string; handle: string }) {
     this.identity = identity;
-    this.token = (await kv.get<string>('bridgeToken')) || null;
+    this.token = loadToken(await kv.get('bridgeToken'));
     if (this.token) this.start();
   }
 
@@ -45,21 +49,19 @@ class BridgeClient {
     this.set(this.status === 'off' ? 'connecting' : this.status);
     let ws: WebSocket;
     try {
-      ws = new WebSocket(BRIDGE_URL);
+      ws = new WebSocket(this.url);
     } catch {
       return this.later();
     }
     this.ws = ws;
     ws.onopen = () => {
       this.retry = 2000;
-      this.send({ t: 'hello', token: this.token || undefined });
+      this.send(this.token ? { t: 'hello', token: this.token } : { t: 'hello' });
     };
+    // Anything that isn't a known message (another program on the port, a newer bridge) is ignored.
     ws.onmessage = (e) => {
-      try {
-        this.onMsg(JSON.parse(e.data));
-      } catch {
-        /* ignore */
-      }
+      const m = parseBridgeMessage(e.data);
+      if (m) this.onMsg(m);
     };
     ws.onclose = () => {
       this.ws = null;
@@ -104,8 +106,9 @@ class BridgeClient {
       this.set('connected');
       if (this.identity) this.send({ t: 'identity', ...this.identity });
     } else if (m.t === 'state') {
+      // The bridge sends state only to paired browsers (after hello or pairing), so this session is connected.
       this.state = m.state;
-      this.set(this.status === 'unpaired' ? 'unpaired' : 'connected');
+      this.set('connected');
     }
   }
 

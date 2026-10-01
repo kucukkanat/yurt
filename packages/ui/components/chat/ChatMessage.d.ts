@@ -13,46 +13,46 @@ export declare function Reaction(props: ReactionProps): JSX.Element;
  * Hover/focus reveals the action bar (react, reply in thread, edit/delete for your own).
  */
 export interface ChatMessageProps {
-  author: AvatarProps & { handle?: string };
-  time?: string;
+  author: AvatarProps & { handle?: string | undefined };
+  time?: string | undefined;
   /** Plain text; @handles become Mention chips using `members` */
-  text?: string;
-  children?: React.ReactNode;
-  members?: MentionMember[];
-  meId?: string;
-  onMention?: (m: MentionMember) => void;
-  tone?: 'default' | 'agent' | 'mention';
+  text?: string | undefined;
+  children?: React.ReactNode | undefined;
+  members?: MentionMember[] | undefined;
+  meId?: string | undefined;
+  onMention?: ((m: MentionMember) => void) | undefined;
+  tone?: 'default' | 'agent' | 'mention' | undefined;
   /** Same author as the previous message: hides avatar + header */
-  continued?: boolean;
-  edited?: boolean;
-  pinned?: boolean;
+  continued?: boolean | undefined;
+  edited?: boolean | undefined;
+  pinned?: boolean | undefined;
   /** queued = written offline, sends on reconnect */
-  status?: 'sent' | 'queued' | 'failed';
-  reactions?: Array<{ icon: IconName; count: number; mine?: boolean }>;
-  onReact?: (icon: IconName) => void;
+  status?: 'sent' | 'queued' | 'failed' | undefined;
+  reactions?: Array<{ icon: IconName; count: number; mine?: boolean | undefined }> | undefined;
+  onReact?: ((icon: IconName) => void) | undefined;
   /** Adds Pin/Unpin to the action bar */
-  onPin?: () => void;
+  onPin?: (() => void) | undefined;
   /** Replaces the body, e.g. an inline edit field; hides the action bar */
-  editor?: React.ReactNode;
-  replies?: { count: number; last?: string; people?: AvatarProps[] };
-  onReplies?: () => void;
-  attachments?: Array<{ name: string; size?: string; kind?: 'file' | 'image' }>;
+  editor?: React.ReactNode | undefined;
+  replies?: { count: number; last?: string | undefined; people?: AvatarProps[] | undefined } | undefined;
+  onReplies?: (() => void) | undefined;
+  attachments?: Array<{ name: string; size?: string | undefined; kind?: 'file' | 'image' | undefined }> | undefined;
   /** Agent messages: compact trace chip */
-  activity?: AgentActivityProps;
-  actions?: boolean;
-  onReply?: () => void;
-  onEdit?: () => void;
-  onDelete?: () => void;
+  activity?: AgentActivityProps | undefined;
+  actions?: boolean | undefined;
+  onReply?: (() => void) | undefined;
+  onEdit?: (() => void) | undefined;
+  onDelete?: (() => void) | undefined;
   /** Label for the Edit action, e.g. with the time left to edit. */
-  editLabel?: string;
+  editLabel?: string | undefined;
   /** The author can no longer edit or delete: Edit and Delete become one muted lock that calls `onLocked`. */
-  locked?: boolean;
-  lockedLabel?: string;
-  onLocked?: () => void;
-  onAuthor?: () => void;
+  locked?: boolean | undefined;
+  lockedLabel?: string | undefined;
+  onLocked?: (() => void) | undefined;
+  onAuthor?: (() => void) | undefined;
   /** Jumped-to / search hit */
-  highlighted?: boolean;
-  style?: React.CSSProperties;
+  highlighted?: boolean | undefined;
+  style?: React.CSSProperties | undefined;
 }
 export declare function ChatMessage(props: ChatMessageProps): JSX.Element;
 export declare function UnreadDivider(props: { label?: string }): JSX.Element;

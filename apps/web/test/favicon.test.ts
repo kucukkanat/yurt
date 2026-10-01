@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { CALM, badgeText, isCalm, sameState } from '../src/lib/favicon';
+import { fc } from './fuzz';
 
 describe('favicon state', () => {
   it('is calm only when there is nothing to show', () => {
@@ -19,5 +20,26 @@ describe('favicon state', () => {
     expect(badgeText(9)).toBe('9');
     expect(badgeText(10)).toBe('9+');
     expect(badgeText(250)).toBe('9+');
+  });
+});
+
+describe('favicon state, for any state', () => {
+  const state = fc.record({ mentions: fc.nat(), unread: fc.boolean(), inCall: fc.boolean(), callNearby: fc.boolean(), offline: fc.boolean() });
+
+  it('is calm exactly when it equals the calm state, and compares like structural equality', () => {
+    fc.assert(
+      fc.property(state, state, (a, b) => {
+        expect(isCalm(a)).toBe(sameState(a, CALM));
+        expect(sameState(a, b)).toBe(JSON.stringify(a) === JSON.stringify(b));
+      }),
+    );
+  });
+
+  it('badges any count in at most two characters', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 1e9 }), (n) => {
+        expect(badgeText(n).length).toBeLessThanOrEqual(2);
+      }),
+    );
   });
 });

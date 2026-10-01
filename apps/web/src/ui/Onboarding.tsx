@@ -3,6 +3,7 @@ import { Button, Input, Checkbox, Icon } from '@yurt/ui';
 import { newRecoveryPhrase, keyFromPhrase, fingerprint, isValidPhrase, normalizePhrase, formatCode } from '@yurt/protocol';
 import { useApp } from '../store';
 import { handleFrom } from '../lib/format';
+import { copy } from './Settings';
 
 // Stable, so React calls it once when the field appears: the user just chose to restore, so typing goes there.
 const focusOnMount = (el: HTMLElement | null) => el?.focus();
@@ -24,7 +25,7 @@ export function Onboarding() {
   const finish = () => useApp.getState().createIdentity(phrase, name.trim(), h);
 
   return (
-    <div style={{ height: '100%', overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, boxSizing: 'border-box' }}>
+    <main style={{ height: '100%', overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, boxSizing: 'border-box' }}>
       <div style={{ width: '100%', maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 28, animation: 'ag-rise var(--dur-slow) var(--ease-out)' }}>
         <span style={{ font: '700 24px/1 var(--font-display)', letterSpacing: '-0.05em', color: 'var(--text-strong)' }}>yurt</span>
         {step === 'hello' && (
@@ -179,7 +180,7 @@ export function Onboarding() {
                 </li>
               ))}
             </ol>
-            <Button variant="secondary" iconLeft="copy" onClick={() => navigator.clipboard?.writeText(phrase)}>
+            <Button variant="secondary" iconLeft="copy" onClick={() => copy(phrase, 'Recovery phrase')}>
               Copy phrase
             </Button>
             <Checkbox checked={saved} onChange={(e) => setSaved(e.target.checked)} label="I saved my recovery phrase somewhere safe" />
@@ -192,6 +193,6 @@ export function Onboarding() {
           </div>
         )}
       </div>
-    </div>
+    </main>
   );
 }

@@ -1,7 +1,9 @@
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { Button, IconButton, Icon, Input, Select, Switch, Checkbox, Badge, Avatar, Toast, Kbd } from '@yurt/ui';
-import { fingerprint, formatCode, slug, TOOL_KINDS, type BridgeState, type FromBridge, type ToBridge, type AgentConfig, type ToolKind, type RuntimeStatus } from '@yurt/protocol';
+import { fingerprint, formatCode, TOOL_KINDS, type ToBridge, type AgentConfig, type ToolKind, type RuntimeStatus } from '@yurt/protocol';
+import { parseFromBridge, type PageLog, type PageState } from '../../src/schemas';
+import { autoHandle, canSave, isSaved } from './agentForm';
 
 declare global {
   interface Window {
@@ -10,10 +12,10 @@ declare global {
 }
 
 const WEB_APP = 'https://kucukkanat.github.io/yurt/';
-type Log = Extract<FromBridge, { t: 'log' }>;
+type Log = PageLog;
 
-function useBridge() {
-  const [state, setState] = useState<BridgeState | null>(null);
+function useBridge(url: string, token: string | undefined) {
+  const [state, setState] = useState<PageState | null>(null);
   const [logs, setLogs] = useState<Log[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [up, setUp] = useState(false);
@@ -22,14 +24,16 @@ function useBridge() {
     let dead = false;
     let t: ReturnType<typeof setTimeout>;
     const open = () => {
-      const s = new WebSocket(`ws://${location.host}/ws`);
+      const s = new WebSocket(url);
       ws.current = s;
       s.onopen = () => {
         setUp(true);
-        s.send(JSON.stringify({ t: 'hello', token: window.__YURT_ADMIN__ }));
+        s.send(JSON.stringify({ t: 'hello', token }));
       };
       s.onmessage = (e) => {
-        const m = JSON.parse(e.data) as FromBridge;
+        // The bridge is local, but its messages are still checked before the page relies on them.
+        const m = parseFromBridge(String(e.data));
+        if (!m) return;
         if (m.t === 'state') setState(m.state);
         else if (m.t === 'log') setLogs((l) => [...l.slice(-399), m]);
         else if (m.t === 'error') setError(m.msg);
@@ -45,7 +49,8 @@ function useBridge() {
       clearTimeout(t);
       ws.current?.close();
     };
-  }, []);
+  }, [url, token]);
+  // While reconnecting, the last state stays on screen (so a form keeps its input); sends then go nowhere.
   const send = (m: ToBridge) => ws.current?.readyState === 1 && ws.current.send(JSON.stringify(m));
   return { state, logs, error, clearError: () => setError(null), up, send };
 }
@@ -66,11 +71,13 @@ const SAFE: ToolKind[] = ['read', 'search', 'think', 'fetch'];
 type IconName = React.ComponentProps<typeof Icon>['name'];
 type Section = 'overview' | 'agents' | 'runtimes' | 'workspaces' | 'activity' | 'settings';
 
-export function App() {
-  const b = useBridge();
+/** The bridge's setup page. `url` is the bridge's WebSocket; `token` the admin token it put in the page. */
+export function App({ url, token }: { url: string; token: string | undefined }) {
+  const b = useBridge(url, token);
   const [sec, setSec] = useState<Section>('overview');
   const s = b.state;
-  const nav: { id: Section; label: string; icon: IconName; count?: number }[] = [
+  // Counts are unknown (undefined) until the first bridge state arrives.
+  const nav: { id: Section; label: string; icon: IconName; count?: number | undefined }[] = [
     { id: 'overview', label: 'Overview', icon: 'gauge' },
     { id: 'agents', label: 'Agents', icon: 'sparkles', count: s?.agents.length },
     { id: 'runtimes', label: 'Agent CLIs', icon: 'terminal', count: s?.runtimes.filter((r) => r.installed).length },
@@ -103,6 +110,7 @@ export function App() {
             <button
               key={n.id}
               type="button"
+              data-testid={'nav-' + n.id}
               onClick={() => setSec(n.id)}
               aria-current={sec === n.id ? 'page' : undefined}
               style={{
@@ -127,7 +135,7 @@ export function App() {
           ))}
         </nav>
         <span style={{ flex: 1 }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px', fontSize: 12.5, color: 'var(--text-subtle)' }}>
+        <div data-testid="bridge-status" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px', fontSize: 12.5, color: 'var(--text-subtle)' }}>
           <span style={{ width: 8, height: 8, borderRadius: 9, background: b.up ? 'var(--volt-400)' : 'var(--ink-500)' }} />
           {b.up ? 'Running on 127.0.0.1' : 'Reconnecting…'}
         </div>
@@ -149,7 +157,7 @@ export function App() {
         </div>
       </main>
       {b.error && (
-        <div style={{ position: 'fixed', left: 0, right: 0, bottom: 20, display: 'flex', justifyContent: 'center' }}>
+        <div data-testid="error-toast" style={{ position: 'fixed', left: 0, right: 0, bottom: 20, display: 'flex', justifyContent: 'center' }}>
           <Toast tone="danger" title={b.error} duration={5000} onClose={b.clearError} />
         </div>
       )}
@@ -157,7 +165,7 @@ export function App() {
   );
 }
 
-type P = { s: BridgeState; send: (m: ToBridge) => void };
+type P = { s: PageState; send: (m: ToBridge) => void };
 
 const H1 = ({ children, sub }: { children: React.ReactNode; sub?: React.ReactNode }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -166,14 +174,17 @@ const H1 = ({ children, sub }: { children: React.ReactNode; sub?: React.ReactNod
   </div>
 );
 
-const CardBox = ({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) => (
-  <div style={{ padding: 20, borderRadius: 20, background: 'var(--surface-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-sm)', ...style }}>
+const CardBox = ({ children, style, testId }: { children: React.ReactNode; style?: React.CSSProperties; testId?: string }) => (
+  <div
+    data-testid={testId}
+    style={{ padding: 20, borderRadius: 20, background: 'var(--surface-card)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-sm)', ...style }}
+  >
     {children}
   </div>
 );
 
 function Overview({ s, send, go }: P & { go: (x: Section) => void }) {
-  const code = s.pairingCode || '------';
+  const code = s.pairingCode;
   const installed = s.runtimes.filter((r) => r.installed).length;
   return (
     <>
@@ -183,7 +194,7 @@ function Overview({ s, send, go }: P & { go: (x: Section) => void }) {
       <CardBox style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 20 }}>
         <div style={{ flex: 1, minWidth: 240, display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>Pairing code</span>
-          <span style={{ font: '500 44px/1 var(--font-mono)', letterSpacing: '.08em', color: 'var(--text-strong)' }}>
+          <span data-testid="pairing-code" style={{ font: '500 44px/1 var(--font-mono)', letterSpacing: '.08em', color: 'var(--text-strong)' }}>
             {code.slice(0, 3)} {code.slice(3)}
           </span>
           <span style={{ fontSize: 13.5, color: 'var(--text-muted)' }}>
@@ -200,7 +211,7 @@ function Overview({ s, send, go }: P & { go: (x: Section) => void }) {
         </div>
       </CardBox>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-        <CardBox>
+        <CardBox testId="identity">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {s.identity ? <Avatar name={s.identity.name} self size={36} decorative /> : <Icon name="key-round" size={22} style={{ color: 'var(--text-subtle)' }} />}
             <div style={{ minWidth: 0 }}>
@@ -295,7 +306,7 @@ function Runtimes({ s, send }: P) {
       <H1 sub="Yurt talks to these over the Agent Client Protocol. Install the ones you use; your agents pick one each.">Agent CLIs</H1>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {s.runtimes.map((r) => (
-          <CardBox key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: 16 }}>
+          <CardBox key={r.id} testId={'runtime-' + r.id} style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: 16 }}>
             <Icon name="terminal" size={20} style={{ color: 'var(--text-subtle)' }} />
             <div style={{ flex: 1, minWidth: 180, display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-strong)' }}>{r.name}</span>
@@ -327,7 +338,7 @@ function Runtimes({ s, send }: P) {
   );
 }
 
-const blank = (s: BridgeState): AgentConfig => {
+const blank = (s: PageState): AgentConfig => {
   const rt = s.runtimes.find((r) => r.installed)?.id || 'copilot';
   return {
     id: '',
@@ -335,7 +346,7 @@ const blank = (s: BridgeState): AgentConfig => {
     handle: '',
     runtime: rt,
     model: '',
-    workdir: (s.home || '~') + '/yurt-agents/',
+    workdir: s.home + '/yurt-agents/',
     instructions: '',
     autoApprove: [...SAFE],
     contextSize: 20,
@@ -372,6 +383,7 @@ function Agents({ s, send, error, clearError }: P & SaveAck) {
             <button
               key={a.id}
               type="button"
+              data-testid={'agent-' + a.id}
               onClick={() => setEdit(a)}
               style={{
                 display: 'flex',
@@ -425,45 +437,29 @@ function Agents({ s, send, error, clearError }: P & SaveAck) {
   );
 }
 
-/** True once the bridge's state holds `a` as `agent.save` normalizes it (server.ts sanitize); a new agent must be new. */
-const isSaved = (a: AgentConfig, x: AgentConfig, before: readonly string[]) =>
-  (a.id ? x.id === a.id : !before.includes(x.id)) &&
-  x.handle === slug(a.handle || a.name).slice(0, 24) &&
-  x.name === a.name.trim().slice(0, 40) &&
-  x.runtime === a.runtime &&
-  x.instructions === a.instructions.slice(0, 8000) &&
-  JSON.stringify([x.respondTo, x.postIn, x.discoverable]) === JSON.stringify([a.respondTo, a.postIn, a.discoverable]) &&
-  [...x.autoApprove].sort().join() === [...a.autoApprove].sort().join();
-
 function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck & { agent: AgentConfig; onDone: () => void }) {
   const [a, setA] = useState<AgentConfig>(agent);
   // The bridge has no save ack: success shows up as a state holding the saved agent, failure as an error.
   // So the editor stays open until one of those arrives, and keeps the user's input on failure.
   const [saving, setSaving] = useState<{ before: string[] } | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reacts to bridge replies (state or error) only; `saving`, `a` and `onDone` are read as they are when one arrives.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reacts to a bridge error only; `saving` is read as it is when one arrives.
   useEffect(() => {
-    if (!saving) return;
-    if (error) setSaving(null);
-    else if (s.agents.some((x) => isSaved(a, x, saving.before))) onDone();
-  }, [s, error]);
+    if (saving && error) setSaving(null);
+  }, [error]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reacts to bridge state only; `saving`, `a` and `onDone` are read as they are when it arrives.
+  useEffect(() => {
+    if (saving && s.agents.some((x) => isSaved(a, x, saving.before))) onDone();
+  }, [s]);
   const [handleTouched, setHandleTouched] = useState(!!agent.id);
   const [confirmDel, setConfirmDel] = useState(false);
   const up = (p: Partial<AgentConfig>) => setA((x) => ({ ...x, ...p }));
   const isNew = !agent.id;
   const noPlacement = !a.postIn.thread && !a.postIn.channel;
-  const autoHandle = (n: string) =>
-    n
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 24);
   const setName = (name: string) =>
     up({
       name,
       ...(handleTouched ? {} : { handle: autoHandle(name) }),
-      ...((isNew && a.workdir.endsWith('/yurt-agents/' + a.handle)) || a.workdir.endsWith('/yurt-agents/')
-        ? { workdir: (s.home || '~') + '/yurt-agents/' + autoHandle(name) }
-        : {}),
+      ...((isNew && a.workdir.endsWith('/yurt-agents/' + a.handle)) || a.workdir.endsWith('/yurt-agents/') ? { workdir: s.home + '/yurt-agents/' + autoHandle(name) } : {}),
     });
   const rt = s.runtimes.find((r) => r.id === a.runtime);
   return (
@@ -500,8 +496,7 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
             label="Agent CLI"
             value={a.runtime}
             onChange={(e) => {
-              const r = s.runtimes.find((x) => x.id === e.target.value);
-              if (r) up({ runtime: r.id });
+              for (const r of s.runtimes) if (r.id === e.target.value) up({ runtime: r.id });
             }}
             options={s.runtimes.map((r) => ({ value: r.id, label: r.name + (r.installed ? '' : ' (not installed)') }))}
             hint={rt && !rt.installed ? 'Install it under Agent CLIs first.' : rt?.auth === 'signed-out' ? 'Needs sign-in under Agent CLIs.' : undefined}
@@ -608,14 +603,7 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
         </div>
       </CardBox>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button
-          type="submit"
-          variant="agent"
-          iconLeft="check"
-          data-testid="agent-save"
-          loading={!!saving}
-          disabled={!a.name.trim() || !a.handle || !a.workdir.trim() || noPlacement}
-        >
+        <Button type="submit" variant="agent" iconLeft="check" data-testid="agent-save" loading={!!saving} disabled={!canSave(a)}>
           {isNew ? 'Create agent' : 'Save changes'}
         </Button>
         <Button variant="ghost" onClick={onDone}>
@@ -656,7 +644,7 @@ function WorkspacesView({ s, send }: P) {
         </CardBox>
       )}
       {s.workspaces.map((w) => (
-        <CardBox key={w.code} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <CardBox key={w.code} testId={'workspace-' + w.code} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <span style={{ flex: 1, font: '700 18px/1.2 var(--font-display)', letterSpacing: '-0.03em', color: 'var(--text-strong)' }}>{w.name}</span>
             <span style={{ font: '400 12px var(--font-mono)', color: 'var(--text-subtle)' }}>
@@ -706,6 +694,7 @@ function Activity({ logs }: { logs: Log[] }) {
         <Switch checked={acp} onChange={setAcp} label="Show ACP traffic" size="sm" />
       </div>
       <div
+        data-testid="activity"
         style={{
           borderRadius: 20,
           background: 'var(--surface-sunken)',
@@ -720,6 +709,7 @@ function Activity({ logs }: { logs: Log[] }) {
         {list.map((l) => (
           <div
             key={logKey(l)}
+            data-testid={'log-' + l.level}
             style={{
               display: 'flex',
               gap: 10,

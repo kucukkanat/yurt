@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { log } from './log';
+import { errorMessage } from './util';
 import { whichPath } from './runtimes';
 
 /**
@@ -19,14 +20,19 @@ export function startCommand(script: string, execPath: string): { exe: string; a
   throw new Error('start on login needs npx or bunx on PATH');
 }
 
-const command = () => startCommand(path.resolve(process.argv[1] || ''), process.execPath);
+// The running script (argv[1]); spread so a missing one resolves to the working folder, which startCommand refuses.
+const command = () => startCommand(path.resolve(...process.argv.slice(1, 2)), process.execPath);
 
-const MAC = path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.yurt.bridge.plist');
-const LINUX = path.join(os.homedir(), '.config', 'autostart', 'yurt-bridge.desktop');
-const WIN = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'yurt-bridge.cmd');
+/** Where each platform looks for login items. Read per call: HOME and APPDATA may change (tests point them elsewhere). */
+const loginItem = (platform: NodeJS.Platform): string =>
+  platform === 'darwin'
+    ? path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.yurt.bridge.plist')
+    : platform === 'win32'
+      ? path.join(String(process.env.APPDATA), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'yurt-bridge.cmd')
+      : path.join(os.homedir(), '.config', 'autostart', 'yurt-bridge.desktop');
 
-export function setStartOnLogin(on: boolean): boolean {
-  const file = process.platform === 'darwin' ? MAC : process.platform === 'win32' ? WIN : LINUX;
+export function setStartOnLogin(on: boolean, platform: NodeJS.Platform = process.platform): boolean {
+  const file = loginItem(platform);
   try {
     if (!on) {
       fs.rmSync(file, { force: true });
@@ -34,9 +40,9 @@ export function setStartOnLogin(on: boolean): boolean {
     }
     const { exe, args } = command(); // only needed to turn it on, so turning off works from any checkout
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (process.platform === 'darwin') {
+    if (platform === 'darwin') {
       fs.writeFileSync(
-        MAC,
+        file,
         `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -47,17 +53,17 @@ export function setStartOnLogin(on: boolean): boolean {
 </dict></plist>
 `,
       );
-    } else if (process.platform === 'win32') {
-      fs.writeFileSync(WIN, `@echo off\r\nstart "" /min "${exe}" ${args.map((a) => `"${a}"`).join(' ')}\r\n`);
+    } else if (platform === 'win32') {
+      fs.writeFileSync(file, `@echo off\r\nstart "" /min "${exe}" ${args.map((a) => `"${a}"`).join(' ')}\r\n`);
     } else {
       fs.writeFileSync(
-        LINUX,
+        file,
         `[Desktop Entry]\nType=Application\nName=Yurt bridge\nExec=${[exe, ...args].map((a) => `"${a}"`).join(' ')}\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n`,
       );
     }
     return true;
   } catch (e) {
-    log('error', 'bridge', 'start on login failed: ' + (e as Error).message);
+    log('error', 'bridge', 'start on login failed: ' + errorMessage(e));
     return false;
   }
 }

@@ -18,13 +18,15 @@ function RemoveButton({ label, disabled, onRemove }) {
         e.stopPropagation();
         onRemove(e);
       }}
+      {...rh}
+      // After the spread: the interaction handlers include their own onKeyDown, which would otherwise replace this one.
       onKeyDown={(e) => {
+        rh.onKeyDown(e);
         if (e.key === 'Backspace' || e.key === 'Delete') {
           e.preventDefault();
           onRemove(e);
         }
       }}
-      {...rh}
       style={{
         width: 20,
         height: 20,

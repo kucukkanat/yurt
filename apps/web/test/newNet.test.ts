@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS } from '@yurt/protocol';
 import { defaultNewNet, netFromForm, rememberNet, migrateLastNet, dropLegacy } from '../src/lib/newNet';
+import { anything, fc } from './fuzz';
 
 describe('new workspace network settings', () => {
   it('start from the built-ins the first time', () => {
@@ -35,6 +36,39 @@ describe('new workspace network settings', () => {
     expect(dropLegacy(saved)).toEqual({ theme: 'light' });
     expect(migrateLastNet({ theme: 'dark' })).toBeUndefined();
     const kept = { trystero: { kind: 'nostr', urls: [] } };
-    expect(migrateLastNet({ lastNet: kept, relays: 'wss://ignored.example' })).toBe(kept);
+    expect(migrateLastNet({ lastNet: kept, relays: 'wss://ignored.example' })).toEqual(kept);
+  });
+});
+
+describe('new workspace network settings, for any form input', () => {
+  const form = fc.record({ sigKind: fc.constantFrom('nostr' as const, 'torrent' as const), sigUrls: fc.string(), relays: fc.string(), blossom: fc.string() });
+
+  it('always give a usable network: relays to reach, and signaling for nostr', () => {
+    fc.assert(
+      fc.property(form, (f) => {
+        const nostr = netFromForm('nostr', f);
+        if (nostr.kind === 'nostr') expect(nostr.relays.length).toBeGreaterThan(0);
+        const p2p = netFromForm('trystero', f);
+        if (p2p.kind === 'trystero' && p2p.signal.kind === 'nostr') expect(p2p.signal.urls.length).toBeGreaterThan(0);
+      }),
+    );
+  });
+
+  it('round-trip through “remember” and “prefill”', () => {
+    fc.assert(
+      fc.property(form, fc.constantFrom('nostr' as const, 'trystero' as const), (f, kind) => {
+        const net = netFromForm(kind, f);
+        expect(defaultNewNet(rememberNet(undefined, net), kind)).toEqual(net);
+      }),
+    );
+  });
+
+  it('never throw on any saved settings', () => {
+    fc.assert(
+      fc.property(fc.dictionary(fc.string(), anything), (saved) => {
+        void migrateLastNet(saved);
+        expect(Object.keys(dropLegacy(saved))).not.toContain('relays');
+      }),
+    );
   });
 });

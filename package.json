@@ -24,9 +24,11 @@
     "quality": "bun run typecheck && bun run deadcode && bun run dupes && biome ci --error-on-warnings ."
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@biomejs/biome": "2.5.15",
     "@playwright/test": "^1.48.0",
     "@types/node": "^22",
+    "html-validate": "11.16.1",
     "jscpd": "5.4.0",
     "knip": "6.39.0",
     "typescript": "^5.6.0"

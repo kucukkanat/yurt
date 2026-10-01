@@ -183,30 +183,34 @@ export function Tabs({ items = [], value, defaultValue, onChange, variant = 'pil
     const el = refs.current[cur];
     if (el) setInd({ x: el.offsetLeft, w: el.offsetWidth, h: el.offsetHeight, y: el.offsetTop });
     const s = scroller.current;
-    if (s) setEdge({ l: s.scrollLeft > 1, r: s.scrollLeft + s.clientWidth < s.scrollWidth - 1 });
+    setEdge({ l: s.scrollLeft > 1, r: s.scrollLeft + s.clientWidth < s.scrollWidth - 1 });
   }, [cur]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: measure reads the DOM, so it must re-run when these change the layout even though it doesn't read them
   React.useLayoutEffect(() => {
     measure();
   }, [measure, items.length, variant, size, fullWidth]);
+  // The scroller and list are always mounted; every browser the app targets (ES2022) has ResizeObserver.
   React.useEffect(() => {
-    const s = scroller.current;
-    if (!s || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measure);
-    ro.observe(s);
-    if (list.current) ro.observe(list.current);
+    ro.observe(scroller.current);
+    ro.observe(list.current);
     return () => ro.disconnect();
   }, [measure]);
+  // Fonts can finish loading after this unmounts (or after `cur` changed): measure only while still current.
   React.useEffect(() => {
-    document.fonts?.ready.then(measure);
+    let live = true;
+    document.fonts.ready.then(() => live && measure());
+    return () => {
+      live = false;
+    };
   }, [measure]);
 
   // Keep the active tab fully visible, with a peek of its neighbour so the overflow reads as scrollable.
   React.useEffect(() => {
     const s = scroller.current;
     const el = refs.current[cur];
-    const to = s && el ? scrollTarget(s, el) : null;
+    const to = el ? scrollTarget(s, el) : null;
     if (to !== null) s.scrollTo({ left: to, behavior: 'smooth' });
   }, [cur]);
 

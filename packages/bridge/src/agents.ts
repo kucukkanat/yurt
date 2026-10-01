@@ -1,11 +1,15 @@
+import * as v from 'valibot';
 import type { WorkspacePeer, Msg, TraceStep, AgentConfig } from '@yurt/protocol';
-import { agentDmChannel, mentions, agentKey, parseGuestDm } from '@yurt/protocol';
+import { agentDmChannel, mentions, agentKey, parseBody, parseGuestDm, parseOr } from '@yurt/protocol';
 import type { Ev, WsState } from '@yurt/protocol';
-import { AcpConnection, isAuthError, isRecord, type AcpUpdate } from './acp';
+import { AcpConnection, isAuthError, type AcpUpdate } from './acp';
+import { NewSessionResultSchema, PermissionRequestSchema } from './schemas';
 import { RUNTIMES, acpCommand } from './runtimes';
 import type { Config } from './config';
 import { log } from './log';
 import { saveAttachment } from './files';
+import { compact } from './compact';
+import { errorMessage, listAt } from './util';
 
 type Status = 'idle' | 'working' | 'waiting' | 'error';
 /** What started a run: an @mention, a follow-up in its thread, its owner's private chat, or another member's DM. */
@@ -14,78 +18,68 @@ interface Session {
   conn: AcpConnection;
   id: string;
   key: string;
-  onUpdate?: (u: AcpUpdate) => void;
+  // Cleared between prompts, so `undefined` is a real state here, not just "absent".
+  onUpdate?: ((u: AcpUpdate) => void) | undefined;
 }
 interface Run {
   peer: WorkspacePeer;
-  ch: string;
   trace: TraceStep[];
+  /** The owner's key, which approvals are addressed to. */
+  me: string;
 }
 
-const STALE_MS = 3 * 60_000;
-const APPROVAL_TIMEOUT_MS = 30 * 60_000;
+/** How long a message stays worth answering, and how long a run waits for its owner's approval. Tests shorten them. */
+export interface HostTiming {
+  staleMs: number;
+  approvalMs: number;
+}
+const TIMING: HostTiming = { staleMs: 3 * 60_000, approvalMs: 30 * 60_000 };
 
 const mapStatus = (s?: string): TraceStep['status'] => (s === 'completed' ? 'done' : s === 'failed' ? 'error' : 'running');
-const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-interface PermissionOption {
-  optionId: string;
-  name: string;
-  kind: string;
-}
-
-/** The parts of an ACP `session/request_permission` the bridge uses, from untrusted agent output. */
-function parsePermission(p: unknown): { kind: string; title: string; options: PermissionOption[] } {
-  const call = isRecord(p) && isRecord(p.toolCall) ? p.toolCall : {};
-  const options = isRecord(p) && Array.isArray(p.options) ? p.options : [];
-  return {
-    kind: typeof call.kind === 'string' && call.kind ? call.kind : 'other',
-    title: typeof call.title === 'string' && call.title ? call.title : 'use a tool',
-    options: options.flatMap((o): PermissionOption[] =>
-      isRecord(o) && typeof o.optionId === 'string'
-        ? [{ optionId: o.optionId, name: typeof o.name === 'string' ? o.name : o.optionId, kind: typeof o.kind === 'string' ? o.kind : '' }]
-        : [],
-    ),
-  };
-}
 
 const CANCELLED = { outcome: { outcome: 'cancelled' } } as const;
 const selected = (optionId: string) => ({ outcome: { outcome: 'selected', optionId } });
 
+/** A run's tool calls by id: the trace step each one shows as, and when it started. */
+type Tools = Map<string, { step: TraceStep; start: number }>;
+
 /** Folds one session update into the run's trace; returns the reply text it adds, if any. */
-function applyUpdate(u: AcpUpdate, trace: TraceStep[], tools: Map<string, { i: number; start: number }>): string {
+function applyUpdate(u: AcpUpdate, trace: TraceStep[], tools: Tools): string {
   if (u.sessionUpdate === 'agent_message_chunk') return u.content?.type === 'text' ? u.content.text || '' : '';
   if (!u.toolCallId) return '';
   if (u.sessionUpdate === 'tool_call') {
-    tools.set(u.toolCallId, { i: trace.push({ title: u.title || u.kind || 'Tool call', tool: u.kind, status: mapStatus(u.status) }) - 1, start: Date.now() });
+    const step: TraceStep = compact({ title: u.title || u.kind || 'Tool call', tool: u.kind, status: mapStatus(u.status) });
+    trace.push(step);
+    tools.set(u.toolCallId, { step, start: Date.now() });
     return '';
   }
   const t = u.sessionUpdate === 'tool_call_update' ? tools.get(u.toolCallId) : undefined;
-  const st = t && trace[t.i];
-  if (!t || !st) return '';
-  if (u.title) st.title = u.title;
+  if (!t) return '';
+  if (u.title) t.step.title = u.title;
   if (u.status) {
-    st.status = mapStatus(u.status);
-    if (st.status !== 'running') st.ms = Date.now() - t.start;
+    t.step.status = mapStatus(u.status);
+    if (t.step.status !== 'running') t.step.ms = Date.now() - t.start;
   }
   return '';
 }
 
-/** Which messages a prompt shows, and how it names the place. */
-function promptScope(s: WsState, trigger: Msg, kind: Kind, owner: string): { ids: string[]; where: string } {
-  const chName = s.channels.get(trigger.ch)?.name || trigger.ch;
+/** Which messages a prompt shows (the thread, or the conversation), and how it names the place. */
+function promptScope(s: WsState, trigger: Msg, kind: Kind, owner: string): { ids: readonly string[]; where: string } {
+  // The reducer keeps a reply only when its parent is in the same channel, so a reply always has its root here,
+  // and a room message always has its channel.
+  const root = trigger.parent ? s.msgs.get(trigger.parent) : undefined;
+  const ids = root ? [root.id, ...root.replies] : listAt(s.channelMsgs, trigger.ch);
   const guest = s.profiles.get(trigger.a);
-  if (kind === 'dm') return { ids: s.channelMsgs.get(trigger.ch) || [], where: 'a private chat with your owner' };
-  if (kind === 'guest')
-    return {
-      ids: s.channelMsgs.get(trigger.ch) || [],
-      where: `a private chat with ${guest?.name || 'a member'} (@${guest?.handle || '?'}), a member of the workspace. ${owner} can read this chat too`,
-    };
-  if (trigger.parent) {
-    const p = s.msgs.get(trigger.parent);
-    return { ids: p ? [p.id, ...p.replies] : [trigger.id], where: 'a thread in #' + chName };
-  }
-  return { ids: s.channelMsgs.get(trigger.ch) || [], where: '#' + chName };
+  const room = `#${s.channels.get(trigger.ch)?.name}`;
+  const where =
+    kind === 'dm'
+      ? 'a private chat with your owner'
+      : kind === 'guest'
+        ? `a private chat with ${guest?.name || 'a member'} (@${guest?.handle || '?'}), a member of the workspace. ${owner} can read this chat too`
+        : root
+          ? 'a thread in ' + room
+          : room;
+  return { ids, where };
 }
 
 const ASK: Record<Exclude<Kind, 'guest'>, string> = { dm: ' from your owner', reply: ', a follow-up in a thread you take part in', mention: ', which mentions you' };
@@ -116,7 +110,7 @@ export const repliedAgents = (agents: readonly AgentConfig[], wsAgents: readonly
  */
 export function placement(a: Pick<AgentConfig, 'postIn'>, trigger: Pick<Msg, 'id' | 'parent'>, kind: Kind): { parent?: string; alsoInChannel?: true } {
   if (kind === 'dm' || kind === 'guest') return {};
-  if (!a.postIn.thread) return { parent: trigger.parent };
+  if (!a.postIn.thread) return trigger.parent ? { parent: trigger.parent } : {};
   return { parent: trigger.parent || trigger.id, ...(a.postIn.channel ? { alsoInChannel: true as const } : {}) };
 }
 
@@ -135,6 +129,7 @@ export class AgentHost {
     private me: () => string | null,
     private changed: () => void,
     private presence: (code: string) => void,
+    private timing: HostTiming = TIMING,
   ) {}
 
   private agent(id: string) {
@@ -168,23 +163,27 @@ export class AgentHost {
 
   private onEvent(peer: WorkspacePeer, wsAgents: string[], e: Ev, me: string) {
     if (isOwnerApproval(e, me)) {
-      const b = isRecord(e.b) ? e.b : {};
-      if (typeof b.req === 'string' && typeof b.option === 'string') this.approvals.get(b.req)?.(b.option);
+      const b = parseBody('approve', e.b);
+      if (b) this.approvals.get(b.req)?.(b.option);
       return;
     }
-    if (e.t !== 'msg' || !e.ch || Date.now() - e.ts > STALE_MS) return;
+    if (e.t !== 'msg' || !e.ch || Date.now() - e.ts > this.timing.staleMs) return;
     const m = peer.state.msgs.get(e.id);
     if (!m) return;
+    // Private channels: the reducer already checked who may write there (the owner in `adm:`, the member or the
+    // owner-as-agent in `gdm:`), so what's left is whose agent it is and whether it was written by a person.
     if (e.ch.startsWith('adm:')) {
-      const [, owner, id] = e.ch.split(':');
-      if (owner === me && e.a === me && !e.ag && id && this.agent(id)) this.enqueue(id, peer, m, 'dm');
+      const rest = e.ch.slice(4);
+      const owner = rest.slice(0, rest.indexOf(':'));
+      const id = rest.slice(rest.indexOf(':') + 1);
+      if (owner === me && !e.ag && this.agent(id)) this.enqueue(id, peer, m, 'dm', me);
       return;
     }
     const g = parseGuestDm(e.ch);
     if (g) {
       // Another member messaging one of my agents: only while it's in this workspace and discoverable.
       const a = this.agent(g.agentId);
-      if (g.owner === me && e.a === g.member && !e.ag && a?.discoverable && wsAgents.includes(a.id)) this.enqueue(a.id, peer, m, 'guest');
+      if (g.owner === me && !e.ag && a?.discoverable && wsAgents.includes(a.id)) this.enqueue(a.id, peer, m, 'guest', me);
       return;
     }
     if (!e.ch.startsWith('dm:')) this.onRoomMessage(peer, wsAgents, e.ch, m, me, e.ag);
@@ -196,8 +195,8 @@ export class AgentHost {
     const replied = repliedAgents(this.cfg.agents, wsAgents, peer.state, m, me, from).filter((id) => !mentioned.includes(id));
     // Only agent messages that actually hand off to another agent count toward the chain limit.
     if ((!mentioned.length && !replied.length) || (from && !this.allowAgentChain(ch))) return;
-    for (const id of mentioned) this.enqueue(id, peer, m, 'mention');
-    for (const id of replied) this.enqueue(id, peer, m, 'reply');
+    for (const id of mentioned) this.enqueue(id, peer, m, 'mention', me);
+    for (const id of replied) this.enqueue(id, peer, m, 'reply', me);
   }
 
   /** Agents may @mention each other in public, but a chain stops after 4 agent-triggered runs per channel per 5 minutes. */
@@ -210,8 +209,8 @@ export class AgentHost {
     return true;
   }
 
-  private enqueue(id: string, peer: WorkspacePeer, m: Msg, kind: Kind) {
-    const q = (this.queues.get(id) || Promise.resolve()).then(() => this.exec(id, peer, m, kind)).catch((e) => log('error', id, String(e?.message || e)));
+  private enqueue(id: string, peer: WorkspacePeer, m: Msg, kind: Kind, me: string) {
+    const q = (this.queues.get(id) ?? Promise.resolve()).then(() => this.exec(id, peer, m, kind, me)).catch((e: unknown) => log('error', id, errorMessage(e)));
     this.queues.set(id, q);
   }
 
@@ -232,13 +231,15 @@ export class AgentHost {
     };
     try {
       await conn.initialize();
-      const res = await conn.request<{ sessionId: string }>('session/new', { cwd: a.workdir, mcpServers: [] }, 120_000);
+      const res = parseOr(NewSessionResultSchema, await conn.request('session/new', { cwd: a.workdir, mcpServers: [] }, 120_000));
+      if (!res) throw new Error('the agent opened no session');
       s.id = res.sessionId;
     } catch (e) {
       conn.close(); // never stored, so nothing else would stop this process
       throw e;
     }
-    if (a.model) await conn.request('session/set_model', { sessionId: s.id, modelId: a.model }, 20_000).catch((e) => log('warn', a.name, 'model not set: ' + e.message));
+    if (a.model)
+      await conn.request('session/set_model', { sessionId: s.id, modelId: a.model }, 20_000).catch((e: unknown) => log('warn', a.name, 'model not set: ' + errorMessage(e)));
     this.sessions.set(slot, s);
     log('info', a.name, `session ${s.id} on ${RUNTIMES[a.runtime].name} in ${a.workdir}`);
     return s;
@@ -260,19 +261,19 @@ export class AgentHost {
     return saved;
   }
 
-  private prompt(a: AgentConfig, peer: WorkspacePeer, trigger: Msg, kind: Kind, me: string, saved: ReadonlyMap<string, string> = new Map()): string {
+  private prompt(a: AgentConfig, peer: WorkspacePeer, trigger: Msg, kind: Kind, me: string, saved: ReadonlyMap<string, string>): string {
     const s = peer.state;
     const nameOf = (m: Msg) =>
       m.ag ? (s.agents.get(agentKey(m.a, m.ag))?.name || m.ag) + ' (agent)' : (s.profiles.get(m.a)?.name || 'Someone') + ' (@' + (s.profiles.get(m.a)?.handle || '?') + ')';
     const owner = s.profiles.get(me)?.name || 'your owner';
     const { ids, where } = promptScope(s, trigger, kind, owner);
-    const cut = ids.indexOf(trigger.id);
-    const recent = (cut >= 0 ? ids.slice(0, cut + 1) : ids).slice(-Math.max(1, a.contextSize));
+    // Up to the trigger: messages that arrived after it aren't what it asks about.
+    const recent = ids.slice(0, ids.indexOf(trigger.id) + 1).slice(-Math.max(1, a.contextSize));
     // Only the triggering message's files are fetched; earlier ones are listed by name.
     const fileLine = (m: Msg, f: Msg['files'][number]) => (m.id !== trigger.id ? f.name : saved.has(f.id) ? `${f.name} → ${saved.get(f.id)}` : `${f.name} (couldn't download)`);
     const lines = recent
       .map((id) => s.msgs.get(id))
-      .filter((m): m is Msg => !!m && !m.deleted)
+      .filter((m): m is Msg => m?.deleted === false)
       .map(
         (m) =>
           `[${new Date(m.ts).toISOString().slice(11, 16)}] ${nameOf(m)}: ${m.text}${m.files.length ? ' [attached: ' + m.files.map((f) => fileLine(m, f)).join(', ') + ']' : ''}`,
@@ -286,18 +287,17 @@ export class AgentHost {
     ].join('\n');
   }
 
-  private async exec(id: string, peer: WorkspacePeer, trigger: Msg, kind: Kind) {
+  private async exec(id: string, peer: WorkspacePeer, trigger: Msg, kind: Kind, me: string) {
     const a = this.agent(id);
-    const me = this.me();
-    if (!a || !me) return;
+    if (!a) return; // removed while queued
     const t0 = Date.now();
     const trace: TraceStep[] = [];
-    const tools = new Map<string, { i: number; start: number }>();
+    const tools: Tools = new Map();
     let text = '';
     this.working.set(id, { code: peer.code, ch: trigger.ch });
     this.presence(peer.code);
     this.setStatus(id, 'working');
-    this.runs.set(id, { peer, ch: trigger.ch, trace });
+    this.runs.set(id, { peer, trace, me });
     try {
       const s = await this.session(a, kind === 'guest' ? a.id + '|guest:' + trigger.a : a.id);
       s.onUpdate = (u) => {
@@ -326,11 +326,11 @@ export class AgentHost {
       t: 'msg',
       ch: trigger.ch,
       ag: a.id,
-      to: kind === 'dm' ? me : kind === 'guest' ? trigger.a : undefined,
+      ...(kind === 'dm' ? { to: me } : kind === 'guest' ? { to: trigger.a } : {}),
       b: {
         text: text.trim(),
         ...placement(a, trigger, kind),
-        trace: trace.length ? trace : undefined,
+        ...(trace.length ? { trace } : {}),
         meta: (nTools ? nTools + (nTools === 1 ? ' tool · ' : ' tools · ') : '') + secs,
       },
     });
@@ -339,7 +339,7 @@ export class AgentHost {
   private async permission(id: string, p: unknown) {
     const a = this.agent(id);
     if (!a) return CANCELLED; // removed while running
-    const { kind, title, options } = parsePermission(p);
+    const { kind, title, options } = v.parse(PermissionRequestSchema, p);
     const allow = options.find((o) => o.kind === 'allow_once') || options.find((o) => o.kind.startsWith('allow'));
     const reject = options.find((o) => o.kind === 'reject_once') || options.find((o) => o.kind.startsWith('reject'));
     if (allow && (a.autoApprove as readonly string[]).includes(kind)) {
@@ -347,8 +347,8 @@ export class AgentHost {
       return selected(allow.optionId);
     }
     const run = this.runs.get(a.id);
-    const me = this.me();
-    if (!run || !me) return CANCELLED;
+    if (!run) return CANCELLED; // no run to report to (e.g. the CLI asked between prompts)
+    const { me } = run;
     const req = Math.random().toString(36).slice(2) + Date.now().toString(36);
     const step: TraceStep = { title: 'Waiting for approval: ' + title, tool: kind, status: 'waiting' };
     run.trace.push(step);
@@ -363,7 +363,7 @@ export class AgentHost {
     log('info', a.name, 'waiting for approval: ' + title);
     const optionId = await new Promise<string>((res) => {
       this.approvals.set(req, res);
-      setTimeout(() => res(reject?.optionId || ''), APPROVAL_TIMEOUT_MS);
+      setTimeout(() => res(reject?.optionId || ''), this.timing.approvalMs);
     });
     this.approvals.delete(req);
     this.setStatus(a.id, 'working');

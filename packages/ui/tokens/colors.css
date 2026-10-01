@@ -11,7 +11,8 @@
 /* Status */
 --green-100:#DDF6E6;--green-500:#14A34F;--green-700:#0B6E34;
 --amber-100:#FFF1CC;--amber-500:#F2A100;--amber-700:#8F5B00;
---red-100:#FDE2E0;--red-500:#E3302A;--red-700:#A31C17;
+/* red-500 was #E3302A: white text on it measured 4.44:1, under WCAG AA's 4.5:1. */
+--red-100:#FDE2E0;--red-500:#DC2D27;--red-700:#A31C17;
 
 /* Semantic — surfaces */
 --surface-page:var(--ink-25);
@@ -71,6 +72,8 @@
 --text-subtle:var(--ink-300);
 --text-disabled:var(--ink-600);
 --text-inverse:var(--ink-950);
+/* Dark accents are light (cobalt-400/300), so text on them is dark: white only reached 3.6:1 (WCAG AA needs 4.5:1). */
+--text-on-accent:var(--ink-950);
 --text-link:var(--cobalt-300);
 --border-subtle:var(--ink-800);
 --border-default:var(--ink-700);

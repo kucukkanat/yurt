@@ -3,7 +3,7 @@ import { IconButton } from '../actions/IconButton.jsx';
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
-export function Dialog({ open, onClose, title, description, children, footer, width = 480, inline = false, dismissible = true }) {
+export function Dialog({ open, onClose, title, label, description, children, footer, width = 480, inline = false, dismissible = true }) {
   const panel = React.useRef(null);
   const prev = React.useRef(null);
   const tid = React.useId();
@@ -11,7 +11,8 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
     if (!open) return;
     prev.current = document.activeElement;
     const t = setTimeout(() => {
-      const el = panel.current && (panel.current.querySelector('[data-autofocus]') || panel.current.querySelector(FOCUSABLE));
+      // The panel is mounted while open, and closing clears this timer.
+      const el = panel.current.querySelector('[data-autofocus]') || panel.current.querySelector(FOCUSABLE);
       el?.focus();
     }, 20);
     return () => {
@@ -38,7 +39,7 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
       e.stopPropagation();
       onClose?.();
     }
-    if (e.key === 'Tab' && panel.current) {
+    if (e.key === 'Tab') {
       const f = [...panel.current.querySelectorAll(FOCUSABLE)];
       if (!f.length) return;
       const first = f[0];
@@ -77,6 +78,7 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
         onKeyDown={onKey}
         aria-modal="true"
         aria-labelledby={title ? tid : undefined}
+        aria-label={title ? undefined : label}
         style={{
           position: 'relative',
           width: '100%',

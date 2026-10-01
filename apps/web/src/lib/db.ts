@@ -1,4 +1,5 @@
 import type { Ev, PeerStore } from '@yurt/protocol';
+import { loadBlob, loadEvents, loadMark } from './stored';
 
 let dbp: Promise<IDBDatabase> | null = null;
 
@@ -12,30 +13,49 @@ function open(): Promise<IDBDatabase> {
       d.createObjectStore('events', { keyPath: 'id' }).createIndex('ws', 'ws');
       d.createObjectStore('blobs');
     };
-    r.onsuccess = () => res(r.result);
+    r.onsuccess = () => {
+      const d = r.result;
+      // Another tab upgrading (a newer app version) or deleting the database waits for every open connection to
+      // close; holding ours would block it forever. Close, and reopen on the next read or write.
+      d.onversionchange = () => {
+        d.close();
+        dbp = null;
+      };
+      res(d);
+    };
     r.onerror = () => rej(r.error);
   });
   return dbp;
 }
 
+/**
+ * Resolves when `t` commits. Rejects when it fails, including a failure at commit time (disk full, quota),
+ * which only fires `abort`: listening for `error` alone would leave the caller waiting forever.
+ */
+function settle(t: IDBTransaction): Promise<void> {
+  return new Promise((res, rej) => {
+    t.oncomplete = () => res();
+    /* istanbul ignore next -- needs a failing disk or quota; tests can't make IndexedDB fail a commit */
+    const fail = () => rej(t.error ?? new Error('IndexedDB transaction aborted'));
+    t.onerror = fail;
+    t.onabort = fail;
+  });
+}
+
 /** Runs `fn` in a transaction on `store` and resolves once it commits: with the request's result for reads, nothing for writes. */
-function tx<T>(store: string, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => T): Promise<T> {
-  return open().then(
-    (d) =>
-      new Promise<T>((res, rej) => {
-        const t = d.transaction(store, mode);
-        const out = fn(t.objectStore(store));
-        t.oncomplete = () => res(out);
-        t.onerror = () => rej(t.error);
-      }),
-  );
+async function tx<T>(store: string, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => T): Promise<T> {
+  const t = (await open()).transaction(store, mode);
+  const out = fn(t.objectStore(store));
+  await settle(t);
+  return out;
 }
 
 const read = <T>(store: string, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> => tx(store, 'readonly', fn).then((req) => req.result);
 const write = (store: string, fn: (s: IDBObjectStore) => void): Promise<void> => tx(store, 'readwrite', fn);
 
 export const kv = {
-  get: <T>(k: string) => read<T | undefined>('kv', (s) => s.get(k) as IDBRequest<T | undefined>),
+  /** Whatever is stored under `k`, unchecked: callers parse it (see stored.ts). */
+  get: (k: string) => read<unknown>('kv', (s) => s.get(k)),
   set: (k: string, v: unknown) =>
     write('kv', (s) => {
       s.put(v, k);
@@ -51,7 +71,7 @@ export const kv = {
 };
 
 export const eventsDb = {
-  byWs: (ws: string) => read<Ev[]>('events', (s) => s.index('ws').getAll(ws) as IDBRequest<Ev[]>),
+  byWs: (ws: string): Promise<Ev[]> => read<unknown[]>('events', (s) => s.index('ws').getAll(ws)).then(loadEvents),
   put: (evs: Ev[]) =>
     write('events', (s) => {
       for (const e of evs) s.put(e);
@@ -61,25 +81,21 @@ export const eventsDb = {
       s.clear();
     }),
   deleteWs: async (ws: string) => {
-    const d = await open();
-    await new Promise<void>((res, rej) => {
-      const t = d.transaction('events', 'readwrite');
-      const req = t.objectStore('events').index('ws').openKeyCursor(IDBKeyRange.only(ws));
-      req.onsuccess = () => {
-        const c = req.result;
-        if (c) {
-          t.objectStore('events').delete(c.primaryKey);
-          c.continue();
-        }
-      };
-      t.oncomplete = () => res();
-      t.onerror = () => rej(t.error);
-    });
+    const t = (await open()).transaction('events', 'readwrite');
+    const req = t.objectStore('events').index('ws').openKeyCursor(IDBKeyRange.only(ws));
+    req.onsuccess = () => {
+      const c = req.result;
+      if (c) {
+        t.objectStore('events').delete(c.primaryKey);
+        c.continue();
+      }
+    };
+    await settle(t);
   },
 };
 
 export const blobsDb = {
-  get: (id: string) => read<ArrayBuffer | undefined>('blobs', (s) => s.get(id) as IDBRequest<ArrayBuffer | undefined>),
+  get: (id: string): Promise<ArrayBuffer | null> => read<unknown>('blobs', (s) => s.get(id)).then(loadBlob),
   put: (id: string, buf: ArrayBuffer) =>
     write('blobs', (s) => {
       s.put(buf, id);
@@ -99,11 +115,11 @@ export const peerStore: PeerStore = {
   save: async (evs) => {
     await eventsDb.put(evs);
   },
-  getBlob: async (id) => (await blobsDb.get(id)) ?? null,
+  getBlob: (id) => blobsDb.get(id),
   putBlob: async (id, buf) => {
     await blobsDb.put(id, buf);
   },
-  loadMark: async (ws) => (await kv.get<number>('mark:' + ws)) ?? 0,
+  loadMark: (ws) => kv.get('mark:' + ws).then(loadMark),
   saveMark: async (ws, sec) => {
     await kv.set('mark:' + ws, sec);
   },

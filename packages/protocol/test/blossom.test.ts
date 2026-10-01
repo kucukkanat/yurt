@@ -21,7 +21,7 @@ describe('file sealing', () => {
     const { cipher } = encryptFile(text('secret'));
     expect(decryptFile(encryptFile(text('other')).key, cipher)).toBeNull();
     const bad = cipher.slice();
-    bad[bad.length - 1] ^= 1;
+    bad.set([(bad.at(-1) ?? 0) ^ 1], bad.length - 1);
     expect(decryptFile(encryptFile(text('x')).key, bad)).toBeNull();
   });
 
@@ -59,6 +59,22 @@ describe('blossom', () => {
 
   it('fails loudly when no server accepts the upload', async () => {
     await expect(uploadFile(['http://127.0.0.1:9'], text('x'))).rejects.toThrow('No file server accepted the upload');
+  });
+
+  it("says why each server refused the upload, with the server's reason when it gives one", async () => {
+    const paid = await startBlossom(0, { refuseUploads: { status: 402, reason: 'blocked: paid server' } });
+    const full = await startBlossom(0, { refuseUploads: { status: 507 } });
+    const err = uploadFile([paid.url, full.url], text('x'));
+    await expect(err).rejects.toThrow(`${paid.url}: 402 blocked: paid server`);
+    await expect(err).rejects.toThrow(new RegExp(`${full.url}: 507$`));
+    await Promise.all([paid.close(), full.close()]);
+  });
+
+  it('treats an empty answer as no copy', async () => {
+    const ref = await uploadFile([server.url], text('x'));
+    const empty = await startBlossom(0, { emptyStatus: 204 });
+    expect(await downloadFile({ ...ref, servers: [empty.url] }, dev)).toBeNull();
+    await empty.close();
   });
 
   it('returns null when no server has an intact copy', async () => {

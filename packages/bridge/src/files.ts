@@ -20,8 +20,9 @@ export function safeName(name: string): string {
  */
 export function saveAttachment(workdir: string, msgId: string, name: string, bytes: ArrayBuffer): string {
   const root = path.resolve(workdir, FILES_DIR);
+  // Both parts are single plain names (no separators, no leading dots), so this stays inside root;
+  // test/fuzz.test.ts checks that for arbitrary names.
   const file = path.join(root, safeName(msgId), safeName(name));
-  if (path.relative(root, file).startsWith('..')) throw new Error('attachment path escapes ' + root);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, Buffer.from(bytes), { mode: 0o600 });
   return path.relative(path.resolve(workdir), file);

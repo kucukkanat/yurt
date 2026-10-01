@@ -1,0 +1,209 @@
+import * as v from 'valibot';
+import { isWorkspaceKey } from './seal';
+
+/**
+ * Schemas for everything that arrives from someone else: signed events and their bodies, presence,
+ * huddle state, handshakes, sync and relay envelopes, file refs. Peers are untrusted, so input is
+ * checked here once and the rest of the code works with typed values.
+ *
+ * The reducer is lenient per field ("a malformed field is ignored, and no single event can abort the
+ * reduction"), so many fields here use `lenient` (wrong type → dropped) rather than failing the whole
+ * value. Required fields with a wrong type still reject it.
+ */
+
+/** A plain object: not null, not an array. Wire messages and bodies must be one. */
+export const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
+
+const record = v.custom<Record<string, unknown>>(isRecord);
+/** v.object accepts arrays that happen to carry the keys; wire objects must be plain objects. */
+const obj = <E extends v.ObjectEntries>(entries: E) => v.pipe(record, v.object(entries));
+/** A field whose wrong type is dropped (undefined) instead of rejecting the whole value. */
+const lenient = <S extends v.GenericSchema>(s: S) => v.fallback(v.optional(s), undefined);
+const finite = v.pipe(v.number(), v.finite());
+const nonEmpty = v.pipe(v.string(), v.nonEmpty());
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/** The values of `xs` that match `s`: a list with one bad entry keeps the rest. */
+const keep = <S extends v.GenericSchema>(s: S) =>
+  v.transform((xs: unknown[]): v.InferOutput<S>[] =>
+    xs.flatMap((x) => {
+      const r = v.safeParse(s, x);
+      return r.success ? [r.output] : [];
+    }),
+  );
+/** Like `keep`, and anything that isn't an array is an empty list. */
+const listOf = <S extends v.GenericSchema>(s: S) =>
+  v.pipe(
+    v.unknown(),
+    v.transform((x): unknown[] => (Array.isArray(x) ? x : [])),
+    keep(s),
+  );
+/** An object's string entries, in a null-prototype record so no key ("__proto__" included) is special. */
+const stringsOf = (o: Record<string, unknown>, ok: (k: string, val: string) => boolean = () => true): Record<string, string> => {
+  const out: Record<string, string> = Object.create(null);
+  for (const [k, val] of Object.entries(o)) if (typeof val === 'string' && ok(k, val)) out[k] = val;
+  return out;
+};
+
+/* ---------- events ---------- */
+
+export const EV_TYPES = ['ws.create', 'profile', 'ch.create', 'ch.update', 'msg', 'edit', 'del', 'react', 'pin', 'role', 'ban', 'agent', 'approve', 'rekey'] as const;
+
+/** The signed envelope. The body is checked per type (BODY_SCHEMAS); the signature by verifyEvent. */
+export const EventSchema = obj({
+  id: v.string(),
+  ws: v.string(),
+  t: v.picklist(EV_TYPES),
+  a: v.string(),
+  sig: v.string(),
+  ts: v.pipe(v.number(), v.safeInteger()),
+  ch: v.optional(v.string()),
+  to: v.optional(v.string()),
+  ag: v.optional(v.string()),
+  b: v.optional(v.unknown()),
+});
+
+export const BlobRefSchema = obj({ key: v.string(), hash: v.string(), servers: v.array(v.string()) });
+/** A BlobRef that can actually be fetched and opened: a 32-byte key and a sha256 content address. */
+export const FetchableBlobRefSchema = obj({
+  key: v.pipe(v.string(), v.check(isWorkspaceKey)),
+  hash: v.pipe(v.string(), v.regex(HEX64)),
+  servers: v.array(v.string()),
+});
+export const FileRefSchema = obj({ id: v.string(), name: v.string(), size: finite, type: v.string(), blob: v.optional(BlobRefSchema) });
+export const TraceStepSchema = obj({
+  title: v.string(),
+  status: v.picklist(['done', 'error', 'running', 'waiting', 'skipped']),
+  tool: v.optional(v.string()),
+  ms: v.optional(finite),
+  detail: v.optional(v.string()),
+});
+export const ApprovalReqSchema = obj({
+  req: v.string(),
+  title: v.string(),
+  kind: v.optional(v.string()),
+  options: v.pipe(v.array(v.unknown()), keep(obj({ id: v.string(), name: v.string(), kind: v.string() }))),
+});
+
+const flags = <K extends string>(...keys: K[]) => obj(Object.fromEntries(keys.map((k) => [k, v.boolean()])) as Record<K, v.BooleanSchema<undefined>>);
+
+/** Each event type's body. Authority and context (who may write what, where) are the reducer's job. */
+export const BODY_SCHEMAS = {
+  'ws.create': obj({ name: lenient(v.string()) }),
+  profile: obj({ name: nonEmpty, handle: v.optional(v.string()) }),
+  'ch.create': obj({ id: nonEmpty, name: nonEmpty, topic: v.optional(v.string()) }),
+  'ch.update': obj({ id: v.string(), name: lenient(v.string()), topic: lenient(v.string()) }),
+  msg: obj({
+    text: v.optional(v.string()),
+    parent: v.optional(v.string()),
+    meta: v.optional(v.string()),
+    files: v.optional(listOf(FileRefSchema), []),
+    trace: v.optional(listOf(TraceStepSchema)),
+    approval: lenient(ApprovalReqSchema),
+    alsoInChannel: lenient(v.literal(true)),
+  }),
+  edit: obj({ target: v.string(), text: v.string() }),
+  del: obj({ target: v.string() }),
+  react: obj({ target: v.string(), icon: v.pipe(v.string(), v.nonEmpty(), v.maxLength(64)), on: v.boolean() }),
+  pin: obj({ target: v.string(), on: v.boolean() }),
+  role: obj({ target: nonEmpty, admin: v.boolean() }),
+  ban: obj({ target: nonEmpty, on: v.boolean() }),
+  agent: obj({
+    id: nonEmpty,
+    name: v.string(),
+    handle: nonEmpty,
+    runtime: v.string(),
+    model: v.optional(v.string()),
+    replyIn: v.picklist(['thread', 'channel']),
+    removed: v.optional(v.boolean()),
+    // Newer fields: older bridges don't send them, and wrong types are ignored, never coerced.
+    respondTo: lenient(flags('mentions', 'replies')),
+    postIn: lenient(flags('thread', 'channel')),
+    discoverable: lenient(v.literal(true)),
+  }),
+  approve: obj({ req: nonEmpty, option: v.string() }),
+  rekey: obj({
+    epoch: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+    keys: v.pipe(
+      record,
+      v.transform((o) => stringsOf(o, (pub) => HEX64.test(pub))),
+    ),
+    history: v.string(),
+  }),
+} as const;
+
+export type EventType = (typeof EV_TYPES)[number];
+export type ParsedBody<T extends EventType> = v.InferOutput<(typeof BODY_SCHEMAS)[T]>;
+
+/** An event body checked against its type's schema; null when it doesn't fit. Never throws. */
+export function parseBody<T extends EventType>(t: T, b: unknown): ParsedBody<T> | null {
+  const r = v.safeParse(BODY_SCHEMAS[t], b);
+  return r.success ? (r.output as ParsedBody<T>) : null;
+}
+
+/* ---------- live (ephemeral) messages ---------- */
+
+const nullableText = lenient(v.nullable(v.string()));
+export const PresenceSchema = obj({
+  pub: v.string(),
+  st: v.fallback(v.picklist(['online', 'away']), 'online'),
+  typing: nullableText, // channel id
+  agents: lenient(v.record(v.string(), obj({ working: nullableText }))), // agentId → channel it's working in
+  bridge: lenient(v.boolean()),
+  /** Relay workspaces: this member is in a huddle and needs the WebRTC room, so opted-in members should join it. */
+  rtc: lenient(v.boolean()),
+});
+export type Presence = v.InferOutput<typeof PresenceSchema>;
+
+export const HuddleStateSchema = obj({
+  ch: v.fallback(v.nullable(v.string()), null),
+  mic: v.fallback(v.boolean(), false),
+  cam: v.fallback(v.boolean(), false),
+  screen: v.fallback(v.boolean(), false),
+});
+export type HuddleState = v.InferOutput<typeof HuddleStateSchema>;
+
+/** A peer's WebRTC identity proof: its key and a signature over the handshake message. */
+export const HandshakeSchema = obj({ pub: v.string(), sig: v.string() });
+/** File requests and transfers over WebRTC name the file by id. */
+export const FileIdSchema = obj({ id: v.string() });
+
+/** Trystero history sync (see sync.ts): day summaries, ids per day, and requests for events. */
+export const SyncMsgSchema = v.pipe(
+  record,
+  v.variant('k', [
+    v.object({
+      k: v.literal('sum'),
+      s: v.pipe(
+        record,
+        v.transform((o) => stringsOf(o)),
+      ),
+    }),
+    v.object({
+      k: v.literal('ids'),
+      d: v.pipe(
+        record,
+        v.transform((o) => {
+          const out: Record<string, string[]> = Object.create(null);
+          for (const [day, ids] of Object.entries(o)) if (Array.isArray(ids)) out[day] = ids.filter((id): id is string => typeof id === 'string');
+          return out;
+        }),
+      ),
+    }),
+    v.object({ k: v.literal('want'), ids: v.pipe(v.array(v.unknown()), keep(v.string())) }),
+  ]),
+);
+export type SyncMsg = v.InferOutput<typeof SyncMsgSchema>;
+
+/** Nostr: a private event's outer layer names its pair, so the recipient knows which key opens `c`. */
+export const PrivateWrapperSchema = obj({ a: v.string(), to: v.string(), c: v.string() });
+/** Nostr presence: the presence JSON, when it was signed, and the signature. */
+export const PresenceEnvelopeSchema = obj({ j: v.string(), t: finite, s: v.string() });
+/** A rekey's history: every earlier key and its epoch (null = unknown). Bad entries are skipped. */
+export const KeyHistorySchema = listOf(obj({ key: v.pipe(v.string(), v.check(isWorkspaceKey)), epoch: v.fallback(v.nullable(v.pipe(v.number(), v.safeInteger())), null) }));
+
+/** `x` parsed by `schema`, or null. For callers that only need "valid or not". Never throws. */
+export function parseOr<S extends v.GenericSchema>(schema: S, x: unknown): v.InferOutput<S> | null {
+  const r = v.safeParse(schema, x);
+  return r.success ? r.output : null;
+}

@@ -5,21 +5,21 @@
  */
 export interface AvatarProps {
   name: string;
-  kind?: 'human' | 'agent';
+  kind?: 'human' | 'agent' | undefined;
   /** The signed-in user — cobalt fill */
-  self?: boolean;
+  self?: boolean | undefined;
   /** Agents only: the human who owns and runs it */
-  owner?: { name: string; self?: boolean };
-  presence?: 'online' | 'away' | 'offline';
+  owner?: { name: string; self?: boolean | undefined } | undefined;
+  presence?: 'online' | 'away' | 'offline' | undefined;
   /** Agents only: pulsing ring while it is replying */
-  working?: boolean;
+  working?: boolean | undefined;
   /** px, default 32 */
-  size?: number;
+  size?: number | undefined;
   /** Surface behind the avatar, used for the gap around dot / owner badge */
-  cutout?: string;
+  cutout?: string | undefined;
   /** Hide from assistive tech when the name is already next to it */
-  decorative?: boolean;
-  style?: React.CSSProperties;
+  decorative?: boolean | undefined;
+  style?: React.CSSProperties | undefined;
 }
 export declare function Avatar(props: AvatarProps): JSX.Element;
 export declare function initials(name: string): string;

@@ -11,7 +11,7 @@ export async function until(cond: () => boolean, ms = 10_000, what = 'condition'
 }
 
 /** In-memory PeerStore: one per simulated device. `mark()` reads the sync mark it saved last. */
-export function memStore(opts: { initial?: Ev[]; mark?: number; blobs?: Map<string, ArrayBuffer> } = {}) {
+export function memStore(opts: { initial?: Ev[] | undefined; mark?: number | undefined; blobs?: Map<string, ArrayBuffer> | undefined } = {}) {
   const evs = new Map<string, Ev>((opts.initial ?? []).map((e) => [e.id, e]));
   const blobs = opts.blobs ?? new Map<string, ArrayBuffer>();
   let mark = opts.mark ?? 0;

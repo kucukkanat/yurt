@@ -1,4 +1,6 @@
+import * as v from 'valibot';
 import type { Ev, UnsignedEv, EvType } from './types';
+import { EventSchema } from './schemas';
 import { sha256hex, sign, verify, type KeyPair } from './crypto';
 
 export const EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -28,10 +30,10 @@ export interface EventFields<B = unknown> {
   ws: string;
   t: EvType;
   b: B;
-  ch?: string;
-  to?: string;
-  ag?: string;
-  ts?: number;
+  ch?: string | undefined;
+  to?: string | undefined;
+  ag?: string | undefined;
+  ts?: number | undefined;
 }
 
 // State is reduced in (ts, id) order, so two events in the same millisecond could apply out of
@@ -49,47 +51,21 @@ export function makeEvent<B>(kp: KeyPair, f: EventFields<B>): Ev<B> {
   return { ...base, id, sig: sign(kp.sec, id) };
 }
 
-const EV_TYPES: ReadonlySet<string> = new Set<EvType>([
-  'ws.create',
-  'profile',
-  'ch.create',
-  'ch.update',
-  'msg',
-  'edit',
-  'del',
-  'react',
-  'pin',
-  'role',
-  'ban',
-  'agent',
-  'approve',
-  'rekey',
-]);
-const optStr = (x: unknown) => x === undefined || typeof x === 'string';
-
 /** Structural check for untrusted input: the fields reduce and sortEvents rely on have the right types. */
-export function isEventShape(e: unknown): e is Ev {
-  if (e === null || typeof e !== 'object') return false;
-  const o = e as Record<string, unknown>;
-  return (
-    typeof o.id === 'string' &&
-    typeof o.ws === 'string' &&
-    typeof o.t === 'string' &&
-    EV_TYPES.has(o.t) &&
-    typeof o.a === 'string' &&
-    typeof o.sig === 'string' &&
-    Number.isSafeInteger(o.ts) &&
-    optStr(o.ch) &&
-    optStr(o.to) &&
-    optStr(o.ag)
-  );
-}
+export const isEventShape = (e: unknown): e is Ev => v.is(EventSchema, e);
 
 export function verifyEvent(e: unknown): e is Ev {
   if (!isEventShape(e)) return false;
   const { id, sig, ...rest } = e;
-  if (eventId(rest) !== id) return false;
-  return verify(e.a, id, sig);
+  let expected: string;
+  try {
+    expected = eventId(rest);
+  } catch {
+    // A body nested deeper than the stack (cheap to send, valid JSON) can't be hashed: it doesn't verify.
+    // Throwing here would drop every other event received in the same batch.
+    return false;
+  }
+  return expected === id && verify(e.a, id, sig);
 }
 
 /** Total order by (ts, id), given integer ts (see isEventShape). Sorts in place. */

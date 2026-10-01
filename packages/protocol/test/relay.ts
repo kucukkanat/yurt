@@ -12,6 +12,8 @@ export interface TestRelay {
   url: string;
   port: number;
   stored: Event[];
+  /** Cut every client connection (a network blip); the relay keeps running and keeps what it stored. */
+  dropClients(): void;
   close(): Promise<void>;
 }
 export interface RelayOpts {
@@ -19,6 +21,8 @@ export interface RelayOpts {
   maxLimit?: number;
   /** Refuse an EVENT with this NIP-01 reason (e.g. "blocked: paid relay"), or accept it (null). */
   refuse?(e: Event): string | null;
+  /** Answer queries this much later, like a slow relay. */
+  delayMs?: number;
 }
 
 const isEphemeral = (k: number) => k >= 20000 && k < 30000;
@@ -57,7 +61,11 @@ export function startRelay(port = 0, opts: RelayOpts = {}): Promise<TestRelay> {
       if (type === 'EVENT') publish(ws, rest[0] as Event);
       else if (type === 'REQ') {
         const [id, ...fs] = rest as [string, ...Filter[]];
-        subscribe(ws, id, fs);
+        if (opts.delayMs === undefined) subscribe(ws, id, fs);
+        else {
+          subs.get(ws)?.set(id, fs); // live events flow at once; stored ones come after the delay
+          setTimeout(() => subscribe(ws, id, fs), opts.delayMs);
+        }
       } else if (type === 'CLOSE') subs.get(ws)?.delete(rest[0] as string);
     });
   });
@@ -70,6 +78,9 @@ export function startRelay(port = 0, opts: RelayOpts = {}): Promise<TestRelay> {
         url: `ws://127.0.0.1:${p}`,
         port: p,
         stored,
+        dropClients: () => {
+          for (const c of wss.clients) c.terminate();
+        },
         close: () =>
           new Promise((r) => {
             for (const c of wss.clients) c.terminate();

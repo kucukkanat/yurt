@@ -17,7 +17,12 @@ import {
   type WsTransport,
   type HuddleState,
   type WsState,
+  type LinkTiming,
+  type PeerStore,
+  type TRoom,
+  sign,
 } from '../src';
+import { roomConfig } from '../src/room';
 import { startRelay, type TestRelay } from './relay';
 import { memStore, until as waitFor } from './util';
 
@@ -44,6 +49,9 @@ interface DeviceOpts {
   fetchMs?: number;
   /** Hold `store.load` until this settles, and don't wait for start(). */
   loading?: Promise<void>;
+  timing?: Partial<LinkTiming>;
+  /** Replace parts of the in-memory store, e.g. with failing ones. */
+  store?: Partial<PeerStore>;
 }
 
 /** One simulated device: its own Trystero instance (own selfId), store and peer. */
@@ -52,7 +60,7 @@ async function device(kp: KeyPair, opts: DeviceOpts = {}) {
   const transport = opts.transport ?? keyed;
   // Like the app: the workspace's signaling method picks the Trystero strategy.
   const { joinRoom, selfId } = signalingOf(transport).kind === 'torrent' ? await import('@trystero-p2p/torrent') : await import('trystero');
-  const { store } = memStore({ blobs: opts.blobs });
+  const store = { ...memStore({ blobs: opts.blobs }).store, ...opts.store };
   if (opts.events) await store.save(opts.events);
   const { loading } = opts;
   const blobsSeen: string[] = [];
@@ -63,6 +71,7 @@ async function device(kp: KeyPair, opts: DeviceOpts = {}) {
     transport,
     roomIdleMs: 1_500,
     fetchMs: opts.fetchMs,
+    timing: opts.timing,
     store: loading
       ? {
           ...store,
@@ -156,8 +165,9 @@ describe('trystero transport', () => {
   }, 60_000);
 
   it('refuses a banned member at the handshake', async () => {
-    const create = (await device(A)).p.publish({ t: 'ws.create', b: { name: 'Strict' } });
-    const ban = open[0].publish({ t: 'ban', b: { target: C.pub, on: true } });
+    const { p: first } = await device(A);
+    const create = first.publish({ t: 'ws.create', b: { name: 'Strict' } });
+    const ban = first.publish({ t: 'ban', b: { target: C.pub, on: true } });
     for (const p of open.splice(0)) p.leave();
     const events = [create, ban];
     const { p: a } = await device(A, { events });
@@ -358,5 +368,175 @@ describe('BitTorrent signaling', () => {
       for (const sock of sockets) sock.destroy();
       await new Promise<void>((r) => tracker.close(() => r()));
     }
+  }, 60_000);
+});
+
+/** Joins the workspace room as a raw Trystero peer, answering the handshake with whatever `reply` returns. */
+const raws: TRoom[] = [];
+async function rawPeer(reply: (peerId: string, selfId: string) => unknown, hold?: Promise<void>) {
+  vi.resetModules();
+  const { joinRoom, selfId } = await import('trystero');
+  const { config, roomId } = roomConfig(CODE, keyed, keyed.key, { rtcPolyfill: RTCPeerConnection });
+  const room = (joinRoom as unknown as JoinRoom)(config, roomId, {
+    onPeerHandshake: async (peerId, send, receive) => {
+      await receive();
+      await send(reply(peerId, selfId));
+      await hold; // keeps this side from finishing the handshake until the test says so
+    },
+  });
+  raws.push(room);
+  return room;
+}
+afterEach(() => {
+  for (const r of raws.splice(0)) r.leave();
+});
+const signedHandshake = (kp: KeyPair) => (peerId: string, selfId: string) => ({ pub: kp.pub, sig: sign(kp.sec, `yurt-hs:${CODE}:${selfId}>${peerId}`) });
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+describe('hostile peers', () => {
+  it('cannot join without proving a key, or with a signature for another key', async () => {
+    const { p: a } = await device(A);
+    await rawPeer(() => 'not a handshake');
+    await rawPeer((peerId, selfId) => ({ ...signedHandshake(C)(peerId, selfId), pub: B.pub })); // claims B, signed by C
+    const { p: b } = await device(B);
+    await until(() => a.peers.size === 1 && b.peers.size === 1); // the real member gets in
+    await pause(1500);
+    expect(pubs(a.peers)).toEqual([B.pub]);
+  }, 60_000);
+
+  it('are refused when banned between their handshake and joining', async () => {
+    const { p: a } = await device(A);
+    a.publish({ t: 'ws.create', b: { name: 'Strict' } });
+    const gate: { open?: () => void } = {};
+    const room = await rawPeer(signedHandshake(C), new Promise<void>((r) => (gate.open = r)));
+    // A's view is what counts: C's own side only notices the closed connection later.
+    await until(() => a['pendingPub'].size === 1); // A checked C's key; C hasn't finished its side
+    a.publish({ t: 'ban', b: { target: C.pub, on: true } });
+    await until(() => a.isBanned(C.pub));
+    gate.open?.();
+    await pause(2000);
+    expect(pubs(a.peers)).toEqual([]);
+    expect(room).toBeDefined();
+  }, 60_000);
+
+  it('cannot hurt a member with malformed messages, impersonation or requests for what they may not see', async () => {
+    const { p: a, blobsSeen } = await device(A);
+    a.publish({ t: 'ws.create', b: { name: 'Robust' } });
+    a.publish({ t: 'ch.create', b: { id: 'general', name: 'general' } });
+    const { p: c } = await device(C);
+    await until(() => a.peers.size === 1 && c.peers.size === 1 && c.events.size === 2);
+    const [toA] = c.peerIdsFor([A.pub]);
+    const target = { target: toA };
+    const act = (name: string) => c.room?.makeAction<unknown>(name);
+    const dm = a.publish({ t: 'msg', ch: dmChannel(A.pub, B.pub), to: B.pub, b: { text: 'not for C' } });
+    // A file C attached publicly, which A asks for: C answers with junk first.
+    const bytes = new TextEncoder().encode('real file').buffer as ArrayBuffer;
+    const id = await sha256Buf(bytes);
+    c.publish({ t: 'msg', ch: 'general', b: { text: 'file', files: [{ id, name: 'f.txt', size: 9, type: 'text/plain' }] } });
+    await until(() => a.state.msgs.size === 2);
+    a.requestBlob(id);
+    // Deep enough to overflow hashing on receipt, yet shallow enough for the sender to serialize.
+    const deep = JSON.parse(
+      JSON.stringify({ ...makeEvent(C, { ws: CODE, t: 'msg', ch: 'general', b: { d: 0 } }) }).replace('"d":0', `"d":${'['.repeat(4_000)}${']'.repeat(4_000)}`),
+    );
+    const valid = makeEvent(C, { ws: CODE, t: 'profile', b: { name: 'Cy' } });
+    await act('hud')?.send(null, target);
+    await act('hud')?.send('junk', target);
+    await act('pres')?.send({ pub: B.pub, st: 'online' }, target); // impersonating B
+    await act('pres')?.send('junk', target);
+    await act('sync')?.send({ k: 'nope' }, target);
+    await act('sync')?.send({ k: 'want', ids: [dm.id, 'unknown'] }, target);
+    await act('fwant')?.send('junk', target);
+    await act('file')?.send('not bytes', { ...target, metadata: { id } });
+    await act('file')?.send(new TextEncoder().encode('wrong bytes').buffer, { ...target, metadata: { id } });
+    await act('ev')?.send([deep, valid], target); // one unverifiable event must not sink the batch
+    await until(() => a.events.has(valid.id));
+    await pause(1500);
+    expect(a.huddles.size).toBe(0);
+    expect([...a.presence.values()].map((p) => p.pub)).not.toContain(B.pub);
+    expect(c.events.has(dm.id)).toBe(false);
+    expect(blobsSeen).toEqual([]);
+    // The right bytes are taken once, and a second copy of a file A already has is ignored.
+    await act('file')?.send(bytes, { ...target, metadata: { id } });
+    await until(() => blobsSeen.includes(id));
+    a.requestBlob(id);
+    await act('file')?.send(bytes, { ...target, metadata: { id } });
+    await pause(1000);
+    expect(blobsSeen).toEqual([id]);
+  }, 60_000);
+});
+
+describe('file edge cases', () => {
+  const file = async (text: string) => {
+    const buf = new TextEncoder().encode(text).buffer as ArrayBuffer;
+    return { buf, ref: { id: await sha256Buf(buf), name: 'f.txt', size: buf.byteLength, type: 'text/plain' } };
+  };
+
+  it('asks members who join later for a file it is still looking for, if they may see it', async () => {
+    const { buf, ref } = await file('arrives late');
+    const msg = makeEvent(A, { ws: CODE, t: 'msg', ch: dmChannel(A.pub, B.pub), to: B.pub, b: { text: 'x', files: [ref] } });
+    const { p: b, blobsSeen } = await device(B, { events: [msg] });
+    const got = b.fetchFile(ref.id); // nobody around yet
+    const { p: c } = await device(C, { blobs: new Map([[ref.id, buf]]) }); // has the bytes, but isn't in the DM: never asked
+    await until(() => b.peers.size === 1 && c.peers.size === 1);
+    await device(A, { blobs: new Map([[ref.id, buf]]), events: [msg] });
+    expect(new TextDecoder().decode((await got) ?? new ArrayBuffer(0))).toBe('arrives late');
+    expect(blobsSeen).toEqual([ref.id]);
+  }, 60_000);
+
+  /** A attaches a file publicly; B joins and asks A for it. */
+  const askA = async (text: string, aOpts: (buf: ArrayBuffer, id: string) => DeviceOpts) => {
+    const { buf, ref } = await file(text);
+    const { p: a } = await device(A, aOpts(buf, ref.id));
+    a.publish({ t: 'msg', ch: 'general', b: { text: 'x', files: [ref] } });
+    const { p: b } = await device(B, { fetchMs: 3_000 });
+    await until(() => b.events.size === 1 && b.peers.size === 1);
+    return { id: ref.id, got: await b.fetchFile(ref.id) };
+  };
+
+  it('serves nothing for a file it does not have', async () => {
+    expect((await askA('nobody has it', () => ({}))).got).toBeNull();
+  }, 60_000);
+
+  it('reports a store that fails to read a file it was asked for', async () => {
+    const { id, got } = await askA('unreadable', (buf, id) => ({ blobs: new Map([[id, buf]]), store: { getBlob: () => Promise.reject(new Error('disk gone')) } }));
+    expect(got).toBeNull();
+    expect(errors).toEqual([`Couldn't serve file ${id}: disk gone`]);
+    errors = [];
+  }, 60_000);
+
+  it('reports a store that fails to keep a file it received', async () => {
+    const { buf, ref } = await file('cannot be stored');
+    const { p: a } = await device(A, { blobs: new Map([[ref.id, buf]]) });
+    a.publish({ t: 'msg', ch: 'general', b: { text: 'x', files: [ref] } });
+    const { p: b } = await device(B, { store: { putBlob: () => Promise.reject(new Error('quota exceeded')) } });
+    await until(() => b.events.size === 1 && b.peers.size === 1);
+    b.requestBlob(ref.id);
+    await until(() => errors.includes(`Couldn't store file ${ref.id}: quota exceeded`));
+    errors = [];
+  }, 60_000);
+
+  it('keeps announcing presence on its heartbeat', async () => {
+    const { p: a } = await device(A, { timing: { beatMs: 50 } });
+    const { p: b } = await device(B, { timing: { beatMs: 50 } });
+    await until(() => a.presence.size === 1 && b.presence.size === 1);
+    await pause(300);
+    expect(pubs(b.presence)).toEqual([A.pub]);
+  }, 60_000);
+});
+
+describe('key rotation with a call open', () => {
+  it('leaves the WebRTC room, whose credentials came from the old key', async () => {
+    const transport = newNostrTransport([relay.url]);
+    const keys: string[] = [];
+    const { p: a } = await device(A, { transport });
+    a.o.onKey = (k) => keys.push(k);
+    a.publish({ t: 'ws.create', b: { name: 'Calls' } });
+    await until(() => a.connected);
+    expect(a.ensureRoom()).toBe(a.room);
+    expect(a.ensureRoom()).toBe(a.room); // the same room while it's open
+    a.rotate();
+    expect(a.room).toBeNull();
+    expect(keys).toEqual([a.inviteKey]);
   }, 60_000);
 });

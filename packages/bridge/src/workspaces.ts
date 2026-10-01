@@ -9,57 +9,62 @@ import {
   agentPrefs,
   keyFromPhrase,
   LEGACY_TRYSTERO,
+  isLegacy,
   signalingOf,
   type WsTransport,
-  type Ev,
   type PeerStore,
   type JoinRoom,
   type KeyPair,
   type AgentBody,
 } from '@yurt/protocol';
 import { WS_DIR, BLOB_DIR, saveConfig, type Config } from './config';
+import { parseStoredEvent } from './schemas';
 import type { AgentHost } from './agents';
 import { log } from './log';
+import { errorMessage } from './util';
+import { compact } from './compact';
 
 const safe = (s: string) => s.replace(/[^A-Za-z0-9]/g, '');
 
-const fileStore: PeerStore = {
-  async load(ws) {
-    try {
+/** A workspace's events, marks and file blobs on disk, under the bridge's data folder. */
+export const storeFor = (code: string): PeerStore => {
+  const base = path.join(WS_DIR, safe(code));
+  return {
+    async load() {
+      if (!fs.existsSync(base + '.jsonl')) return [];
+      // Line by line: a torn last line (crash mid-append) or one bad entry must not cost the rest of the history.
       return fs
-        .readFileSync(path.join(WS_DIR, safe(ws) + '.jsonl'), 'utf8')
+        .readFileSync(base + '.jsonl', 'utf8')
         .split('\n')
-        .filter(Boolean)
-        .map((l) => JSON.parse(l) as Ev);
-    } catch {
-      return [];
-    }
-  },
-  async save(evs) {
-    fs.appendFileSync(path.join(WS_DIR, safe(evs[0]?.ws || 'x') + '.jsonl'), evs.map((e) => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
-  },
-  async getBlob(id) {
-    try {
-      const b = fs.readFileSync(path.join(BLOB_DIR, safe(id)));
+        .flatMap((l) => {
+          const e = parseStoredEvent(l);
+          return e ? [e] : [];
+        });
+    },
+    async save(evs) {
+      fs.appendFileSync(base + '.jsonl', evs.map((e) => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
+    },
+    async getBlob(id) {
+      const file = path.join(BLOB_DIR, safe(id));
+      if (!fs.existsSync(file)) return null;
+      const b = fs.readFileSync(file);
       return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
-    } catch {
-      return null;
-    }
-  },
-  async putBlob(id, buf) {
-    fs.writeFileSync(path.join(BLOB_DIR, safe(id)), Buffer.from(buf));
-  },
-  async loadMark(ws) {
-    try {
-      return Number(fs.readFileSync(path.join(WS_DIR, safe(ws) + '.mark'), 'utf8')) || 0;
-    } catch {
-      return 0;
-    }
-  },
-  async saveMark(ws, sec) {
-    fs.writeFileSync(path.join(WS_DIR, safe(ws) + '.mark'), String(sec), { mode: 0o600 });
-  },
+    },
+    async putBlob(id, buf) {
+      fs.writeFileSync(path.join(BLOB_DIR, safe(id)), Buffer.from(buf));
+    },
+    async loadMark() {
+      if (!fs.existsSync(base + '.mark')) return 0;
+      return Number(fs.readFileSync(base + '.mark', 'utf8')) || 0;
+    },
+    async saveMark(_ws, sec) {
+      fs.writeFileSync(base + '.mark', String(sec), { mode: 0o600 });
+    },
+  };
 };
+
+/** What an agent event says that members see; two equal ones need no new announcement. */
+const announced = (b: AgentBody) => JSON.stringify([b.name, b.handle, b.runtime, b.model || null, b.replyIn, b.removed === true, agentPrefs(b)]);
 
 /** The part of a transport members must share to meet: relays, or signaling (absent = Trystero's defaults). */
 const networkOf = (t: WsTransport) => (t.kind === 'nostr' ? { relays: t.relays } : { signal: t.signal ?? null });
@@ -72,9 +77,11 @@ export class Workspaces {
   private stopping = new Map<string, ReturnType<typeof setTimeout>>();
   host!: AgentHost;
 
+  /** `devFileServers`: also fetch files from http:// Blossom servers (local test servers; never in the CLI). */
   constructor(
     private cfg: Config,
     private changed: () => void,
+    private opts: { devFileServers?: boolean } = {},
   ) {}
 
   setIdentity(phrase: string | null) {
@@ -96,16 +103,17 @@ export class Workspaces {
       code,
       kp: this.kp,
       selfId,
-      creator: w.creator,
       isBridge: true,
-      transport: w.transport ?? LEGACY_TRYSTERO,
+      devFileServers: this.opts.devFileServers,
+      transport: w.transport,
       // Relay workspaces are Nostr-only for the bridge: files come from Blossom, and it never joins calls.
       // Members only meet over the workspace's own signaling method, so pick the matching strategy.
-      joinRoom:
-        (w.transport ?? LEGACY_TRYSTERO).kind === 'trystero'
-          ? ((signalingOf(w.transport ?? LEGACY_TRYSTERO).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom)
-          : undefined,
-      store: fileStore,
+      // Absent (not undefined) unless known: the peer pins the creator, and only Trystero workspaces get a room.
+      ...compact({
+        creator: w.creator,
+        joinRoom: w.transport.kind === 'trystero' ? ((signalingOf(w.transport).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom) : undefined,
+      }),
+      store: storeFor(code),
       // No third-party TURN: it would see who the bridge connects to. The browser is usually on the same machine.
       rtc: { rtcPolyfill: RTCPeerConnection },
       onState: (s, fresh) => {
@@ -122,12 +130,10 @@ export class Workspaces {
         w.creator = pub;
         saveConfig(this.cfg);
       },
-      // A key rotation: keep the newest key, which opens every earlier one, so the config matches the app's.
+      // A key rotation (relay workspaces): keep the newest key, which opens every earlier one, so the config matches the app's.
       onKey: (key) => {
-        if (w.transport?.kind === 'nostr') {
-          w.transport = { ...w.transport, key };
-          saveConfig(this.cfg);
-        }
+        w.transport = { ...w.transport, key };
+        saveConfig(this.cfg);
       },
       onJoinError: (d) => log('warn', 'p2p', 'join error in ' + code + ': ' + JSON.stringify(d).slice(0, 300)),
       onError: (msg) => log('error', 'relay', code + ': ' + msg),
@@ -138,7 +144,7 @@ export class Workspaces {
         this.presence(code);
         log('info', 'p2p', 'joined workspace ' + code);
       },
-      (e: unknown) => log('error', 'p2p', `couldn't start workspace ${code}: ${e instanceof Error ? e.message : String(e)}`),
+      (e: unknown) => log('error', 'p2p', `couldn't start workspace ${code}: ${errorMessage(e)}`),
     );
   }
 
@@ -157,30 +163,21 @@ export class Workspaces {
     const me = this.kp.pub;
     for (const a of this.cfg.agents) {
       // replyIn stays for peers that predate respondTo/postIn (they drop agent events without it).
-      const want: AgentBody = {
+      const want: AgentBody = compact({
         id: a.id,
         name: a.name,
         handle: a.handle,
         runtime: a.runtime,
         model: a.model,
-        replyIn: a.postIn.thread ? 'thread' : 'channel',
+        replyIn: a.postIn.thread ? ('thread' as const) : ('channel' as const),
         respondTo: a.respondTo,
         postIn: a.postIn,
         discoverable: a.discoverable,
         removed: w.agents.includes(a.id) ? undefined : true,
-      };
+      });
       const have = p.state.agents.get(agentKey(me, a.id));
       if (!have && want.removed) continue;
-      const same =
-        have &&
-        have.name === want.name &&
-        have.handle === want.handle &&
-        have.runtime === want.runtime &&
-        (have.model || undefined) === want.model &&
-        have.replyIn === want.replyIn &&
-        !!have.removed === !!want.removed &&
-        JSON.stringify(agentPrefs(have)) === JSON.stringify(agentPrefs(want));
-      if (!same) p.publish({ t: 'agent', b: want });
+      if (!have || announced(have) !== announced(want)) p.publish({ t: 'agent', b: want });
     }
     for (const have of p.state.agents.values()) {
       if (have.owner === me && !have.removed && !this.cfg.agents.some((a) => a.id === have.id))
@@ -195,7 +192,8 @@ export class Workspaces {
     p.setPresence({ st: 'online', bridge: true, agents: Object.fromEntries(w.agents.map((id) => [id, { working: this.host.workingIn(id, code) }])) });
   }
 
-  join(code: string, name: string, creator: string | null | undefined, agents: string[], transport?: WsTransport) {
+  /** `transport` absent: an older web app, whose workspaces are legacy Trystero ones. */
+  join(code: string, name: string, creator: string | null | undefined, agents: string[], transport: WsTransport = LEGACY_TRYSTERO) {
     clearTimeout(this.stopping.get(code));
     this.stopping.delete(code);
     let w = this.cfg.workspaces.find((x) => x.code === code);
@@ -207,9 +205,9 @@ export class Workspaces {
     // but the app owns the rest: a relay list or signaling edited there needs a fresh peer on the new
     // servers, or the bridge waits where no member ever looks. (Key rotations reach the bridge by itself.)
     const cur = w.transport;
-    const sameIdentity = !!transport && !!cur && transport.kind === cur.kind && transport.key === cur.key;
+    const sameIdentity = transport.kind === cur.kind && transport.key === cur.key;
     const edited = sameIdentity && JSON.stringify(networkOf(transport)) !== JSON.stringify(networkOf(cur));
-    if (transport && (!cur || edited)) w.transport = transport;
+    if ((isLegacy(cur) && !isLegacy(transport)) || edited) w.transport = transport;
     w.agents = agents.filter((id) => this.cfg.agents.some((a) => a.id === id));
     if (creator && !w.creator) w.creator = creator;
     saveConfig(this.cfg);
@@ -247,6 +245,6 @@ export class Workspaces {
   }
 
   peerCount(code: string) {
-    return this.peers.get(code)?.presence.size || 0;
+    return this.peers.get(code)?.presence.size ?? 0;
   }
 }

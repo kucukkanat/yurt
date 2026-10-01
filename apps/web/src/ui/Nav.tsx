@@ -15,7 +15,7 @@ export function Row({
   onClick: () => void;
   children: React.ReactNode;
   label?: string;
-  dim?: boolean;
+  dim?: boolean | undefined;
   testId?: string;
 }) {
   const [h, setH] = useState(false);
@@ -53,12 +53,15 @@ export function Row({
   );
 }
 
-export function Section({ title, onAdd, addLabel, children }: { title: string; onAdd?: () => void; addLabel?: string; children: React.ReactNode }) {
+/** A titled group; with `onAdd`, a + button that `addLabel` names (required with it, so the button is never unnamed). */
+type SectionProps = { title: string; children: React.ReactNode } & ({ onAdd: () => void; addLabel: string } | { onAdd?: undefined; addLabel?: undefined });
+
+export function Section({ title, onAdd, addLabel, children }: SectionProps) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px 4px 10px' }}>
         <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)', lineHeight: '28px' }}>{title}</span>
-        {onAdd && <IconButton icon="plus" label={addLabel || 'Add'} size="sm" onClick={onAdd} />}
+        {onAdd && <IconButton icon="plus" label={addLabel} size="sm" onClick={onAdd} />}
       </div>
       {children}
     </div>

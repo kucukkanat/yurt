@@ -18,6 +18,10 @@ export interface TestBlossom {
 export interface BlossomOpts {
   /** Stream downloads without Content-Length, so a client only learns the size by reading. */
   chunked?: boolean;
+  /** Refuse every upload with this status, and this X-Reason header when given. */
+  refuseUploads?: { status: number; reason?: string };
+  /** Answer downloads with this status and no body (e.g. 204), whatever is stored. */
+  emptyStatus?: number;
 }
 
 const CHUNK = 1 << 20;
@@ -41,40 +45,59 @@ export function startBlossom(port = 0, opts: BlossomOpts = {}): Promise<TestBlos
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-SHA-256');
     res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, HEAD, OPTIONS');
-    if (req.method === 'OPTIONS') return res.writeHead(204).end();
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204).end();
+      return;
+    }
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
       const body = Buffer.concat(chunks);
-      if (req.method === 'PUT' && req.url === '/upload') {
-        const hash = sha(body);
-        if (!authorized(req.headers.authorization, 'upload', hash)) return res.writeHead(401, { 'X-Reason': 'bad auth' }).end();
-        stored.set(hash, body);
-        return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ sha256: hash, size: body.length, url: `http://127.0.0.1:${port}/${hash}` }));
-      }
-      const hash = req.url?.slice(1).split('.')[0] ?? '';
-      const blob = stored.get(hash);
-      if (req.method === 'GET' && blob) {
-        res.writeHead(200, { 'Content-Type': 'application/octet-stream', ...(opts.chunked ? {} : { 'Content-Length': blob.length }) });
-        res.on('close', () => {
-          if (!res.writableFinished) aborted.push(hash);
-        });
-        // In 1 MiB chunks, honouring backpressure, so a client that stops reading stops the transfer.
-        const write = (at: number): void => {
-          if (res.destroyed) return;
-          if (at >= blob.length) {
-            res.end();
-            return;
-          }
-          const next = at + CHUNK;
-          if (res.write(blob.subarray(at, next))) write(next);
-          else res.once('drain', () => write(next));
-        };
-        return write(0);
-      }
-      res.writeHead(404).end();
+      if (req.method === 'PUT' && req.url === '/upload') upload(req, res, body);
+      else if (req.method === 'GET') download(req, res);
+      else res.writeHead(404).end();
     });
   });
+
+  const upload = (req: http.IncomingMessage, res: http.ServerResponse, body: Buffer) => {
+    if (opts.refuseUploads) {
+      const { status, reason } = opts.refuseUploads;
+      res.writeHead(status, reason ? { 'X-Reason': reason } : {}).end();
+      return;
+    }
+    const hash = sha(body);
+    if (!authorized(req.headers.authorization, 'upload', hash)) {
+      res.writeHead(401, { 'X-Reason': 'bad auth' }).end();
+      return;
+    }
+    stored.set(hash, body);
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ sha256: hash, size: body.length, url: `http://127.0.0.1:${port}/${hash}` }));
+  };
+
+  const download = (req: http.IncomingMessage, res: http.ServerResponse) => {
+    const hash = req.url?.slice(1).split('.')[0] ?? '';
+    const blob = stored.get(hash);
+    if (opts.emptyStatus || !blob) {
+      res.writeHead(opts.emptyStatus ?? 404).end();
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream', ...(opts.chunked ? {} : { 'Content-Length': blob.length }) });
+    res.on('close', () => {
+      if (!res.writableFinished) aborted.push(hash);
+    });
+    // In 1 MiB chunks, honouring backpressure, so a client that stops reading stops the transfer.
+    const write = (at: number): void => {
+      if (res.destroyed) return;
+      if (at >= blob.length) {
+        res.end();
+        return;
+      }
+      const next = at + CHUNK;
+      if (res.write(blob.subarray(at, next))) write(next);
+      else res.once('drain', () => write(next));
+    };
+    write(0);
+  };
   return new Promise((resolve) =>
     server.listen(port, '127.0.0.1', () => {
       const addr = server.address();

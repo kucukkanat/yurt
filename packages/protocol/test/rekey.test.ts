@@ -22,7 +22,12 @@ const until = (cond: () => boolean, what: string) => waitFor(cond, 10_000, what)
 
 // Key rotation against a real local relay: every device is a real WorkspacePeer with its own store.
 const CODE = 'K7QX2MPD';
-const [A, B, C, D, E] = Array.from({ length: 5 }, () => keyFromPhrase(newRecoveryPhrase()));
+const key = () => keyFromPhrase(newRecoveryPhrase());
+const A = key();
+const B = key();
+const C = key();
+const D = key();
+const E = key();
 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -31,7 +36,7 @@ let transport: KeyedTransport;
 let errors: string[];
 const peers: WorkspacePeer[] = [];
 
-async function join(kp: KeyPair, name: string, opts: { key?: string; store?: PeerStore; onKey?: (k: string) => void } = {}) {
+async function join(kp: KeyPair, name: string, opts: { key?: string | undefined; store?: PeerStore; onKey?: ((k: string) => void) | undefined } = {}) {
   const t = { ...transport, key: opts.key ?? transport.key };
   const p = new WorkspacePeer({
     code: CODE,
@@ -222,6 +227,6 @@ describe('which rotations count', () => {
 
   it('drops keys addressed to malformed pubkeys', () => {
     const r = reduce(CODE, [ev(A, 'rekey', { epoch: 1, keys: { [A.pub]: 'ok', nothex: 'x', [B.pub]: 7 }, history: 'h' }, 1)], { creator: A.pub }).rekeys[0];
-    expect(Object.keys(r.keys)).toEqual([A.pub]);
+    expect(Object.keys(r?.keys ?? {})).toEqual([A.pub]);
   });
 });

@@ -61,6 +61,7 @@ export function Input({ label, hint, error, optional, iconLeft, suffix, size = '
       >
         {iconLeft && <Icon name={iconLeft} size={17} color={focus ? 'var(--accent)' : 'var(--text-subtle)'} style={{ transition: 'color var(--dur-fast)' }} />}
         <input
+          type="text"
           id={fid}
           disabled={disabled}
           aria-invalid={!!error || undefined}

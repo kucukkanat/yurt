@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { keyFromPhrase, newRecoveryPhrase, makeEvent, reduce, agentPrefs, dmChannel, agentDmChannel, guestDmChannel } from '@yurt/protocol';
-import { guestDmTitle, isDirect, prefsLine, privateTarget } from '../src/lib/private';
+import { addressed, guestDmTitle, isDirect, prefsLine, privateTarget } from '../src/lib/private';
+import { fc } from './fuzz';
 
 const OWNER = keyFromPhrase(newRecoveryPhrase());
 const MEMBER = keyFromPhrase(newRecoveryPhrase());
@@ -47,6 +48,51 @@ describe('prefsLine', () => {
     );
     expect(prefsLine({ respondTo: { mentions: false, replies: false }, postIn: { thread: false, channel: true }, discoverable: false })).toBe(
       'answers only private chats · posts in channel',
+    );
+  });
+});
+
+describe('private channels, for any keys and channel ids', () => {
+  const hex = fc.stringMatching(/^[0-9a-f]{64}$/);
+
+  it('address a DM to the other person, never to me unless it’s my notes', () => {
+    fc.assert(
+      fc.property(hex, hex, (me, other) => {
+        const to = privateTarget(dmChannel(me, other), me);
+        expect(to).toBe(other);
+        expect(addressed(dmChannel(me, other), me)).toEqual({ to: other });
+      }),
+    );
+  });
+
+  it('address a guest DM to the agent’s owner, from either side', () => {
+    fc.assert(
+      fc.property(hex, hex, fc.stringMatching(/^[a-z0-9-]{1,24}$/), (member, owner, agent) => {
+        expect(privateTarget(guestDmChannel(member, owner, agent), member)).toBe(owner);
+      }),
+    );
+  });
+
+  it('leave public channels unaddressed, and never throw', () => {
+    fc.assert(
+      fc.property(fc.string(), hex, (ch, me) => {
+        const to = privateTarget(ch, me);
+        if (!ch.startsWith('dm:') && !ch.startsWith('adm:') && !ch.startsWith('gdm:')) expect(to).toBeUndefined();
+        expect(addressed(ch, me)).toEqual(to ? { to } : {});
+        void isDirect(ch);
+        void guestDmTitle(undefined, ch, me);
+      }),
+    );
+  });
+
+  it('summarize any agent settings in one line', () => {
+    const b = fc.boolean();
+    fc.assert(
+      fc.property(b, b, b, b, b, (mentions, replies, thread, channel, discoverable) => {
+        const line = prefsLine({ respondTo: { mentions, replies }, postIn: { thread, channel }, discoverable });
+        expect(line.startsWith('answers ')).toBe(true);
+        expect(line.endsWith(' · discoverable')).toBe(discoverable);
+      }),
     );
   });
 });

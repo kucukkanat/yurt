@@ -42,13 +42,8 @@ export interface WsKeys {
 /** 32 random bytes, base64url (43 chars). */
 export const newWorkspaceKey = (): string => b64(randomBytes(32));
 
-export function isWorkspaceKey(k: string): boolean {
-  try {
-    return /^[A-Za-z0-9_-]{43}$/.test(k) && unb64(k).length === 32;
-  } catch {
-    return false;
-  }
-}
+/** 43 base64url characters always decode to 32 bytes, so the pattern is the whole check. */
+export const isWorkspaceKey = (k: string): boolean => /^[A-Za-z0-9_-]{43}$/.test(k);
 
 export function workspaceKeys(key: string): WsKeys {
   if (!isWorkspaceKey(key)) throw new Error('invalid workspace key');

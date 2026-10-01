@@ -2,7 +2,9 @@ import { randomBytes } from '@noble/ciphers/webcrypto';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
-import { b64, unb64, sealBytes, openBytes, padSize, isWorkspaceKey } from './seal';
+import * as v from 'valibot';
+import { b64, unb64, sealBytes, openBytes, padSize } from './seal';
+import { FetchableBlobRefSchema } from './schemas';
 import { MAX_FILE_BYTES } from './events';
 
 /**
@@ -84,31 +86,17 @@ export async function uploadFile(servers: readonly string[], bytes: Uint8Array):
       return base(s);
     }),
   );
-  const ok = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
-  if (!ok.length) throw new Error('No file server accepted the upload. ' + results.map((r) => (r.status === 'rejected' ? String(r.reason) : '')).join('; '));
+  const ok = results.filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled').map((r) => r.value);
+  const why = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected').map((r) => String(r.reason));
+  if (!ok.length) throw new Error('No file server accepted the upload. ' + why.join('; '));
   return { key, hash, servers: ok };
 }
 
 export interface DownloadOpts {
   /** Also fetch from `http://` servers (local development and tests). Otherwise only `https://` ones. */
-  allowHttp?: boolean;
+  allowHttp?: boolean | undefined;
   /** Per-server time limit for the whole request, body included. Default 60 s. */
-  timeoutMs?: number;
-}
-
-/** A FileRef's `blob` comes from another member's message, so its shape is checked, not assumed. */
-function isBlobRef(r: unknown): r is BlobRef {
-  if (typeof r !== 'object' || r === null) return false;
-  const { key, hash, servers } = r as Record<string, unknown>;
-  // The file key has the same shape as a workspace key: 32 bytes, base64url.
-  return (
-    typeof key === 'string' &&
-    isWorkspaceKey(key) &&
-    typeof hash === 'string' &&
-    /^[0-9a-f]{64}$/.test(hash) &&
-    Array.isArray(servers) &&
-    servers.every((s) => typeof s === 'string')
-  );
+  timeoutMs?: number | undefined;
 }
 
 /** The body, or null once it's longer than `max` (stops reading there, so a server can't make us buffer gigabytes). */
@@ -143,7 +131,8 @@ async function readCapped(r: Response, max: number): Promise<Uint8Array | null> 
  * an intact copy that decrypts.
  */
 export async function downloadFile(ref: BlobRef, opts: DownloadOpts = {}): Promise<Uint8Array | null> {
-  if (!isBlobRef(ref)) return null;
+  // A FileRef's `blob` comes from another member's message, so its shape is checked, not assumed.
+  if (!v.is(FetchableBlobRefSchema, ref)) return null;
   const allowed = opts.allowHttp ? /^https?:\/\//i : /^https:\/\//i;
   for (const s of ref.servers.filter((u) => allowed.test(u))) {
     try {

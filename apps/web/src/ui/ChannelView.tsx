@@ -7,8 +7,9 @@ import { useCurrent, roster, personFor, authorKey, channelTitle, othersOnline, t
 import { privateTarget } from '../lib/private';
 import { fmtDay } from '../lib/format';
 import { MessageItem, type MsgCtx } from './Message';
-import { Composer } from './Composer';
+import { Composer, editLastMessage } from './Composer';
 import { HuddleStrip, HuddleStage, HuddleButton, HuddleDock } from './Huddle';
+import { must } from './must';
 
 const GROUP_MS = 5 * 60 * 1000;
 
@@ -27,34 +28,36 @@ export function useTyping(ch: string) {
 function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: string[]; ctx: MsgCtx; lastRead: number; emptyState?: React.ReactNode; highlight?: string | null }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [away, setAway] = useState(false);
+  // The list is mounted whenever these run (effects, its own button).
   const toBottom = (smooth?: boolean) => {
-    const el = scroller.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+    const el = must(scroller.current, 'the message list is mounted');
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only on mount (the list is keyed per conversation); a highlight scrolls itself below
-  useEffect(() => {
-    if (!highlight) toBottom(false);
-  }, []);
+  // Opens at the latest message (the list is keyed per conversation). A highlight, set just after navigating, scrolls itself below.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on mount only
+  useEffect(() => toBottom(false), []);
   // biome-ignore lint/correctness/useExhaustiveDependencies: follows new messages only; scrolling away (`away`) must not snap back by itself
   useEffect(() => {
     if (!away) toBottom(false);
   }, [ids.length]);
   useEffect(() => {
-    if (!highlight || !scroller.current) return;
-    const el = scroller.current.querySelector<HTMLElement>('[data-mid="' + highlight + '"]');
-    if (el) scroller.current.scrollTop = el.offsetTop - scroller.current.clientHeight / 3;
+    if (!highlight) return;
+    const list = must(scroller.current, 'the message list is mounted');
+    // Absent while its delete can still be undone: search lists it, but it isn't drawn.
+    const el = list.querySelector<HTMLElement>('[data-mid="' + highlight + '"]');
+    if (el) list.scrollTop = el.offsetTop - list.clientHeight / 3;
   }, [highlight]);
-  const onScroll = () => {
-    const el = scroller.current;
-    if (el) setAway(el.scrollHeight - el.scrollTop - el.clientHeight > 160);
+  const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    setAway(el.scrollHeight - el.scrollTop - el.clientHeight > 160);
   };
   const rows: React.ReactNode[] = [];
   let prev: Msg | null = null;
   let day = '';
   let unreadShown = false;
-  for (const id of ids) {
-    const m = ctx.state.msgs.get(id);
-    if (!m) continue;
+  // Every id the reducer lists for a conversation is one of its messages.
+  for (const m of ids.map((id) => ctx.state.msgs.get(id)).filter((x): x is Msg => !!x)) {
+    const id = m.id;
     const d = fmtDay(m.ts);
     if (d !== day) {
       day = d;
@@ -118,10 +121,10 @@ type Conversation =
 
 function conversationOf(state: WsState, peer: WorkspacePeer | undefined, ch: string, me: string): Conversation | null {
   const person = (key: string) => personFor(state, peer, key, me);
-  if (ch.startsWith('dm:')) return { kind: 'dm', other: person(privateTarget(ch, me) ?? me) };
+  if (ch.startsWith('dm:')) return { kind: 'dm', other: person(must(privateTarget(ch, me), 'a DM names the other side')) };
   if (ch.startsWith('adm:')) {
-    const [, owner = '', id = ''] = ch.split(':');
-    return { kind: 'agent', agent: person(agentKey(owner, id)) };
+    const [, owner, id = ''] = ch.split(':'); // a route can be any text: "adm:<owner>" without an agent id still renders
+    return { kind: 'agent', agent: person(agentKey(must(owner, 'an adm: route has an owner part'), id)) };
   }
   const g = parseGuestDm(ch);
   if (g) return { kind: 'guest', agent: person(agentKey(g.owner, g.agentId)), owner: person(g.owner), member: person(g.member), ownerView: g.owner === me };
@@ -228,6 +231,8 @@ const titleStyle: React.CSSProperties = {
   letterSpacing: '-0.02em',
   color: 'var(--text-strong)',
 };
+// The conversation's name is the page's one level-one heading; it keeps the header's look.
+const h1Reset: React.CSSProperties = { margin: 0, font: 'inherit', minWidth: 0 };
 const subtitleStyle: React.CSSProperties = { fontSize: 12, color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
 
 /** Avatar, title and subtitle of a private conversation. */
@@ -236,10 +241,10 @@ function PrivateTitle({ avatar, title, subtitle, testId }: { avatar: React.React
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
       {avatar}
       <div style={{ minWidth: 0, lineHeight: 1.25 }}>
-        <div style={titleStyle}>
+        <h1 style={{ ...h1Reset, ...titleStyle }}>
           {title}
-          <Icon name="lock" size={13} style={{ color: 'var(--text-subtle)' }} />
-        </div>
+          <Icon name="lock" size={13} label="Private" style={{ color: 'var(--text-subtle)' }} />
+        </h1>
         <div data-testid={testId} style={subtitleStyle}>
           {subtitle}
         </div>
@@ -275,20 +280,35 @@ function ConversationTitle({ c, title, narrow, muted }: { c: Conversation; title
       );
     case 'channel':
       return (
-        <button
-          type="button"
-          onClick={() => useApp.getState().setDialog('channelSettings')}
-          aria-label="Channel settings"
-          style={{ minWidth: 0, flex: 1, lineHeight: 1.25, textAlign: 'left', padding: 0, border: 0, background: 'none', cursor: 'pointer' }}
-        >
-          <div style={{ ...titleStyle, gap: 4, whiteSpace: 'nowrap', overflow: 'hidden' }}>
-            <Icon name="hash" size={16} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.channel.name}</span>
-            {muted && <Icon name="bell" size={13} style={{ color: 'var(--text-subtle)', opacity: 0.6 }} />}
-            <Icon name="chevron-down" size={14} style={{ color: 'var(--text-subtle)' }} />
-          </div>
-          {!narrow && c.channel.topic && <div style={subtitleStyle}>{c.channel.topic}</div>}
-        </button>
+        <h1 style={{ ...h1Reset, flex: 1 }}>
+          {/* Named by what it shows (the channel); it opens the channel's settings dialog. */}
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            data-testid="channel-settings"
+            onClick={() => useApp.getState().setDialog('channelSettings')}
+            style={{
+              display: 'block',
+              width: '100%',
+              minWidth: 0,
+              lineHeight: 1.25,
+              textAlign: 'left',
+              padding: 0,
+              border: 0,
+              background: 'none',
+              cursor: 'pointer',
+              font: 'inherit',
+            }}
+          >
+            <span style={{ ...titleStyle, gap: 4, whiteSpace: 'nowrap', overflow: 'hidden' }}>
+              <Icon name="hash" size={16} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.channel.name}</span>
+              {muted && <Icon name="bell" size={13} label="Muted" style={{ color: 'var(--text-subtle)', opacity: 0.6 }} />}
+              <Icon name="chevron-down" size={14} style={{ color: 'var(--text-subtle)' }} />
+            </span>
+            {!narrow && c.channel.topic && <span style={{ ...subtitleStyle, display: 'block' }}>{c.channel.topic}</span>}
+          </button>
+        </h1>
       );
   }
 }
@@ -422,7 +442,7 @@ function useFileDrop(at: string) {
       onDrop: (e: React.DragEvent) => {
         e.preventDefault();
         setDragging(false);
-        const files = Array.from(e.dataTransfer.files || []);
+        const files = Array.from(e.dataTransfer.files);
         if (files.length) setDropped({ at, files });
       },
     },
@@ -451,7 +471,17 @@ function Banners({ c, online }: { c: Conversation; online: boolean }) {
   );
 }
 
-function ComposerArea(p: { c: Conversation; ch: string; draftKey: string; narrow: boolean; people: Person[]; dropFiles?: File[]; placeholder: string; note: React.ReactNode }) {
+function ComposerArea(p: {
+  c: Conversation;
+  code: string;
+  ch: string;
+  draftKey: string;
+  narrow: boolean;
+  people: Person[];
+  dropFiles?: File[] | undefined;
+  placeholder: string;
+  note: React.ReactNode;
+}) {
   const typing = useTyping(p.ch);
   const app = useApp.getState();
   return (
@@ -477,6 +507,7 @@ function ComposerArea(p: { c: Conversation; ch: string; draftKey: string; narrow
           note={p.note}
           onTyping={() => app.setTyping(p.ch)}
           onSend={(t, f) => app.send(t, f)}
+          onArrowUp={() => editLastMessage(p.code, p.ch)}
         />
       )}
     </div>
@@ -484,22 +515,26 @@ function ComposerArea(p: { c: Conversation; ch: string; draftKey: string; narrow
 }
 
 export function ChannelView({ narrow }: { narrow: boolean }) {
-  const { route, state, rec, identity, peer } = useCurrent();
+  const { route, state } = useCurrent();
+  // Mounted for a conversation route; nothing to show until its workspace's state exists (loading, or an unknown link).
+  if (!state || !route.code || !route.ch) return null;
+  return <Conversation narrow={narrow} code={route.code} ch={route.ch} state={state} />;
+}
+
+function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: string; ch: string; state: WsState }) {
+  const { rec, identity, peer } = useCurrent();
   const panel = useApp((s) => s.panel);
   const online = useApp((s) => s.online);
   const highlight = useApp((s) => s.highlight);
   const hud = useApp((s) => s.huddle);
   const app = useApp.getState();
   const [, force] = useReducer((x: number) => x + 1, 0);
-  const code = route.code ?? '';
-  const ch = route.ch ?? '';
   const draftKey = code + '/' + ch;
   const drop = useFileDrop(draftKey);
   const me = identity.pub;
-  const ids = state?.channelMsgs.get(ch) || [];
+  const ids = state.channelMsgs.get(ch) || [];
   const entryRead = useReadMarks(code, ch, ids.length);
 
-  if (!state || !route.code || !route.ch) return null;
   // On Nostr the relays hold messages, so being alone is fine; only unreachable relays matter.
   const relayed = peer?.transport.kind === 'nostr';
   const c = conversationOf(state, peer, ch, me);
@@ -545,7 +580,7 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
       <HuddleStrip ch={ch} />
       {hud.code === code && hud.ch === ch && <HuddleStage />}
       <MessageList key={code + ch} ids={ids} ctx={ctx} lastRead={entryRead} emptyState={ids.length ? null : <EmptyState c={c} relayed={relayed} />} highlight={highlight} />
-      <ComposerArea c={c} ch={ch} draftKey={draftKey} narrow={narrow} people={people} dropFiles={drop.files} placeholder={composerPlaceholder(c, title)} note={note} />
+      <ComposerArea c={c} code={code} ch={ch} draftKey={draftKey} narrow={narrow} people={people} dropFiles={drop.files} placeholder={composerPlaceholder(c, title)} note={note} />
       {drop.dragging && (
         <div
           style={{

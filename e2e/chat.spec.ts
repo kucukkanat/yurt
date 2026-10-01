@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createWorkspace, inviteLink, onboard } from './helpers';
+import { checkPage, createWorkspace, inviteLink, onboard } from './helpers';
 
 test('two peers create, join, sync history and chat', async ({ browser }) => {
   const a = await (await browser.newContext()).newPage();
@@ -39,4 +39,6 @@ test('two peers create, join, sync history and chat', async ({ browser }) => {
   await thread.fill('threaded reply');
   await thread.press('Enter');
   await expect(b.getByRole('button', { name: /1 reply/ })).toBeVisible();
+  await checkPage(a, 'peer-to-peer › thread open');
+  await checkPage(b, 'peer-to-peer › channel with a reply count');
 });

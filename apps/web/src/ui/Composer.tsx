@@ -4,6 +4,7 @@ import { IconButton, Kbd, MemberRow, Tag } from '@yurt/ui';
 import { editLeft, EDIT_CLOSED } from '../lib/editWindow';
 import { useApp } from '../store';
 import type { Person } from '../model';
+import { must } from './must';
 
 interface Props {
   members: Person[];
@@ -13,7 +14,9 @@ interface Props {
   onSend(text: string, files: File[]): Promise<boolean>;
   onTyping?(): void;
   autoFocus?: boolean;
-  dropFiles?: File[];
+  dropFiles?: File[] | undefined;
+  /** Up-arrow in an empty composer; true when it was used (the conversation's last-message edit). */
+  onArrowUp?: () => boolean;
 }
 
 // Stable React keys for attached files: two attachments can share a name, and indexes shift on removal.
@@ -25,12 +28,11 @@ const fileKey = (f: File) => {
   return k;
 };
 
-/** Up-arrow in an empty composer: edit your last message here, or say why you can't. */
-function editLastMessage(): boolean {
+/** Up-arrow in an empty composer: edit your last message in this conversation, or say why you can't. */
+export function editLastMessage(code: string, ch: string): boolean {
   const s = useApp.getState();
-  const st = s.route.code ? s.states[s.route.code] : undefined;
-  const ids = st && s.route.ch ? st.channelMsgs.get(s.route.ch) || [] : [];
-  const mine = ids
+  const st = s.states[code];
+  const mine = (st?.channelMsgs.get(ch) ?? [])
     .map((id) => st?.msgs.get(id))
     .reverse()
     .find((m) => !!m && m.a === s.identity?.pub && !m.ag && !m.deleted);
@@ -40,7 +42,7 @@ function editLastMessage(): boolean {
   return true;
 }
 
-export function Composer({ members, placeholder, note, onSend, onTyping, autoFocus, dropFiles }: Props) {
+export function Composer({ members, placeholder, note, onSend, onTyping, autoFocus, dropFiles, onArrowUp }: Props) {
   const [v, setV] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [pick, setPick] = useState<string | null>(null);
@@ -49,16 +51,16 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
   const [sending, setSending] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
   const fileIn = useRef<HTMLInputElement>(null);
+  // Leaving the field closes the picker a moment later (so a click on an option still lands); coming back cancels that.
+  const closePick = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
     if (dropFiles?.length) setFiles((f) => [...f, ...dropFiles]);
   }, [dropFiles]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures the textarea whenever its text changes, however it changed
   useEffect(() => {
-    const t = ta.current;
-    if (t) {
-      t.style.height = 'auto';
-      t.style.height = Math.min(t.scrollHeight, 200) + 'px';
-    }
+    const t = must(ta.current, 'the textarea is mounted');
+    t.style.height = 'auto';
+    t.style.height = Math.min(t.scrollHeight, 200) + 'px';
   }, [v]);
   useEffect(() => {
     if (autoFocus && matchMedia('(pointer: fine)').matches) ta.current?.focus();
@@ -67,12 +69,11 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
   const matches = pick == null ? [] : members.filter((m) => m.handle.toLowerCase().startsWith(q) || m.name.toLowerCase().startsWith(q)).slice(0, 6);
   const sync = (val: string, caret: number) => {
     const m = val.slice(0, caret).match(/@([\w-]*)$/);
-    setPick(m ? m[1] : null);
+    setPick(m?.[1] ?? null);
     setIdx(0);
   };
   const insert = (m: Person) => {
-    const t = ta.current;
-    if (!t) return;
+    const t = must(ta.current, 'the textarea is mounted');
     const caret = t.selectionStart;
     const before = v.slice(0, caret).replace(/@([\w-]*)$/, '@' + m.handle + ' ');
     setV(before + v.slice(caret));
@@ -93,14 +94,16 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
     setFiles((cur) => cur.filter((f) => !sent.includes(f)));
     setPick(null);
   };
+  // Only called while the picker shows matches; idx stays within them (reset on every keystroke, moved modulo).
+  const choose = () => insert(must(matches[idx], 'the picked match exists'));
   /** Arrow keys, Enter/Tab and Escape drive the @-mention picker while it's open. True when the key was used. */
   const pickerKey = (e: React.KeyboardEvent): boolean => {
     const n = matches.length;
     const moves: Record<string, () => void> = {
       ArrowDown: () => setIdx((i) => (i + 1) % n),
       ArrowUp: () => setIdx((i) => (i - 1 + n) % n),
-      Enter: () => insert(matches[idx]),
-      Tab: () => insert(matches[idx]),
+      Enter: () => choose(),
+      Tab: () => choose(),
       Escape: () => {
         e.stopPropagation();
         setPick(null);
@@ -119,10 +122,10 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
       send();
     }
     // Edit your last message, like every chat app since forever.
-    if (e.key === 'ArrowUp' && !v && editLastMessage()) e.preventDefault();
+    if (e.key === 'ArrowUp' && !v && onArrowUp?.()) e.preventDefault();
   };
   const onPaste = (e: React.ClipboardEvent) => {
-    const fs = Array.from(e.clipboardData.files || []);
+    const fs = Array.from(e.clipboardData.files);
     if (fs.length) {
       e.preventDefault();
       setFiles((f) => [...f, ...fs]);
@@ -197,10 +200,13 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
           rows={1}
           aria-label={placeholder}
           placeholder={placeholder}
-          onFocus={() => setFocus(true)}
+          onFocus={() => {
+            setFocus(true);
+            clearTimeout(closePick.current);
+          }}
           onBlur={() => {
             setFocus(false);
-            setTimeout(() => setPick(null), 100);
+            closePick.current = setTimeout(() => setPick(null), 100);
           }}
           onChange={(e) => {
             setV(e.target.value);
@@ -227,7 +233,8 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
             multiple
             hidden
             onChange={(e) => {
-              setFiles([...files, ...Array.from(e.target.files || [])]);
+              // `files` is set on a file input's change event (an empty list when nothing was picked).
+              setFiles([...files, ...Array.from(must(e.target.files, 'a file input has files'))]);
               e.target.value = '';
             }}
           />

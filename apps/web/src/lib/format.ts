@@ -1,3 +1,6 @@
+/** An error's message for people: the message of an Error, or the thrown value itself. */
+export const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
 export function fmtTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
@@ -28,12 +31,25 @@ export function handleFrom(name: string): string {
   );
 }
 
-export async function notify(title: string, body: string, onClick?: () => void) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  const n = new Notification(title, { body, tag: title, icon: undefined });
+/** Whether this browser can show notifications at all (iOS Safari outside a home-screen app can't). */
+const canNotify = () => 'Notification' in window;
+
+/** Asks for permission to notify (the browser only prompts while undecided); true when granted. */
+export async function askNotifications(): Promise<boolean> {
+  return canNotify() && (await Notification.requestPermission()) === 'granted';
+}
+
+/**
+ * Shows a desktop notification if allowed, and returns it (null when not shown). Permission is read live
+ * from the Permissions API: `Notification.permission` can lag behind a change made in the browser's settings.
+ */
+export async function notify(title: string, body: string, onClick?: () => void): Promise<Notification | null> {
+  if (!canNotify() || (await navigator.permissions.query({ name: 'notifications' })).state !== 'granted') return null;
+  const n = new Notification(title, { body, tag: title });
   n.onclick = () => {
     window.focus();
     onClick?.();
     n.close();
   };
+  return n;
 }

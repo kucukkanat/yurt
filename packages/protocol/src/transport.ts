@@ -1,14 +1,22 @@
 import type { Ev } from './types';
 import type { KeyPair } from './crypto';
 
-export interface Presence {
-  pub: string;
-  st: 'online' | 'away';
-  typing?: string | null; // channel id
-  agents?: Record<string, { working?: string | null }>; // agentId → channel it's working in
-  bridge?: boolean;
-  /** Relay workspaces: this member is in a huddle and needs the WebRTC room, so opted-in members should join it. */
-  rtc?: boolean;
+export type { Presence } from './schemas';
+import type { Presence } from './schemas';
+
+/**
+ * How often links act on their own. Defaults suit real use; tests shorten them to exercise the same
+ * code paths (heartbeats, retries, expiry) in seconds instead of minutes.
+ */
+export interface LinkTiming {
+  /** Presence heartbeat. Relay links: 60 s; Trystero: 30 s. */
+  beatMs: number;
+  /** Relay links: how long a member's presence counts without a heartbeat. 150 s. */
+  presenceTtlMs: number;
+  /** Relay links: resend events relays haven't acknowledged. 15 s. */
+  retryMs: number;
+  /** Relay links: check connectivity, catch up after reconnecting and expire presence. 5 s. */
+  sweepMs: number;
 }
 
 /** What a data link may see and do in its workspace. Implemented by WorkspacePeer. */

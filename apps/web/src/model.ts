@@ -5,34 +5,39 @@ export { prefsLine } from './lib/private';
 import { useApp, type WsRecord, type AppState } from './store';
 import { CALM, type FaviconState } from './lib/favicon';
 import { getPeer } from './lib/net';
+import { presenceNow } from './lib/visibility';
 
 export interface Person {
   id: string;
   pub: string;
-  agentId?: string;
+  agentId?: string | undefined;
   name: string;
   handle: string;
   kind: 'human' | 'agent';
-  self?: boolean;
-  owner?: { name: string; self?: boolean };
-  presence?: 'online' | 'away' | 'offline';
-  working?: boolean;
-  admin?: boolean;
-  creator?: boolean;
-  runtime?: string;
-  banned?: boolean;
+  self?: boolean | undefined;
+  owner?: { name: string; self?: boolean | undefined } | undefined;
+  presence?: 'online' | 'away' | 'offline' | undefined;
+  working?: boolean | undefined;
+  admin?: boolean | undefined;
+  creator?: boolean | undefined;
+  runtime?: string | undefined;
+  banned?: boolean | undefined;
   /** Agents only: when it answers, where it posts, and whether other members can DM it. */
-  prefs?: AgentPrefs;
+  prefs?: AgentPrefs | undefined;
+}
+
+/** Workspace views only render after onboarding; reaching one without an identity is a bug, so it fails loudly. */
+export function needIdentity<T>(identity: T | null): T {
+  if (!identity) throw new Error('useCurrent needs an identity: render workspace views only after onboarding');
+  return identity;
 }
 
 export function useCurrent() {
   const route = useApp((s) => s.route);
   const state = useApp((s) => (route.code ? s.states[route.code] : undefined));
   const rec = useApp((s) => s.workspaces.find((w) => w.code === route.code));
-  const identity = useApp((s) => s.identity);
+  const identity = needIdentity(useApp((s) => s.identity));
   useApp((s) => s.tick);
-  // Workspace views only render after onboarding; reaching one without an identity is a bug.
-  if (!identity) throw new Error('useCurrent needs an identity: render workspace views only after onboarding');
   return { route, state, rec, identity, peer: getPeer(route.code) };
 }
 
@@ -48,7 +53,7 @@ export function useMedia(q: string): boolean {
 }
 
 function presenceOf(peer: WorkspacePeer | undefined, pub: string, me: string): 'online' | 'away' | 'offline' {
-  if (pub === me) return document.hidden ? 'away' : 'online';
+  if (pub === me) return presenceNow();
   let best: 'away' | 'offline' = 'offline';
   if (peer)
     for (const pr of peer.presence.values()) {
@@ -74,8 +79,17 @@ function agentPresence(peer: WorkspacePeer | undefined, owner: string, id: strin
   return { online: false, working: null };
 }
 
-export function personFor(state: WsState | undefined, peer: WorkspacePeer | undefined, key: string, me: string): Person {
-  const [pub, agentId] = key.split('/');
+/** "a/b/c" split at the first `sep`: ["a", "b/c"]; without one, ["a", ""]. */
+const splitOnce = (s: string, sep: string): [string, string] => {
+  const i = s.indexOf(sep);
+  return i < 0 ? [s, ''] : [s.slice(0, i), s.slice(i + 1)];
+};
+
+/** A person or agent as the roster shows them (presence always known). */
+export type Listed = Person & { presence: NonNullable<Person['presence']> };
+
+export function personFor(state: WsState | undefined, peer: WorkspacePeer | undefined, key: string, me: string): Listed {
+  const [pub, agentId] = splitOnce(key, '/');
   if (agentId) {
     const a = state?.agents.get(key);
     const owner = state?.profiles.get(pub);
@@ -111,25 +125,29 @@ export function personFor(state: WsState | undefined, peer: WorkspacePeer | unde
 
 export const authorKey = (m: Pick<Msg, 'a' | 'ag'>) => (m.ag ? agentKey(m.a, m.ag) : m.a);
 
-export function roster(state: WsState | undefined, peer: WorkspacePeer | undefined, me: string): Person[] {
+const RANK = { online: 0, away: 1, offline: 2 } as const;
+/** Online first, then by name. */
+const byPresence = (xs: Listed[]) => [...xs].sort((a, b) => RANK[a.presence] - RANK[b.presence] || a.name.localeCompare(b.name));
+
+/** Everyone in the workspace: people (me included, even before my profile syncs), then agents. */
+export function roster(state: WsState | undefined, peer: WorkspacePeer | undefined, me: string): Listed[] {
   if (!state) return [];
   const people = members(state).map((k) => personFor(state, peer, k, me));
   if (!people.some((p) => p.pub === me)) people.unshift(personFor(state, peer, me, me));
   const agents = liveAgents(state).map((a) => personFor(state, peer, agentKey(a.owner, a.id), me));
-  const rank = { online: 0, away: 1, offline: 2 } as const;
-  return [...people, ...agents].sort(
-    (a, b) => (a.kind === b.kind ? 0 : a.kind === 'human' ? -1 : 1) || rank[a.presence || 'offline'] - rank[b.presence || 'offline'] || a.name.localeCompare(b.name),
-  );
+  return [...byPresence(people), ...byPresence(agents)];
 }
 
 export function unread(state: WsState, rec: WsRecord | undefined, ch: string, me: string, handle: string) {
   const last = rec?.lastRead[ch] || 0;
-  const ids = state.channelMsgs.get(ch) || [];
-  let n = 0,
-    m = 0;
-  for (let i = ids.length - 1; i >= 0; i--) {
-    const x = state.msgs.get(ids[i] ?? '');
-    if (!x) continue;
+  // Newest first, stopping at the first message already read.
+  const newest = (state.channelMsgs.get(ch) ?? [])
+    .map((id) => state.msgs.get(id))
+    .filter((x): x is Msg => !!x)
+    .reverse();
+  let n = 0;
+  let m = 0;
+  for (const x of newest) {
     if (x.ts <= last) break;
     if ((x.a === me && !x.ag) || x.deleted) continue;
     n++;
@@ -148,7 +166,7 @@ export function channelTitle(state: WsState | undefined, ch: string, me: string)
     return state?.profiles.get(other)?.name || fingerprint(other);
   }
   if (ch.startsWith('adm:')) {
-    const [, owner, id] = ch.split(':');
+    const [owner, id] = splitOnce(ch.slice(4), ':');
     return state?.agents.get(owner + '/' + id)?.name || id;
   }
   const guest = guestDmTitle(state, ch, me);
