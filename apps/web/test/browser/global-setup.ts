@@ -1,3 +1,5 @@
+// Node 22's built-in WebSocket recurses when nostr-tools closes a failed socket; use the browser-like `ws` (see AGENTS.md).
+import '@yurt/protocol/node-ws';
 import type { TestProject } from 'vitest/node';
 import { startBlossom } from '../../../../packages/protocol/test/blossom-server';
 import { startRelay } from '../../../../packages/protocol/test/relay';

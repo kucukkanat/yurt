@@ -1,3 +1,5 @@
+// Node 22's built-in WebSocket recurses when nostr-tools closes a failed socket; use the browser-like `ws` (see AGENTS.md).
+import '@yurt/protocol/node-ws';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
