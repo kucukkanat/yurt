@@ -177,7 +177,9 @@ describe('agent triggers, end to end', () => {
     const chB = guestDmChannel(B.pub, owner, 'scout-1');
     const chC = guestDmChannel(C.pub, owner, 'scout-1');
     const unanswered = b.publish({ t: 'msg', ch: chB, to: owner, b: { text: 'hello?' } });
-    await until(() => !!ws.peers.get(CODE)?.events.has(unanswered.id)); // the bridge has seen (and skipped) it
+    // In the bridge's state means its AgentHost already saw (and skipped) it: state and onEvents update together,
+    // a moment after the raw event arrives.
+    await until(() => !!ws.peers.get(CODE)?.state.msgs.has(unanswered.id));
     set({ discoverable: true });
     const { answers: [toB] } = await ask(b, chB, 'now?', { to: owner });
     expect(answers(b, chB)).toHaveLength(1); // the message sent while not discoverable stays unanswered
