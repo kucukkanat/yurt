@@ -12,6 +12,8 @@
     "checkJs": false,
     "allowUmdGlobalAccess": true,
     "jsx": "react-jsx",
-    "noEmit": true
+    "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   }
 }

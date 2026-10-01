@@ -7,6 +7,7 @@ import type { Ev } from '../types';
 import type { DataLink, LinkHost, LinkKeys, Presence } from '../transport';
 import { sign, verify } from '../crypto';
 import { open, seal, workspaceKeys, type WsKeys } from '../seal';
+import { isObj, errMsg } from '../util';
 
 const KIND_EVENT = 4344; // regular: relays store it
 const KIND_PRESENCE = 24344; // ephemeral: relays forward it, never store it
@@ -42,8 +43,6 @@ const parse = (s: string | null): unknown => {
     return null;
   }
 };
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null;
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const now = () => Math.floor(Date.now() / 1000);
 const fuzzed = () => now() - Math.floor(Math.random() * FUZZ_S);
 const presMsg = (code: string, t: number, j: string) => `yurt-pres:${code}:${t}:${j}`;

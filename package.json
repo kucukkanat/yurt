@@ -15,13 +15,13 @@
     "bridge:build": "bun run --filter yurt-bridge build",
     "test": "bun run --filter @yurt/protocol test && bun run --filter yurt-bridge test && bun run --filter @yurt/web test",
     "e2e": "playwright test",
-    "typecheck": "bun run --filter '*' typecheck",
+    "typecheck": "bun run --filter '*' typecheck && tsc -p e2e",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "deadcode": "knip",
     "dupes": "jscpd .",
-    "quality": "bun run deadcode && bun run dupes && biome ci --error-on-warnings ."
+    "quality": "bun run typecheck && bun run deadcode && bun run dupes && biome ci --error-on-warnings ."
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

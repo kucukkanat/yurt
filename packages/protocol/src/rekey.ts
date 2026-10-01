@@ -33,8 +33,10 @@ export interface Keyring {
 
 const derived = new Map<string, WsKeys>();
 const keysOf = (key: string) => {
-  let k = derived.get(key);
-  if (!k) derived.set(key, (k = workspaceKeys(key)));
+  const have = derived.get(key);
+  if (have) return have;
+  const k = workspaceKeys(key);
+  derived.set(key, k);
   return k;
 };
 
@@ -70,40 +72,50 @@ function unwrap(ring: Map<string, RingKey>, me: KeyPair, r: RawRekey): string | 
   return null;
 }
 
-export function buildKeyring(invite: string, rekeys: readonly RawRekey[], valid: readonly ValidRekey[], me: KeyPair): Keyring {
-  const ring = new Map<string, RingKey>();
-  const add = (key: string, epoch: number | null) => {
-    const e = ring.get(key);
-    if (!e) {
-      ring.set(key, { key, keys: keysOf(key), epoch });
-      return true;
-    }
-    if (e.epoch === null && epoch !== null) {
-      e.epoch = epoch;
-      return true;
-    }
-    return false;
-  };
-  add(invite, null);
-  const introduced = new Map<string, string>(); // rekey id → the key it introduced
+/** Adds a key to the ring, or learns its epoch; true when the ring changed. */
+function addKey(ring: Map<string, RingKey>, key: string, epoch: number | null): boolean {
+  const e = ring.get(key);
+  if (!e) {
+    ring.set(key, { key, keys: keysOf(key), epoch });
+    return true;
+  }
+  if (e.epoch === null && epoch !== null) {
+    e.epoch = epoch;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Opens every rekey it can, growing `ring` as it goes, until nothing more opens (a rekey's history
+ * can unlock older keys that open other rekeys). Returns rekey id → the key it introduced.
+ */
+function openRekeys(ring: Map<string, RingKey>, rekeys: readonly RawRekey[], me: KeyPair): Map<string, string> {
+  const introduced = new Map<string, string>();
   for (let changed = true; changed; ) {
     changed = false;
     for (const r of rekeys) {
       if (introduced.has(r.id)) continue;
       // I may already hold the key (from an invite, or another rekey's history); it opens the history.
-      let key = [...ring.values()].find((e) => historyOf(e.keys, r))?.key ?? null;
-      key ??= unwrap(ring, me, r);
+      const key = [...ring.values()].find((e) => historyOf(e.keys, r))?.key ?? unwrap(ring, me, r);
       if (!key) continue;
       introduced.set(r.id, key);
-      add(key, r.epoch);
-      for (const h of historyOf(keysOf(key), r) ?? []) add(h.key, h.epoch);
+      addKey(ring, key, r.epoch);
+      for (const h of historyOf(keysOf(key), r) ?? []) addKey(ring, h.key, h.epoch);
       changed = true;
     }
   }
+  return introduced;
+}
+
+export function buildKeyring(invite: string, rekeys: readonly RawRekey[], valid: readonly ValidRekey[], me: KeyPair): Keyring {
+  const ring = new Map<string, RingKey>();
+  addKey(ring, invite, null);
+  const introduced = openRekeys(ring, rekeys, me);
   const inviteKey = ring.get(invite);
   if (!inviteKey) throw new Error('keyring lost the invite key'); // unreachable: it's added first
-  let write = inviteKey,
-    epoch = inviteKey.epoch ?? 0;
+  let write = inviteKey;
+  let epoch = inviteKey.epoch ?? 0;
   for (const r of valid) {
     const k = introduced.get(r.id);
     const e = k === undefined ? undefined : ring.get(k);

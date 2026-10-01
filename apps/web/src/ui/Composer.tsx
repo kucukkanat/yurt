@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import type React from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { IconButton, Kbd, MemberRow, Tag } from '@yurt/ui';
 import { editLeft, EDIT_CLOSED } from '../lib/editWindow';
 import { useApp } from '../store';
@@ -15,6 +16,30 @@ interface Props {
   dropFiles?: File[];
 }
 
+// Stable React keys for attached files: two attachments can share a name, and indexes shift on removal.
+const fileKeys = new WeakMap<File, number>();
+let nextFileKey = 0;
+const fileKey = (f: File) => {
+  const k = fileKeys.get(f) ?? nextFileKey++;
+  fileKeys.set(f, k);
+  return k;
+};
+
+/** Up-arrow in an empty composer: edit your last message here, or say why you can't. */
+function editLastMessage(): boolean {
+  const s = useApp.getState();
+  const st = s.route.code ? s.states[s.route.code] : undefined;
+  const ids = st && s.route.ch ? st.channelMsgs.get(s.route.ch) || [] : [];
+  const mine = ids
+    .map((id) => st?.msgs.get(id))
+    .reverse()
+    .find((m) => !!m && m.a === s.identity?.pub && !m.ag && !m.deleted);
+  if (!mine) return false;
+  if (editLeft(mine.ts, Date.now()) > 0) useApp.setState({ editing: mine.id });
+  else s.toast({ ...EDIT_CLOSED, title: 'Your last message can’t be edited anymore', duration: 6000 });
+  return true;
+}
+
 export function Composer({ members, placeholder, note, onSend, onTyping, autoFocus, dropFiles }: Props) {
   const [v, setV] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -27,6 +52,7 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
   useEffect(() => {
     if (dropFiles?.length) setFiles((f) => [...f, ...dropFiles]);
   }, [dropFiles]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures the textarea whenever its text changes, however it changed
   useEffect(() => {
     const t = ta.current;
     if (t) {
@@ -36,7 +62,7 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
   }, [v]);
   useEffect(() => {
     if (autoFocus && matchMedia('(pointer: fine)').matches) ta.current?.focus();
-  }, [autoFocus, placeholder]);
+  }, [autoFocus]);
   const q = (pick || '').toLowerCase();
   const matches = pick == null ? [] : members.filter((m) => m.handle.toLowerCase().startsWith(q) || m.name.toLowerCase().startsWith(q)).slice(0, 6);
   const sync = (val: string, caret: number) => {
@@ -45,7 +71,8 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
     setIdx(0);
   };
   const insert = (m: Person) => {
-    const t = ta.current!;
+    const t = ta.current;
+    if (!t) return;
     const caret = t.selectionStart;
     const before = v.slice(0, caret).replace(/@([\w-]*)$/, '@' + m.handle + ' ');
     setV(before + v.slice(caret));
@@ -66,49 +93,33 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
     setFiles((cur) => cur.filter((f) => !sent.includes(f)));
     setPick(null);
   };
-  const key = (e: React.KeyboardEvent) => {
-    if (matches.length) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setIdx((i) => (i + 1) % matches.length);
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setIdx((i) => (i - 1 + matches.length) % matches.length);
-        return;
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault();
-        insert(matches[idx]);
-        return;
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
+  /** Arrow keys, Enter/Tab and Escape drive the @-mention picker while it's open. True when the key was used. */
+  const pickerKey = (e: React.KeyboardEvent): boolean => {
+    const n = matches.length;
+    const moves: Record<string, () => void> = {
+      ArrowDown: () => setIdx((i) => (i + 1) % n),
+      ArrowUp: () => setIdx((i) => (i - 1 + n) % n),
+      Enter: () => insert(matches[idx]),
+      Tab: () => insert(matches[idx]),
+      Escape: () => {
         e.stopPropagation();
         setPick(null);
-        return;
-      }
-    }
+      },
+    };
+    const move = n ? moves[e.key] : undefined;
+    if (!move) return false;
+    e.preventDefault();
+    move();
+    return true;
+  };
+  const key = (e: React.KeyboardEvent) => {
+    if (pickerKey(e)) return;
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       send();
     }
-    if (e.key === 'ArrowUp' && !v) {
-      // Edit your last message, like every chat app since forever.
-      const s = useApp.getState();
-      const st = s.route.code ? s.states[s.route.code] : undefined;
-      const ids = st && s.route.ch ? st.channelMsgs.get(s.route.ch) || [] : [];
-      for (let i = ids.length - 1; i >= 0; i--) {
-        const m = st!.msgs.get(ids[i])!;
-        if (m.a === s.identity?.pub && !m.ag && !m.deleted) {
-          e.preventDefault();
-          if (editLeft(m.ts, Date.now()) > 0) useApp.setState({ editing: m.id });
-          else s.toast({ ...EDIT_CLOSED, title: 'Your last message can’t be edited anymore', duration: 6000 });
-          break;
-        }
-      }
-    }
+    // Edit your last message, like every chat app since forever.
+    if (e.key === 'ArrowUp' && !v && editLastMessage()) e.preventDefault();
   };
   const onPaste = (e: React.ClipboardEvent) => {
     const fs = Array.from(e.clipboardData.files || []);
@@ -146,13 +157,14 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
               key={m.id}
               role="option"
               aria-selected={i === idx}
+              tabIndex={-1}
               onMouseDown={(e) => {
                 e.preventDefault();
                 insert(m);
               }}
               onMouseEnter={() => setIdx(i)}
             >
-              <MemberRow member={m as any} active={i === idx} cutout="var(--surface-raised)" trailing={i === idx ? <Kbd keys="enter" size="sm" /> : null} />
+              <MemberRow member={m} active={i === idx} cutout="var(--surface-raised)" trailing={i === idx ? <Kbd keys="enter" size="sm" /> : null} />
             </div>
           ))}
         </div>
@@ -172,8 +184,8 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
       >
         {files.length > 0 && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {files.map((f, i) => (
-              <Tag key={f.name + i} icon={f.type.startsWith('image') ? 'image' : 'file-text'} onRemove={() => setFiles(files.filter((_, j) => j !== i))}>
+            {files.map((f) => (
+              <Tag key={fileKey(f)} icon={f.type.startsWith('image') ? 'image' : 'file-text'} onRemove={() => setFiles(files.filter((x) => x !== f))}>
                 {f.name}
               </Tag>
             ))}

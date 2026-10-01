@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ChatMessage, MentionText, ApprovalCard, Button, Kbd, Icon, IconButton } from '@yurt/ui';
+import { useEffect, useRef, useState } from 'react';
+import { ChatMessage, MentionText, ApprovalCard, Button, Kbd, Icon, IconButton, ICONS, type IconName } from '@yurt/ui';
 import { EDIT_WINDOW_MS, mentions, type Msg, type WsState, type WorkspacePeer, type FileRef } from '@yurt/protocol';
 import { editLeft, editLeftLabel, EDIT_CLOSED } from '../lib/editWindow';
 import { useApp } from '../store';
@@ -10,12 +10,16 @@ import { fmtTime, fmtBytes } from '../lib/format';
 
 const pendingDeletes = new Set<string>();
 
+// Reaction icons arrive from other members: only names the icon set has can be drawn.
+const isIconName = (s: string): s is IconName => Object.hasOwn(ICONS, s);
+
 function useBlobUrl(f: FileRef, code: string) {
   const ver = useApp((s) => s.blobVer[f.id] ?? 0); // only this blob's arrivals re-run the load
   const progress = useApp((s) => s.blobProgress[f.id]);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `ver` (this blob arrived) and `attempt` (retry clicked) are re-run triggers, not inputs
   useEffect(() => {
     if (url) return; // loaded once; never swap (and revoke) a URL that's on screen
     let alive = true;
@@ -33,7 +37,7 @@ function useBlobUrl(f: FileRef, code: string) {
     return () => {
       alive = false;
     };
-  }, [f.id, ver, attempt, url]);
+  }, [f.id, f.type, code, ver, attempt, url]);
   useEffect(
     () => () => {
       if (url) URL.revokeObjectURL(url);
@@ -114,10 +118,13 @@ function Attachment({ f, code }: { f: FileRef; code: string }) {
 
 function InlineEditor({ initial, left, onSave, onCancel }: { initial: string; left: number; onSave: (t: string) => void; onCancel: () => void }) {
   const [v, setV] = useState(initial);
+  const field = useRef<HTMLTextAreaElement>(null);
+  // The user just chose Edit, so the text is where they're headed.
+  useEffect(() => field.current?.focus(), []);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <textarea
-        autoFocus
+        ref={field}
         value={v}
         onChange={(e) => setV(e.target.value)}
         aria-label="Edit message"
@@ -179,6 +186,115 @@ export interface MsgCtx {
   forceRender(): void;
 }
 
+/** "replied in a thread: …" above a thread reply that's also shown in the channel. */
+function AlsoInChannel({ m, state, code }: { m: Msg & { parent: string }; state: WsState; code: string }) {
+  return (
+    <button
+      type="button"
+      data-testid="also-in-channel"
+      onClick={() => useApp.getState().go({ code, ch: m.ch, thread: m.parent })}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--space-1)',
+        maxWidth: '100%',
+        padding: '4px 16px 0 58px',
+        border: 0,
+        background: 'none',
+        cursor: 'pointer',
+        font: '400 12px/1.3 var(--font-body)',
+        color: 'var(--text-subtle)',
+        textAlign: 'left',
+      }}
+    >
+      <Icon name="reply" size={12} style={{ flexShrink: 0 }} />
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        replied in a thread: {state.msgs.get(m.parent)?.text.slice(0, 80) || 'view thread'}
+      </span>
+    </button>
+  );
+}
+
+/** An agent asking its owner to allow a tool call, and the owner's answer. */
+function Approval({ approval, state, author }: { approval: NonNullable<Msg['approval']>; state: WsState; author: Person }) {
+  const app = useApp.getState();
+  const decided = state.approvals.get(approval.req);
+  const decidedKind = decided ? approval.options.find((o) => o.id === decided)?.kind || '' : '';
+  const answer = (o: { id: string } | undefined) => o && app.approve(approval.req, o.id);
+  return (
+    <div style={{ padding: '2px 16px 10px 58px', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 640 }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--text-subtle)' }}>
+        <Icon name="eye-off" size={12} />
+        Only you see this · {author.name} is yours
+      </span>
+      <ApprovalCard
+        title={approval.title}
+        description={approval.kind ? 'Tool kind: ' + approval.kind + '. Not on the auto-approve list.' : undefined}
+        risk={approval.kind === 'execute' || approval.kind === 'delete' ? 'high' : approval.kind === 'edit' ? 'medium' : 'low'}
+        status={!decided ? 'pending' : decidedKind.startsWith('allow') ? 'approved' : 'rejected'}
+        approveLabel="Allow once"
+        onApprove={() => answer(approval.options.find((x) => x.kind === 'allow_once') || approval.options.find((x) => x.kind.startsWith('allow')))}
+        onReject={() => answer(approval.options.find((x) => x.kind.startsWith('reject')))}
+      />
+    </div>
+  );
+}
+
+/** Up to three distinct people who replied in a message's thread. */
+function replyPeople(m: Msg, ctx: MsgCtx): Person[] {
+  const keys = new Set<string>();
+  for (const id of m.replies) {
+    const r = ctx.state.msgs.get(id);
+    if (r) keys.add(authorKey(r));
+  }
+  return [...keys].slice(0, 3).map((k) => personFor(ctx.state, ctx.peer, k, ctx.me));
+}
+
+function threadSummary(m: Msg, ctx: MsgCtx) {
+  if (ctx.inThread || !m.replies.length) return undefined;
+  const last = ctx.state.msgs.get(m.replies[m.replies.length - 1] ?? '');
+  return { count: m.replies.length, last: last ? 'Last reply ' + fmtTime(last.ts) : undefined, people: replyPeople(m, ctx) };
+}
+
+function activityOf(m: Msg) {
+  if (!m.trace?.length) return undefined;
+  return {
+    summary: m.trace.length + (m.trace.length === 1 ? ' step' : ' steps'),
+    meta: m.meta,
+    steps: m.trace.map((s) => ({ status: s.status, title: s.title, tool: s.tool, meta: s.ms != null ? (s.ms / 1000).toFixed(1) + 's' : undefined, detail: s.detail })),
+  };
+}
+
+/** Deletes go out only when their toast goes away (expired, closed or pushed out), so Undo always wins while it's visible. */
+function deleteWithUndo(m: Msg, ctx: MsgCtx) {
+  const app = useApp.getState();
+  let undone = false;
+  pendingDeletes.add(m.id);
+  ctx.forceRender();
+  app.toast({
+    title: 'Message deleted',
+    actionLabel: 'Undo',
+    duration: 5000,
+    onAction: () => {
+      undone = true;
+      pendingDeletes.delete(m.id);
+      ctx.forceRender();
+    },
+    onDismiss: () => {
+      if (undone) return;
+      pendingDeletes.delete(m.id);
+      app.publish(ctx.code, { t: 'del', b: { target: m.id }, ch: m.ch, to: privateTarget(m.ch, ctx.me) });
+    },
+  });
+}
+
+function messageTone(m: Msg, author: Person, mine: boolean, ctx: MsgCtx): 'mention' | 'agent' | 'default' {
+  const handles = mentions(m.text);
+  if (!mine && handles.includes(ctx.handle)) return 'mention';
+  const agentTalk = author.kind === 'agent' && handles.some((h) => ctx.roster.some((p) => p.kind === 'agent' && p.handle.toLowerCase() === h));
+  return agentTalk ? 'agent' : 'default';
+}
+
 export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean; ctx: MsgCtx }) {
   const editing = useApp((s) => s.editing);
   // Re-render my own messages as their edit window counts down (and once just after it closes); others never change.
@@ -199,52 +315,10 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
   const left = mine ? editLeft(m.ts, Date.now()) : 0;
   const canEdit = left > 0;
   const text = m.text;
-  const mentionsMe = !mine && mentions(text).includes(ctx.handle);
-  const agentTalk = author.kind === 'agent' && mentions(text).some((h) => ctx.roster.some((p) => p.kind === 'agent' && p.handle.toLowerCase() === h));
   const pinned = !!state.pins.get(m.ch)?.has(m.id);
-  const reactions = Object.entries(m.reactions).map(([icon, who]) => ({ icon: icon as any, count: who.length, mine: who.includes(me) }));
-  const lastReply = m.replies.length ? state.msgs.get(m.replies[m.replies.length - 1]) : undefined;
-  const replyPeople = [
-    ...new Set(
-      m.replies
-        .map((id) => {
-          const r = state.msgs.get(id);
-          return r ? authorKey(r) : '';
-        })
-        .filter(Boolean),
-    ),
-  ]
-    .slice(0, 3)
-    .map((k) => personFor(state, peer, k, me));
-  const activity = m.trace?.length
-    ? {
-        summary: m.trace.length + (m.trace.length === 1 ? ' step' : ' steps'),
-        meta: m.meta,
-        steps: m.trace.map((s) => ({ status: s.status, title: s.title, tool: s.tool, meta: s.ms != null ? (s.ms / 1000).toFixed(1) + 's' : undefined, detail: s.detail })),
-      }
-    : undefined;
+  const reactions = Object.entries(m.reactions).flatMap(([icon, who]) => (isIconName(icon) ? [{ icon, count: who.length, mine: who.includes(me) }] : []));
+  const members = ctx.roster.map((p) => ({ id: p.id, handle: p.handle, kind: p.kind }));
   const openThread = () => app.go({ code, ch: m.ch, thread: m.id });
-  // The delete goes out only when its toast goes away (expired, closed or pushed out), so Undo always wins while it's visible.
-  const onDelete = () => {
-    let undone = false;
-    pendingDeletes.add(m.id);
-    ctx.forceRender();
-    app.toast({
-      title: 'Message deleted',
-      actionLabel: 'Undo',
-      duration: 5000,
-      onAction: () => {
-        undone = true;
-        pendingDeletes.delete(m.id);
-        ctx.forceRender();
-      },
-      onDismiss: () => {
-        if (undone) return;
-        pendingDeletes.delete(m.id);
-        app.publish(code, { t: 'del', b: { target: m.id }, ch: m.ch, to: privateTarget(m.ch, me) });
-      },
-    });
-  };
   const explainClosed = () => app.toast({ ...EDIT_CLOSED, duration: 8000, ...(ctx.inThread ? {} : { actionLabel: 'Reply in thread', onAction: openThread }) });
   const saveEdit = (t: string) => {
     useApp.setState({ editing: null });
@@ -255,43 +329,16 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
     }
     app.publish(code, { t: 'edit', ch: m.ch, to: privateTarget(m.ch, me), b: { target: m.id, text: t } });
   };
-  const approval = m.approval;
-  const decided = approval ? state.approvals.get(approval.req) : undefined;
-  const decidedKind = approval && decided ? approval.options.find((o) => o.id === decided)?.kind || '' : '';
   return (
     <div data-mid={m.id}>
       {/* A thread reply also shown in the channel: point back to the conversation it answers. */}
-      {!ctx.inThread && m.alsoInChannel && m.parent && (
-        <button
-          type="button"
-          data-testid="also-in-channel"
-          onClick={() => app.go({ code, ch: m.ch, thread: m.parent })}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-1)',
-            maxWidth: '100%',
-            padding: '4px 16px 0 58px',
-            border: 0,
-            background: 'none',
-            cursor: 'pointer',
-            font: '400 12px/1.3 var(--font-body)',
-            color: 'var(--text-subtle)',
-            textAlign: 'left',
-          }}
-        >
-          <Icon name="reply" size={12} style={{ flexShrink: 0 }} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            replied in a thread: {state.msgs.get(m.parent)?.text.slice(0, 80) || 'view thread'}
-          </span>
-        </button>
-      )}
+      {!ctx.inThread && m.alsoInChannel && m.parent && <AlsoInChannel m={{ ...m, parent: m.parent }} state={state} code={code} />}
       <ChatMessage
-        author={author as any}
+        author={author}
         time={fmtTime(m.ts)}
-        members={ctx.roster.map((p) => ({ id: p.id, handle: p.handle, kind: p.kind }))}
+        members={members}
         meId={me}
-        tone={mentionsMe ? 'mention' : agentTalk ? 'agent' : 'default'}
+        tone={messageTone(m, author, mine, ctx)}
         continued={continued}
         edited={m.edited}
         pinned={pinned}
@@ -299,33 +346,22 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
         reactions={reactions}
         onReact={(icon) => app.publish(code, { t: 'react', ch: m.ch, to: privateTarget(m.ch, me), b: { target: m.id, icon, on: !m.reactions[icon]?.includes(me) } })}
         onPin={m.ch.includes(':') ? undefined : () => app.publish(code, { t: 'pin', b: { target: m.id, on: !pinned } })}
-        replies={
-          !ctx.inThread && m.replies.length
-            ? { count: m.replies.length, last: lastReply ? 'Last reply ' + fmtTime(lastReply.ts) : undefined, people: replyPeople as any }
-            : undefined
-        }
+        replies={threadSummary(m, ctx)}
         onReplies={openThread}
         onReply={ctx.inThread ? undefined : openThread}
         onEdit={canEdit ? () => useApp.setState({ editing: m.id }) : undefined}
-        onDelete={canEdit ? onDelete : undefined}
+        onDelete={canEdit ? () => deleteWithUndo(m, ctx) : undefined}
         editLabel={'Edit · ' + editLeftLabel(left)}
         locked={mine && !canEdit}
         lockedLabel="Edit window closed"
         onLocked={explainClosed}
         onAuthor={() => app.setPanel({ type: 'profile', id: authorKey(m) })}
         onMention={(mm) => app.setPanel({ type: 'profile', id: mm.id })}
-        activity={activity}
+        activity={activityOf(m)}
         highlighted={highlight === m.id}
         editor={editing === m.id ? <InlineEditor initial={text} left={left} onSave={saveEdit} onCancel={() => useApp.setState({ editing: null })} /> : undefined}
       >
-        {text && (
-          <MentionText
-            text={text}
-            members={ctx.roster.map((p) => ({ id: p.id, handle: p.handle, kind: p.kind }))}
-            meId={me}
-            onMention={(mm) => app.setPanel({ type: 'profile', id: mm.id })}
-          />
-        )}
+        {text && <MentionText text={text} members={members} meId={me} onMention={(mm) => app.setPanel({ type: 'profile', id: mm.id })} />}
         {m.files.length > 0 && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: text ? 6 : 0 }}>
             {m.files.map((f) => (
@@ -334,29 +370,7 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
           </div>
         )}
       </ChatMessage>
-      {approval && (
-        <div style={{ padding: '2px 16px 10px 58px', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 640 }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--text-subtle)' }}>
-            <Icon name="eye-off" size={12} />
-            Only you see this · {author.name} is yours
-          </span>
-          <ApprovalCard
-            title={approval.title}
-            description={approval.kind ? 'Tool kind: ' + approval.kind + '. Not on the auto-approve list.' : undefined}
-            risk={approval.kind === 'execute' || approval.kind === 'delete' ? 'high' : approval.kind === 'edit' ? 'medium' : 'low'}
-            status={!decided ? 'pending' : decidedKind.startsWith('allow') ? 'approved' : 'rejected'}
-            approveLabel="Allow once"
-            onApprove={() => {
-              const o = approval.options.find((x) => x.kind === 'allow_once') || approval.options.find((x) => x.kind.startsWith('allow'));
-              o && app.approve(approval.req, o.id);
-            }}
-            onReject={() => {
-              const o = approval.options.find((x) => x.kind.startsWith('reject'));
-              o && app.approve(approval.req, o.id);
-            }}
-          />
-        </div>
-      )}
+      {m.approval && <Approval approval={m.approval} state={state} author={author} />}
     </div>
   );
 }

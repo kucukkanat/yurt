@@ -5,17 +5,10 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 import { encryptFile, decryptFile, uploadFile, downloadFile, parseServers, sealBytes, openBytes, workspaceKeys, newWorkspaceKey, MAX_FILE_BYTES, type BlobRef } from '../src';
 import { startBlossom, type TestBlossom } from './blossom-server';
+import { until } from './util';
 
 const text = (s: string) => new TextEncoder().encode(s);
 const dev = { allowHttp: true }; // the test servers are plain http
-
-async function until(cond: () => boolean, ms = 5_000) {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out waiting for condition');
-    await new Promise((r) => setTimeout(r, 25));
-  }
-}
 
 describe('file sealing', () => {
   it('round-trips bytes and identifies the blob by its ciphertext hash', () => {

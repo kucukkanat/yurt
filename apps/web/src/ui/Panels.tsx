@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import type React from 'react';
+import { useMemo, useState } from 'react';
 import { Icon, IconButton, Button, Avatar, Badge, MemberRow, Input, Kbd } from '@yurt/ui';
 import { fingerprint, dmChannel, agentDmChannel, guestDmChannel, type Msg } from '@yurt/protocol';
 import { useApp } from '../store';
@@ -15,16 +16,17 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
     if (panel.type === 'thread') useApp.getState().go({ code: route.code, ch: route.ch });
     useApp.getState().setPanel({ type: null });
   };
-  const titles: Record<string, string> = { members: 'Members', profile: 'Profile', thread: 'Thread', pinned: 'Pinned', search: 'Search' };
+  const titles = { members: 'Members', profile: 'Profile', thread: 'Thread', pinned: 'Pinned', search: 'Search' } as const;
+  const title = panel.type ? titles[panel.type] : '';
   return (
     <aside
-      aria-label={titles[panel.type!]}
+      aria-label={title}
       style={
         narrow
           ? {
               position: 'fixed',
               inset: 0,
-              zIndex: 'var(--z-dialog)' as any,
+              zIndex: 'var(--z-dialog)',
               background: 'var(--surface-page)',
               display: 'flex',
               flexDirection: 'column',
@@ -43,7 +45,7 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
       }
     >
       <header style={{ display: 'flex', alignItems: 'center', gap: 8, height: 56, padding: '0 8px 0 18px', borderBottom: '1px solid var(--border-subtle)', flexShrink: 0 }}>
-        <span style={{ flex: 1, font: '700 16px/1 var(--font-display)', letterSpacing: '-0.02em', color: 'var(--text-strong)' }}>{titles[panel.type!]}</span>
+        <span style={{ flex: 1, font: '700 16px/1 var(--font-display)', letterSpacing: '-0.02em', color: 'var(--text-strong)' }}>{title}</span>
         <IconButton icon="x" label="Close (Esc)" size="sm" onClick={close} />
       </header>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -57,6 +59,12 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
   );
 }
 
+/** The second line under a member: whose an agent is and what it's doing, or a person's role. */
+function memberMeta(p: Person): string | undefined {
+  if (p.kind === 'agent') return (p.owner?.self ? 'Yours' : p.owner?.name + '’s') + (p.presence === 'offline' ? ' · machine off' : p.working ? ' · working' : '');
+  return p.creator ? 'Creator' : p.admin ? 'Admin' : undefined;
+}
+
 function Members() {
   const { state, peer, identity } = useCurrent();
   const people = roster(state, peer, identity.pub);
@@ -68,21 +76,7 @@ function Members() {
           {title} · {list.length}
         </div>
         {list.map((p) => (
-          <MemberRow
-            key={p.id}
-            member={p as any}
-            onClick={() => open(p)}
-            cutout="var(--surface-page)"
-            meta={
-              p.kind === 'agent'
-                ? (p.owner?.self ? 'Yours' : p.owner?.name + '’s') + (p.presence === 'offline' ? ' · machine off' : p.working ? ' · working' : '')
-                : p.creator
-                  ? 'Creator'
-                  : p.admin
-                    ? 'Admin'
-                    : undefined
-            }
-          />
+          <MemberRow key={p.id} member={p} onClick={() => open(p)} cutout="var(--surface-page)" meta={memberMeta(p)} />
         ))}
       </div>
     );
@@ -105,43 +99,8 @@ function Members() {
   );
 }
 
-function Profile({ id }: { id: string }) {
-  const { state, peer, identity, route } = useCurrent();
-  const app = useApp.getState();
-  const p = personFor(state, peer, id, identity.pub);
-  const me = identity.pub;
-  // Relay workspaces rotate the key on ban, which can't be undone, so the ban asks for a second click.
-  const relayed = peer?.transport.kind === 'nostr';
-  const [confirmBan, setConfirmBan] = useState(false);
-  const ban = () => {
-    setConfirmBan(false);
-    const e = app.publish(code, { t: 'ban', b: { target: p.pub, on: true } });
-    const pids = peer?.peerIdsFor([p.pub]) || [];
-    pids.forEach((pid) => (peer?.room?.getPeers()[pid] as RTCPeerConnection | undefined)?.close());
-    if (!relayed) {
-      app.toast({
-        title: p.name + ' is banned',
-        description: 'All their messages are hidden and they’re disconnected.',
-        actionLabel: 'Undo',
-        onAction: () => e && app.publish(code, { t: 'ban', b: { target: p.pub, on: false } }),
-      });
-      return;
-    }
-    try {
-      peer?.rotate();
-      app.toast({
-        tone: 'success',
-        title: p.name + ' was removed',
-        description: 'The workspace key was rotated: they can’t read anything new, and old invite links no longer work.',
-      });
-    } catch (err) {
-      app.toast({ tone: 'danger', title: 'Banned, but the key wasn’t rotated', description: err instanceof Error ? err.message : String(err), duration: 10_000 });
-    }
-  };
-  const iAmCreator = state?.creator === me;
-  const iAmAdmin = !!state?.admins.has(me);
-  const code = route.code!;
-  const Line = ({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) => (
+function Line({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) {
+  return (
     <div style={{ display: 'flex', gap: 12, fontSize: 13.5, padding: '6px 0', borderBottom: '1px solid var(--border-subtle)' }}>
       <span style={{ width: 96, color: 'var(--text-subtle)', flexShrink: 0 }}>{k}</span>
       <span style={{ color: 'var(--text-body)', fontFamily: mono ? 'var(--font-mono)' : undefined, fontSize: mono ? 12.5 : undefined, minWidth: 0, overflowWrap: 'anywhere' }}>
@@ -149,8 +108,13 @@ function Profile({ id }: { id: string }) {
       </span>
     </div>
   );
+}
+
+const presenceLabel = (p: Person) => (p.presence === 'online' ? 'Online' : p.presence === 'away' ? 'Away' : 'Offline');
+
+function ProfileHeader({ p }: { p: Person }) {
   return (
-    <div style={{ overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <>
       <Avatar
         name={p.name}
         kind={p.kind}
@@ -187,7 +151,7 @@ function Profile({ id }: { id: string }) {
           )}
         </div>
         <span style={{ fontSize: 13.5, color: 'var(--text-muted)' }}>
-          @{p.handle} · {p.presence === 'online' ? 'Online' : p.presence === 'away' ? 'Away' : 'Offline'}
+          @{p.handle} · {presenceLabel(p)}
         </span>
       </div>
       <div>
@@ -203,75 +167,124 @@ function Profile({ id }: { id: string }) {
           <Line k="Key" v={fingerprint(p.pub)} mono />
         )}
       </div>
+    </>
+  );
+}
+
+/** Message a person; message, configure or (if it's discoverable) DM an agent. */
+function ProfileActions({ p, code, me }: { p: Person; code: string; me: string }) {
+  const app = useApp.getState();
+  if (p.kind === 'human')
+    return (
+      <Button variant="primary" size="sm" iconLeft="message-square" onClick={() => app.go({ code, ch: dmChannel(me, p.pub) })}>
+        {p.self ? 'Notes to self' : 'Message'}
+      </Button>
+    );
+  const agentId = p.agentId ?? '';
+  if (p.owner?.self)
+    return (
+      <>
+        <Button variant="agent" size="sm" iconLeft="lock" onClick={() => app.go({ code, ch: agentDmChannel(me, agentId) })}>
+          Message privately
+        </Button>
+        <Button variant="secondary" size="sm" iconLeft="external-link" onClick={() => window.open('http://127.0.0.1:7717/', '_blank')}>
+          Configure
+        </Button>
+      </>
+    );
+  return p.prefs?.discoverable ? (
+    <Button variant="agent" size="sm" iconLeft="message-square" data-testid="agent-message" onClick={() => app.go({ code, ch: guestDmChannel(me, p.pub, agentId) })}>
+      Message
+    </Button>
+  ) : (
+    <span data-testid="agent-not-discoverable" style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>
+      Not discoverable: @mention {p.name} in a channel or reply to its messages.
+    </span>
+  );
+}
+
+/** Admin tools for a member: roles and bans. */
+function Moderation({ p, code }: { p: Person; code: string }) {
+  const { state, peer, identity } = useCurrent();
+  const app = useApp.getState();
+  // Relay workspaces rotate the key on ban, which can't be undone, so the ban asks for a second click.
+  const relayed = peer?.transport.kind === 'nostr';
+  const [confirmBan, setConfirmBan] = useState(false);
+  const iAmCreator = state?.creator === identity.pub;
+  const ban = () => {
+    setConfirmBan(false);
+    const e = app.publish(code, { t: 'ban', b: { target: p.pub, on: true } });
+    for (const pid of peer?.peerIdsFor([p.pub]) || []) (peer?.room?.getPeers()[pid] as RTCPeerConnection | undefined)?.close();
+    if (!relayed) {
+      app.toast({
+        title: p.name + ' is banned',
+        description: 'All their messages are hidden and they’re disconnected.',
+        actionLabel: 'Undo',
+        onAction: () => e && app.publish(code, { t: 'ban', b: { target: p.pub, on: false } }),
+      });
+      return;
+    }
+    try {
+      peer?.rotate();
+      app.toast({
+        tone: 'success',
+        title: p.name + ' was removed',
+        description: 'The workspace key was rotated: they can’t read anything new, and old invite links no longer work.',
+      });
+    } catch (err) {
+      app.toast({ tone: 'danger', title: 'Banned, but the key wasn’t rotated', description: err instanceof Error ? err.message : String(err), duration: 10_000 });
+    }
+  };
+  const banButton = p.banned ? (
+    <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'ban', b: { target: p.pub, on: false } })}>
+      Unban
+    </Button>
+  ) : relayed && !confirmBan ? (
+    <Button size="sm" variant="danger" iconLeft="ban" data-testid="ban-button" onClick={() => setConfirmBan(true)}>
+      Ban
+    </Button>
+  ) : (
+    <Button size="sm" variant="danger" iconLeft="ban" data-testid={relayed ? 'ban-confirm' : 'ban-button'} onClick={ban}>
+      {relayed ? 'Ban and rotate key' : 'Ban'}
+    </Button>
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12, borderTop: '1px solid var(--border-subtle)' }}>
+      <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>Moderation</span>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {p.kind === 'human' && (
-          <Button variant="primary" size="sm" iconLeft="message-square" onClick={() => app.go({ code, ch: dmChannel(me, p.pub) })}>
-            {p.self ? 'Notes to self' : 'Message'}
+        {iAmCreator && !p.admin && !p.banned && (
+          <Button size="sm" variant="secondary" iconLeft="shield-check" onClick={() => app.publish(code, { t: 'role', b: { target: p.pub, admin: true } })}>
+            Make admin
           </Button>
         )}
-        {p.kind === 'agent' && p.owner?.self && (
-          <>
-            <Button variant="agent" size="sm" iconLeft="lock" onClick={() => app.go({ code, ch: agentDmChannel(me, p.agentId!) })}>
-              Message privately
-            </Button>
-            <Button variant="secondary" size="sm" iconLeft="external-link" onClick={() => window.open('http://127.0.0.1:7717/', '_blank')}>
-              Configure
-            </Button>
-          </>
+        {p.admin && (
+          <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'role', b: { target: p.pub, admin: false } })}>
+            Remove admin
+          </Button>
         )}
-        {p.kind === 'agent' &&
-          !p.owner?.self &&
-          (p.prefs?.discoverable ? (
-            <Button
-              variant="agent"
-              size="sm"
-              iconLeft="message-square"
-              data-testid="agent-message"
-              onClick={() => app.go({ code, ch: guestDmChannel(me, p.pub, p.agentId ?? '') })}
-            >
-              Message
-            </Button>
-          ) : (
-            <span data-testid="agent-not-discoverable" style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>
-              Not discoverable: @mention {p.name} in a channel or reply to its messages.
-            </span>
-          ))}
+        {banButton}
+        {relayed && confirmBan && (
+          <span data-testid="ban-warning" style={{ flexBasis: '100%', fontSize: 12.5, color: 'var(--text-subtle)' }}>
+            They keep what they’ve already read. Everyone else moves to a new key; old invite links stop working.
+          </span>
+        )}
       </div>
-      {p.kind === 'human' && !p.self && iAmAdmin && !p.creator && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12, borderTop: '1px solid var(--border-subtle)' }}>
-          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>Moderation</span>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {iAmCreator && !p.admin && !p.banned && (
-              <Button size="sm" variant="secondary" iconLeft="shield-check" onClick={() => app.publish(code, { t: 'role', b: { target: p.pub, admin: true } })}>
-                Make admin
-              </Button>
-            )}
-            {p.admin && (
-              <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'role', b: { target: p.pub, admin: false } })}>
-                Remove admin
-              </Button>
-            )}
-            {p.banned ? (
-              <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'ban', b: { target: p.pub, on: false } })}>
-                Unban
-              </Button>
-            ) : relayed && !confirmBan ? (
-              <Button size="sm" variant="danger" iconLeft="ban" data-testid="ban-button" onClick={() => setConfirmBan(true)}>
-                Ban
-              </Button>
-            ) : (
-              <Button size="sm" variant="danger" iconLeft="ban" data-testid={relayed ? 'ban-confirm' : 'ban-button'} onClick={ban}>
-                {relayed ? 'Ban and rotate key' : 'Ban'}
-              </Button>
-            )}
-            {relayed && confirmBan && (
-              <span data-testid="ban-warning" style={{ flexBasis: '100%', fontSize: 12.5, color: 'var(--text-subtle)' }}>
-                They keep what they’ve already read. Everyone else moves to a new key; old invite links stop working.
-              </span>
-            )}
-          </div>
-        </div>
-      )}
+    </div>
+  );
+}
+
+function Profile({ id }: { id: string }) {
+  const { state, peer, identity, route } = useCurrent();
+  const p = personFor(state, peer, id, identity.pub);
+  const code = route.code ?? '';
+  const canModerate = p.kind === 'human' && !p.self && !!state?.admins.has(identity.pub) && !p.creator;
+  return (
+    <div style={{ overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <ProfileHeader p={p} />
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <ProfileActions p={p} code={code} me={identity.pub} />
+      </div>
+      {canModerate && <Moderation p={p} code={code} />}
     </div>
   );
 }
@@ -279,8 +292,8 @@ function Profile({ id }: { id: string }) {
 function Thread({ id }: { id: string }) {
   const { state, peer, identity, route } = useCurrent();
   const [, setN] = useState(0);
-  const tick = useApp((s) => s.tick);
-  const people = useMemo(() => roster(state, peer, identity.pub), [state, peer, tick]);
+  // useCurrent re-renders on every tick, so the roster is always current.
+  const people = roster(state, peer, identity.pub);
   const typing = useTyping(route.ch || '');
   const parent = state?.msgs.get(id);
   if (!state || !parent)
@@ -289,13 +302,14 @@ function Thread({ id }: { id: string }) {
         {peer?.transport.kind === 'nostr' ? 'This thread shows up once it arrives from the workspace’s relays.' : 'This thread syncs once a member who has it is online.'}
       </div>
     );
+  const replies = parent.replies.map((rid) => state.msgs.get(rid)).filter((m): m is Msg => !!m);
   const ctx: MsgCtx = {
     state,
     peer,
     me: identity.pub,
     handle: identity.handle.toLowerCase(),
     roster: people,
-    code: route.code!,
+    code: route.code ?? '',
     inThread: true,
     forceRender: () => setN((x) => x + 1),
   };
@@ -309,10 +323,9 @@ function Thread({ id }: { id: string }) {
           </span>
           <span style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
         </div>
-        {parent.replies.map((rid, i) => {
-          const m = state.msgs.get(rid)!;
-          const prev = i ? state.msgs.get(parent.replies[i - 1]) : undefined;
-          return <MessageItem key={rid} m={m} ctx={ctx} continued={!!prev && authorKey(prev) === authorKey(m) && m.ts - prev.ts < 300000 && !m.trace} />;
+        {replies.map((m, i) => {
+          const prev = replies[i - 1];
+          return <MessageItem key={m.id} m={m} ctx={ctx} continued={!!prev && authorKey(prev) === authorKey(m) && m.ts - prev.ts < 300000 && !m.trace} />;
         })}
       </div>
       <div style={{ padding: '0 12px 12px' }}>
@@ -362,7 +375,7 @@ function ResultRow({ m, onClick }: { m: Msg; onClick: () => void }) {
           <b style={{ color: 'var(--text-strong)' }}>{a.name}</b> · {m.ch.includes(':') ? channelTitle(state, m.ch, identity.pub) : '#' + channelTitle(state, m.ch, identity.pub)} ·{' '}
           {fmtDay(m.ts)} {fmtTime(m.ts)}
         </span>
-        <span style={{ fontSize: 13.5, color: 'var(--text-body)', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' } as any}>
+        <span style={{ fontSize: 13.5, color: 'var(--text-body)', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
           {m.text || m.files.map((f) => f.name).join(', ')}
         </span>
       </span>
@@ -383,7 +396,7 @@ function Pinned() {
   const { state, route } = useCurrent();
   const ids = [...(state?.pins.get(route.ch || '') || [])];
   const msgs = ids
-    .map((id) => state!.msgs.get(id))
+    .map((id) => state?.msgs.get(id))
     .filter((m): m is Msg => !!m && !m.deleted)
     .sort((a, b) => b.ts - a.ts);
   return (
@@ -395,7 +408,7 @@ function Pinned() {
         </div>
       )}
       {msgs.map((m) => (
-        <ResultRow key={m.id} m={m} onClick={() => openMsg(route.code!, m)} />
+        <ResultRow key={m.id} m={m} onClick={() => openMsg(route.code ?? '', m)} />
       ))}
     </div>
   );
@@ -404,17 +417,18 @@ function Pinned() {
 function Search() {
   const { state, route, identity } = useCurrent();
   const [q, setQ] = useState('');
+  const me = identity.pub;
   const results = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!state || s.length < 2) return [];
     const out: Msg[] = [];
     for (const m of state.msgs.values()) {
       if (m.deleted) continue;
-      if (m.ch.startsWith('dm:') && !m.ch.includes(identity.pub)) continue;
+      if (m.ch.startsWith('dm:') && !m.ch.includes(me)) continue;
       if (m.text.toLowerCase().includes(s) || m.files.some((f) => f.name.toLowerCase().includes(s))) out.push(m);
     }
     return out.sort((a, b) => b.ts - a.ts).slice(0, 100);
-  }, [q, state]);
+  }, [q, state, me]);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
       <div style={{ padding: 12 }}>
@@ -433,7 +447,7 @@ function Search() {
           <div style={{ fontSize: 14, color: 'var(--text-muted)', padding: 8 }}>Nothing on this device matches “{q}”. Search covers history synced here.</div>
         )}
         {results.map((m) => (
-          <ResultRow key={m.id} m={m} onClick={() => openMsg(route.code!, m)} />
+          <ResultRow key={m.id} m={m} onClick={() => openMsg(route.code ?? '', m)} />
         ))}
       </div>
     </div>

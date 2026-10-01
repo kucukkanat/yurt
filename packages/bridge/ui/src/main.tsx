@@ -3,7 +3,10 @@ import { createRoot } from 'react-dom/client';
 import '@yurt/ui/styles.css';
 import { App } from './App';
 
-createRoot(document.getElementById('root')!).render(
+const root = document.getElementById('root');
+if (!root) throw new Error('index.html has no #root element');
+
+createRoot(root).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>,

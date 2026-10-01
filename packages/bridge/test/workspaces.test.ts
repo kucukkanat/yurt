@@ -1,26 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
-import { newNostrTransport, newTrysteroTransport, newRecoveryPhrase } from '@yurt/protocol';
+import { newNostrTransport, newTrysteroTransport } from '@yurt/protocol';
 import type { Workspaces } from '../src/workspaces';
 import type { Config } from '../src/config';
-import { tempDir, until } from './helpers';
+import { startBridge, tempDir, until } from './helpers';
 
 // config.ts reads YURT_HOME on import. The relay is a closed local port: nothing leaves the machine.
 const home = tempDir('yurt-ws-');
 let ws: Workspaces;
 let cfg: Config;
 beforeAll(async () => {
-  process.env.YURT_HOME = home;
-  const [{ loadConfig }, { Workspaces }, { AgentHost }] = await Promise.all([import('../src/config'), import('../src/workspaces'), import('../src/agents')]);
-  cfg = loadConfig();
-  ws = new Workspaces(cfg, () => {});
-  ws.host = new AgentHost(
-    cfg,
-    () => ws.me,
-    () => {},
-    () => {},
-  );
-  ws.setIdentity(newRecoveryPhrase());
+  ({ cfg, ws } = await startBridge(home));
 });
 afterAll(() => {
   for (const p of ws.peers.values()) p.leave();

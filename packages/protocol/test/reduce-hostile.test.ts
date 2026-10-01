@@ -1,21 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { newRecoveryPhrase, keyFromPhrase, makeEvent, reduce, liveAgents, members, dmChannel, agentDmChannel, EDIT_WINDOW_MS, type Ev, type EvType } from '../src';
+import { newRecoveryPhrase, keyFromPhrase, makeEvent, reduce, liveAgents, members, dmChannel, agentDmChannel, EDIT_WINDOW_MS, type Ev } from '../src';
+import { eventClock, northwind } from './util';
 
 const WS = 'K7QX2MPD';
 const A = keyFromPhrase(newRecoveryPhrase()); // creator
 const B = keyFromPhrase(newRecoveryPhrase());
 const C = keyFromPhrase(newRecoveryPhrase());
 const D = keyFromPhrase(newRecoveryPhrase());
-let clock = 1_700_000_000_000;
-const ev = (kp: typeof A, t: EvType, b: unknown, extra: { ch?: string; to?: string; ag?: string; ts?: number } = {}) =>
-  makeEvent(kp, { ws: WS, t, b, ts: (clock += 1000), ...extra });
+const { ev } = eventClock(WS);
 
-const base = (): Ev[] => [
-  ev(A, 'ws.create', { name: 'Northwind' }),
-  ev(A, 'ch.create', { id: 'general', name: 'general' }),
-  ev(A, 'profile', { name: 'Ada', handle: 'ada' }),
-  ev(B, 'profile', { name: 'Bo', handle: 'bo' }),
-];
+const base = (): Ev[] => northwind(ev, A, B);
 
 describe('reduce on hostile bodies', () => {
   it('ignores bad events without throwing and keeps applying the rest', () => {
@@ -50,7 +44,7 @@ describe('reduce on hostile bodies', () => {
     const s = reduce(WS, [...evs, m, ...bad, tail]);
     const r = s.msgs.get(m.id);
     expect(Object.keys(r?.reactions ?? {})).toEqual(['__proto__', 'constructor', 'heart']);
-    expect(r?.reactions['heart']).toEqual([C.pub]);
+    expect(r?.reactions.heart).toEqual([C.pub]);
     expect(r?.text).toBe('hi');
     expect(s.channels.get('general')).toMatchObject({ name: 'general', topic: '' });
     expect([...s.channels.keys()]).toEqual(['general']);

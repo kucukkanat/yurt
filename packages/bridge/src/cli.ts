@@ -46,8 +46,8 @@ server = new BridgeServer(port, cfg, workspaces, host, path.resolve(uiDir));
 
 try {
   await server.listen();
-} catch (e: any) {
-  if (e?.code === 'EADDRINUSE') {
+} catch (e) {
+  if (e instanceof Error && 'code' in e && e.code === 'EADDRINUSE') {
     console.log(`\n  Yurt bridge is already running on port ${port}. Open http://127.0.0.1:${port}\n`);
     if (!noOpen) openUrl(`http://127.0.0.1:${port}/`);
     process.exit(0);

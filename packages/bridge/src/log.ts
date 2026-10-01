@@ -10,9 +10,11 @@ export function log(level: Entry['level'], src: string, msg: string) {
   if (ring.length > 500) ring.shift();
   if (level !== 'acp') {
     const line = `[${new Date(e.at).toLocaleTimeString()}] ${src}: ${msg}`;
-    level === 'error' ? console.error(line) : level === 'warn' ? console.warn(line) : console.log(line);
+    if (level === 'error') console.error(line);
+    else if (level === 'warn') console.warn(line);
+    else console.log(line);
   }
-  subs.forEach((f) => f(e));
+  for (const f of subs) f(e);
 }
 
 export const recentLogs = () => ring.slice(-200);

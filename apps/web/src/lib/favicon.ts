@@ -27,7 +27,7 @@ export const sameState = (a: FaviconState, b: FaviconState) =>
 /** Badge text: counts above 9 don't fit at favicon size. */
 export const badgeText = (n: number) => (n > 9 ? '9+' : String(n));
 
-export interface Palette {
+interface Palette {
   danger: string;
   accent: string;
   success: string;
@@ -35,7 +35,7 @@ export interface Palette {
 }
 
 /** Draws `base` (if it loaded) decorated for `s` onto a square canvas of `size` pixels. */
-export function paint(ctx: CanvasRenderingContext2D, size: number, base: CanvasImageSource | null, s: FaviconState, c: Palette) {
+function paint(ctx: CanvasRenderingContext2D, size: number, base: CanvasImageSource | null, s: FaviconState, c: Palette) {
   ctx.clearRect(0, 0, size, size);
   const inset = s.inCall ? size * 0.12 : 0; // leave room for the ring
   if (base) {

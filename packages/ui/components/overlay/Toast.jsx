@@ -81,7 +81,7 @@ export function Toast({ tone = 'neutral', title, description, actionLabel, onAct
       {duration > 0 && (
         <span
           aria-hidden="true"
-          onAnimationEnd={() => onClose && onClose()}
+          onAnimationEnd={() => onClose?.()}
           style={{
             position: 'absolute',
             left: 0,

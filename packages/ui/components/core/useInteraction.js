@@ -43,3 +43,19 @@ export function shadows(...list) {
   const v = list.filter(Boolean).join(', ');
   return v || 'none';
 }
+
+// Keyboard-focus only (not mouse focus), for controls that draw their own focus ring.
+export function useFocusVisible() {
+  const [focus, setFocus] = React.useState(false);
+  const handlers = {
+    onFocus: (e) => {
+      let fv = true;
+      try {
+        fv = e.target.matches(':focus-visible');
+      } catch (_) {}
+      setFocus(fv);
+    },
+    onBlur: () => setFocus(false),
+  };
+  return [focus, handlers];
+}

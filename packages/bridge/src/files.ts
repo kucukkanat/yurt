@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /** Where attachments land inside an agent's working folder. */
-export const FILES_DIR = path.join('.yurt', 'files');
+const FILES_DIR = path.join('.yurt', 'files');
 
 /** A name that can't leave its folder: no separators, no leading dots, only plain characters. */
 export function safeName(name: string): string {

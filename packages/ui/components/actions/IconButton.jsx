@@ -1,4 +1,3 @@
-import React from 'react';
 import { Icon } from '../core/Icon.jsx';
 import { BUTTON_VARIANTS } from './Button.jsx';
 import { useInteraction, mergeHandlers, shadows } from '../core/useInteraction.js';

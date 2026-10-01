@@ -1,11 +1,12 @@
-import React, { useEffect, useRef } from 'react';
+import type React from 'react';
+import { useEffect, useRef } from 'react';
 import { Icon, IconButton, Button, Tooltip, Avatar } from '@yurt/ui';
 import { useApp } from '../store';
 import { useCurrent, personFor, channelTitle } from '../model';
 import { huddle, MAX_VIDEO } from '../lib/huddle';
 import { getPeer } from '../lib/net';
 
-function participants(ch: string) {
+function useParticipants(ch: string) {
   const { peer, state, identity } = useCurrent();
   const hud = useApp((s) => s.huddle);
   const out: { pid: string; pub: string; mic: boolean; cam: boolean; screen: boolean }[] = [];
@@ -20,7 +21,7 @@ function participants(ch: string) {
 }
 
 export function HuddleButton({ ch }: { ch: string }) {
-  const { mine, peer } = participants(ch);
+  const { mine, peer } = useParticipants(ch);
   if (mine) return null;
   const off = !!peer && !peer.calls;
   return (
@@ -31,7 +32,7 @@ export function HuddleButton({ ch }: { ch: string }) {
 }
 
 export function HuddleStrip({ ch }: { ch: string }) {
-  const { list, mine, peer, state, identity } = participants(ch);
+  const { list, mine, peer, state, identity } = useParticipants(ch);
   if (mine || !list.length) return null;
   return (
     <div
@@ -107,7 +108,10 @@ function Audio({ stream }: { stream: MediaStream }) {
       ref.current.play().catch(() => {});
     }
   }, [stream]);
-  return <audio ref={ref} autoPlay />;
+  return (
+    // biome-ignore lint/a11y/useMediaCaption: live call audio from other members; there is no caption track to offer
+    <audio ref={ref} autoPlay />
+  );
 }
 
 /** Always mounted in the shell so audio survives channel switches and the mobile drawer closing. */
@@ -152,9 +156,11 @@ export function HuddleStage() {
 export function HuddleDock() {
   const hud = useApp((s) => s.huddle);
   const states = useApp((s) => s.states);
-  const identity = useApp((s) => s.identity)!;
+  const identity = useApp((s) => s.identity);
   useApp((s) => s.tick);
-  if (!hud.ch || !hud.code) return null;
+  if (!hud.ch || !hud.code || !identity) return null;
+  const code = hud.code;
+  const ch = hud.ch;
   const peer = getPeer(hud.code);
   const state = states[hud.code];
   const n = peer ? [...peer.huddles.values()].filter((h) => h.ch === hud.ch).length + 1 : 1;
@@ -176,7 +182,7 @@ export function HuddleDock() {
     >
       <button
         type="button"
-        onClick={() => useApp.getState().go({ code: hud.code!, ch: hud.ch! })}
+        onClick={() => useApp.getState().go({ code, ch })}
         style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}
       >
         <span

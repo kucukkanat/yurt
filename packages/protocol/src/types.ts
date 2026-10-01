@@ -2,7 +2,7 @@ import type { BlobRef } from './blossom';
 export type EvType = 'ws.create' | 'profile' | 'ch.create' | 'ch.update' | 'msg' | 'edit' | 'del' | 'react' | 'pin' | 'role' | 'ban' | 'agent' | 'approve' | 'rekey';
 
 /** A signed, immutable workspace event. Everything in a workspace is a log of these. */
-export interface Ev<B = any> {
+export interface Ev<B = unknown> {
   id: string; // sha256(canonical(unsigned fields)) hex, 32 chars
   ws: string; // workspace code, normalized (8 chars, no dash)
   t: EvType;
@@ -15,7 +15,7 @@ export interface Ev<B = any> {
   sig: string; // ed25519 signature over id, hex
 }
 
-export type UnsignedEv<B = any> = Omit<Ev<B>, 'id' | 'sig'>;
+export type UnsignedEv<B = unknown> = Omit<Ev<B>, 'id' | 'sig'>;
 
 export interface FileRef {
   id: string;

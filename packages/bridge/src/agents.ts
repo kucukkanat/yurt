@@ -1,7 +1,7 @@
 import type { WorkspacePeer, Msg, TraceStep, AgentConfig } from '@yurt/protocol';
 import { agentDmChannel, mentions, agentKey, parseGuestDm } from '@yurt/protocol';
 import type { Ev, WsState } from '@yurt/protocol';
-import { AcpConnection, isAuthError, type AcpUpdate } from './acp';
+import { AcpConnection, isAuthError, isRecord, type AcpUpdate } from './acp';
 import { RUNTIMES, acpCommand } from './runtimes';
 import type { Config } from './config';
 import { log } from './log';
@@ -26,6 +26,69 @@ const STALE_MS = 3 * 60_000;
 const APPROVAL_TIMEOUT_MS = 30 * 60_000;
 
 const mapStatus = (s?: string): TraceStep['status'] => (s === 'completed' ? 'done' : s === 'failed' ? 'error' : 'running');
+const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+interface PermissionOption {
+  optionId: string;
+  name: string;
+  kind: string;
+}
+
+/** The parts of an ACP `session/request_permission` the bridge uses, from untrusted agent output. */
+function parsePermission(p: unknown): { kind: string; title: string; options: PermissionOption[] } {
+  const call = isRecord(p) && isRecord(p.toolCall) ? p.toolCall : {};
+  const options = isRecord(p) && Array.isArray(p.options) ? p.options : [];
+  return {
+    kind: typeof call.kind === 'string' && call.kind ? call.kind : 'other',
+    title: typeof call.title === 'string' && call.title ? call.title : 'use a tool',
+    options: options.flatMap((o): PermissionOption[] =>
+      isRecord(o) && typeof o.optionId === 'string'
+        ? [{ optionId: o.optionId, name: typeof o.name === 'string' ? o.name : o.optionId, kind: typeof o.kind === 'string' ? o.kind : '' }]
+        : [],
+    ),
+  };
+}
+
+const CANCELLED = { outcome: { outcome: 'cancelled' } } as const;
+const selected = (optionId: string) => ({ outcome: { outcome: 'selected', optionId } });
+
+/** Folds one session update into the run's trace; returns the reply text it adds, if any. */
+function applyUpdate(u: AcpUpdate, trace: TraceStep[], tools: Map<string, { i: number; start: number }>): string {
+  if (u.sessionUpdate === 'agent_message_chunk') return u.content?.type === 'text' ? u.content.text || '' : '';
+  if (!u.toolCallId) return '';
+  if (u.sessionUpdate === 'tool_call') {
+    tools.set(u.toolCallId, { i: trace.push({ title: u.title || u.kind || 'Tool call', tool: u.kind, status: mapStatus(u.status) }) - 1, start: Date.now() });
+    return '';
+  }
+  const t = u.sessionUpdate === 'tool_call_update' ? tools.get(u.toolCallId) : undefined;
+  const st = t && trace[t.i];
+  if (!t || !st) return '';
+  if (u.title) st.title = u.title;
+  if (u.status) {
+    st.status = mapStatus(u.status);
+    if (st.status !== 'running') st.ms = Date.now() - t.start;
+  }
+  return '';
+}
+
+/** Which messages a prompt shows, and how it names the place. */
+function promptScope(s: WsState, trigger: Msg, kind: Kind, owner: string): { ids: string[]; where: string } {
+  const chName = s.channels.get(trigger.ch)?.name || trigger.ch;
+  const guest = s.profiles.get(trigger.a);
+  if (kind === 'dm') return { ids: s.channelMsgs.get(trigger.ch) || [], where: 'a private chat with your owner' };
+  if (kind === 'guest')
+    return {
+      ids: s.channelMsgs.get(trigger.ch) || [],
+      where: `a private chat with ${guest?.name || 'a member'} (@${guest?.handle || '?'}), a member of the workspace. ${owner} can read this chat too`,
+    };
+  if (trigger.parent) {
+    const p = s.msgs.get(trigger.parent);
+    return { ids: p ? [p.id, ...p.replies] : [trigger.id], where: 'a thread in #' + chName };
+  }
+  return { ids: s.channelMsgs.get(trigger.ch) || [], where: '#' + chName };
+}
+
+const ASK: Record<Exclude<Kind, 'guest'>, string> = { dm: ' from your owner', reply: ', a follow-up in a thread you take part in', mention: ', which mentions you' };
 
 /** Only the human owner answers approvals; an agent signing with the owner's key (`ag`) must not. */
 export const isOwnerApproval = (e: Ev, me: string): boolean => e.t === 'approve' && e.a === me && !e.ag;
@@ -98,37 +161,43 @@ export class AgentHost {
 
   onEvents(peer: WorkspacePeer, fresh: Ev[]) {
     const me = this.me();
-    if (!me) return;
     const ws = this.cfg.workspaces.find((w) => w.code === peer.code);
-    if (!ws) return;
-    for (const e of fresh) {
-      if (isOwnerApproval(e, me)) {
-        this.approvals.get(e.b?.req)?.(e.b?.option);
-        continue;
-      }
-      if (e.t !== 'msg' || !e.ch || Date.now() - e.ts > STALE_MS) continue;
-      const m = peer.state.msgs.get(e.id);
-      if (!m) continue;
-      if (e.ch.startsWith('adm:')) {
-        const [, owner, id] = e.ch.split(':');
-        if (owner === me && e.a === me && !e.ag && this.agent(id)) this.enqueue(id, peer, m, 'dm');
-        continue;
-      }
-      const g = parseGuestDm(e.ch);
-      if (g) {
-        // Another member messaging one of my agents: only while it's in this workspace and discoverable.
-        const a = this.agent(g.agentId);
-        if (g.owner === me && e.a === g.member && !e.ag && a?.discoverable && ws.agents.includes(a.id)) this.enqueue(a.id, peer, m, 'guest');
-        continue;
-      }
-      if (e.ch.startsWith('dm:')) continue;
-      const mentioned = mentionedAgents(this.cfg.agents, ws.agents, m.text, e.ag).filter((id) => this.agent(id)?.respondTo.mentions);
-      const replied = repliedAgents(this.cfg.agents, ws.agents, peer.state, m, me, e.ag).filter((id) => !mentioned.includes(id));
-      // Only agent messages that actually hand off to another agent count toward the chain limit.
-      if ((!mentioned.length && !replied.length) || (e.ag && !this.allowAgentChain(e.ch))) continue;
-      for (const id of mentioned) this.enqueue(id, peer, m, 'mention');
-      for (const id of replied) this.enqueue(id, peer, m, 'reply');
+    if (!me || !ws) return;
+    for (const e of fresh) this.onEvent(peer, ws.agents, e, me);
+  }
+
+  private onEvent(peer: WorkspacePeer, wsAgents: string[], e: Ev, me: string) {
+    if (isOwnerApproval(e, me)) {
+      const b = isRecord(e.b) ? e.b : {};
+      if (typeof b.req === 'string' && typeof b.option === 'string') this.approvals.get(b.req)?.(b.option);
+      return;
     }
+    if (e.t !== 'msg' || !e.ch || Date.now() - e.ts > STALE_MS) return;
+    const m = peer.state.msgs.get(e.id);
+    if (!m) return;
+    if (e.ch.startsWith('adm:')) {
+      const [, owner, id] = e.ch.split(':');
+      if (owner === me && e.a === me && !e.ag && id && this.agent(id)) this.enqueue(id, peer, m, 'dm');
+      return;
+    }
+    const g = parseGuestDm(e.ch);
+    if (g) {
+      // Another member messaging one of my agents: only while it's in this workspace and discoverable.
+      const a = this.agent(g.agentId);
+      if (g.owner === me && e.a === g.member && !e.ag && a?.discoverable && wsAgents.includes(a.id)) this.enqueue(a.id, peer, m, 'guest');
+      return;
+    }
+    if (!e.ch.startsWith('dm:')) this.onRoomMessage(peer, wsAgents, e.ch, m, me, e.ag);
+  }
+
+  /** A channel message: @mentions and follow-ups in agents' threads. */
+  private onRoomMessage(peer: WorkspacePeer, wsAgents: string[], ch: string, m: Msg, me: string, from?: string) {
+    const mentioned = mentionedAgents(this.cfg.agents, wsAgents, m.text, from).filter((id) => this.agent(id)?.respondTo.mentions);
+    const replied = repliedAgents(this.cfg.agents, wsAgents, peer.state, m, me, from).filter((id) => !mentioned.includes(id));
+    // Only agent messages that actually hand off to another agent count toward the chain limit.
+    if ((!mentioned.length && !replied.length) || (from && !this.allowAgentChain(ch))) return;
+    for (const id of mentioned) this.enqueue(id, peer, m, 'mention');
+    for (const id of replied) this.enqueue(id, peer, m, 'reply');
   }
 
   /** Agents may @mention each other in public, but a chain stops after 4 agent-triggered runs per channel per 5 minutes. */
@@ -185,36 +254,18 @@ export class AgentHost {
         saved.set(f.id, saveAttachment(a.workdir, trigger.id, trigger.files.length > 1 ? `${i + 1}-${f.name}` : f.name, buf));
         log('info', a.name, `saved attachment ${f.name} to ${saved.get(f.id)}`);
       } catch (e) {
-        log('warn', a.name, `couldn't save attachment ${f.name}: ${(e as Error).message}`);
+        log('warn', a.name, `couldn't save attachment ${f.name}: ${errorMessage(e)}`);
       }
     }
     return saved;
   }
 
-  private prompt(a: AgentConfig, peer: WorkspacePeer, trigger: Msg, kind: Kind, saved: ReadonlyMap<string, string> = new Map()): string {
+  private prompt(a: AgentConfig, peer: WorkspacePeer, trigger: Msg, kind: Kind, me: string, saved: ReadonlyMap<string, string> = new Map()): string {
     const s = peer.state;
-    const me = this.me()!;
     const nameOf = (m: Msg) =>
       m.ag ? (s.agents.get(agentKey(m.a, m.ag))?.name || m.ag) + ' (agent)' : (s.profiles.get(m.a)?.name || 'Someone') + ' (@' + (s.profiles.get(m.a)?.handle || '?') + ')';
-    let ids: string[];
-    let where: string;
-    const chName = s.channels.get(trigger.ch)?.name || trigger.ch;
     const owner = s.profiles.get(me)?.name || 'your owner';
-    const guest = s.profiles.get(trigger.a);
-    if (kind === 'dm') {
-      ids = s.channelMsgs.get(trigger.ch) || [];
-      where = 'a private chat with your owner';
-    } else if (kind === 'guest') {
-      ids = s.channelMsgs.get(trigger.ch) || [];
-      where = `a private chat with ${guest?.name || 'a member'} (@${guest?.handle || '?'}), a member of the workspace. ${owner} can read this chat too`;
-    } else if (trigger.parent) {
-      const p = s.msgs.get(trigger.parent);
-      ids = p ? [p.id, ...p.replies] : [trigger.id];
-      where = 'a thread in #' + chName;
-    } else {
-      ids = s.channelMsgs.get(trigger.ch) || [];
-      where = '#' + chName;
-    }
+    const { ids, where } = promptScope(s, trigger, kind, owner);
     const cut = ids.indexOf(trigger.id);
     const recent = (cut >= 0 ? ids.slice(0, cut + 1) : ids).slice(-Math.max(1, a.contextSize));
     // Only the triggering message's files are fetched; earlier ones are listed by name.
@@ -226,14 +277,7 @@ export class AgentHost {
         (m) =>
           `[${new Date(m.ts).toISOString().slice(11, 16)}] ${nameOf(m)}: ${m.text}${m.files.length ? ' [attached: ' + m.files.map((f) => fileLine(m, f)).join(', ') + ']' : ''}`,
       );
-    const ask =
-      kind === 'dm'
-        ? ' from your owner'
-        : kind === 'guest'
-          ? ' from ' + (guest?.name || 'them')
-          : kind === 'reply'
-            ? ', a follow-up in a thread you take part in'
-            : ', which mentions you';
+    const ask = kind === 'guest' ? ' from ' + (s.profiles.get(trigger.a)?.name || 'them') : ASK[kind];
     return [
       `You are ${a.name} (@${a.handle}), an AI agent in the Yurt workspace "${s.name}", speaking in ${where}. ${owner} owns you and runs you on their machine.`,
       a.instructions ? `\nYour instructions from ${owner}:\n${a.instructions}` : '',
@@ -257,29 +301,17 @@ export class AgentHost {
     try {
       const s = await this.session(a, kind === 'guest' ? a.id + '|guest:' + trigger.a : a.id);
       s.onUpdate = (u) => {
-        if (u.sessionUpdate === 'agent_message_chunk' && u.content?.type === 'text') text += u.content.text || '';
-        else if (u.sessionUpdate === 'tool_call' && u.toolCallId) {
-          tools.set(u.toolCallId, { i: trace.push({ title: u.title || u.kind || 'Tool call', tool: u.kind, status: mapStatus(u.status) }) - 1, start: Date.now() });
-        } else if (u.sessionUpdate === 'tool_call_update' && u.toolCallId) {
-          const t = tools.get(u.toolCallId);
-          if (!t) return;
-          const st = trace[t.i];
-          if (u.title) st.title = u.title;
-          if (u.status) {
-            st.status = mapStatus(u.status);
-            if (st.status !== 'running') st.ms = Date.now() - t.start;
-          }
-        }
+        text += applyUpdate(u, trace, tools);
       };
       const saved = await this.deliverFiles(a, peer, trigger);
-      await s.conn.request('session/prompt', { sessionId: s.id, prompt: [{ type: 'text', text: this.prompt(a, peer, trigger, kind, saved) }] });
+      await s.conn.request('session/prompt', { sessionId: s.id, prompt: [{ type: 'text', text: this.prompt(a, peer, trigger, kind, me, saved) }] });
       s.onUpdate = undefined;
       if (!text.trim()) text = 'Done.';
       this.setStatus(id, 'idle');
     } catch (e) {
       const auth = isAuthError(e);
-      text = auth ? `I can't run yet: ${RUNTIMES[a.runtime].name} isn't signed in on my owner's machine.` : `I hit an error and stopped: ${(e as Error).message}`;
-      trace.push({ title: auth ? 'Sign-in needed' : 'Run failed', status: 'error', detail: (e as Error).message });
+      text = auth ? `I can't run yet: ${RUNTIMES[a.runtime].name} isn't signed in on my owner's machine.` : `I hit an error and stopped: ${errorMessage(e)}`;
+      trace.push({ title: auth ? 'Sign-in needed' : 'Run failed', status: 'error', detail: errorMessage(e) });
       this.setStatus(id, 'error');
       this.drop(id); // auth errors too: a fresh process picks up a sign-in done since
     } finally {
@@ -304,23 +336,22 @@ export class AgentHost {
     });
   }
 
-  private async permission(id: string, p: any) {
+  private async permission(id: string, p: unknown) {
     const a = this.agent(id);
-    if (!a) return { outcome: { outcome: 'cancelled' } }; // removed while running
-    const kind: string = p?.toolCall?.kind || 'other';
-    const title: string = p?.toolCall?.title || 'use a tool';
-    const options: { optionId: string; name: string; kind: string }[] = p?.options || [];
-    const allow = options.find((o) => o.kind === 'allow_once') || options.find((o) => o.kind?.startsWith('allow'));
-    const reject = options.find((o) => o.kind === 'reject_once') || options.find((o) => o.kind?.startsWith('reject'));
-    if (allow && a.autoApprove.includes(kind as any)) {
+    if (!a) return CANCELLED; // removed while running
+    const { kind, title, options } = parsePermission(p);
+    const allow = options.find((o) => o.kind === 'allow_once') || options.find((o) => o.kind.startsWith('allow'));
+    const reject = options.find((o) => o.kind === 'reject_once') || options.find((o) => o.kind.startsWith('reject'));
+    if (allow && (a.autoApprove as readonly string[]).includes(kind)) {
       log('info', a.name, `auto-approved ${kind}: ${title}`);
-      return { outcome: { outcome: 'selected', optionId: allow.optionId } };
+      return selected(allow.optionId);
     }
     const run = this.runs.get(a.id);
     const me = this.me();
-    if (!run || !me) return { outcome: { outcome: 'cancelled' } };
+    if (!run || !me) return CANCELLED;
     const req = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    const step = run.trace.push({ title: 'Waiting for approval: ' + title, tool: kind, status: 'waiting' }) - 1;
+    const step: TraceStep = { title: 'Waiting for approval: ' + title, tool: kind, status: 'waiting' };
+    run.trace.push(step);
     run.peer.publish({
       t: 'msg',
       ch: agentDmChannel(me, a.id),
@@ -337,8 +368,9 @@ export class AgentHost {
     this.approvals.delete(req);
     this.setStatus(a.id, 'working');
     const chosen = options.find((o) => o.optionId === optionId);
-    run.trace[step].status = chosen?.kind.startsWith('allow') ? 'done' : 'skipped';
-    run.trace[step].title = (chosen?.kind.startsWith('allow') ? 'Approved: ' : 'Declined: ') + title;
-    return chosen ? { outcome: { outcome: 'selected', optionId } } : { outcome: { outcome: 'cancelled' } };
+    const allowed = !!chosen?.kind.startsWith('allow');
+    step.status = allowed ? 'done' : 'skipped';
+    step.title = (allowed ? 'Approved: ' : 'Declined: ') + title;
+    return chosen ? selected(optionId) : CANCELLED;
   }
 }

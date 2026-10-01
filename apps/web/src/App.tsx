@@ -22,27 +22,36 @@ export function App() {
   );
 }
 
+type AppStore = ReturnType<typeof useApp.getState>;
+
+/** ⌘/Ctrl shortcuts: the key, whether it needs an open workspace, and what it does. */
+const MOD_KEYS: Record<string, { inWorkspace?: boolean; run(s: AppStore): void }> = {
+  k: { run: (s) => s.setDialog(s.dialog === 'jump' ? null : 'jump') },
+  ',': { run: (s) => s.openSettings() },
+  i: { inWorkspace: true, run: (s) => s.setPanel(s.panel.type === 'members' ? { type: null } : { type: 'members' }) },
+  f: { inWorkspace: true, run: (s) => s.setPanel({ type: 'search' }) },
+};
+
+/** Escape closes the side panel (leaving a thread's route too), unless a dialog or a text field has it. */
+function closePanel(s: AppStore, e: KeyboardEvent): boolean {
+  const typing = e.target instanceof HTMLElement && !!e.target.closest('textarea,input');
+  if (e.key !== 'Escape' || s.dialog || !s.panel.type || typing) return false;
+  if (s.panel.type === 'thread' && s.route.code) s.go({ code: s.route.code, ch: s.route.ch });
+  s.setPanel({ type: null });
+  return true;
+}
+
 function useShortcuts() {
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       const s = useApp.getState();
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key.toLowerCase() === 'k') {
+      const shortcut = e.metaKey || e.ctrlKey ? MOD_KEYS[e.key.toLowerCase()] : undefined;
+      if (shortcut && (!shortcut.inWorkspace || s.route.code)) {
         e.preventDefault();
-        s.setDialog(s.dialog === 'jump' ? null : 'jump');
-      } else if (mod && e.key === ',') {
-        e.preventDefault();
-        s.openSettings();
-      } else if (mod && e.key.toLowerCase() === 'i' && s.route.code) {
-        e.preventDefault();
-        s.setPanel(s.panel.type === 'members' ? { type: null } : { type: 'members' });
-      } else if (mod && e.key.toLowerCase() === 'f' && s.route.code) {
-        e.preventDefault();
-        s.setPanel({ type: 'search' });
-      } else if (e.key === 'Escape' && !s.dialog && s.panel.type && !(e.target as HTMLElement)?.closest?.('textarea,input')) {
-        if (s.panel.type === 'thread' && s.route.code) s.go({ code: s.route.code, ch: s.route.ch });
-        s.setPanel({ type: null });
+        shortcut.run(s);
+        return;
       }
+      closePanel(s, e);
     };
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
@@ -61,7 +70,7 @@ function Shell() {
       const first = state.channels.has('general') ? 'general' : [...state.channels.keys()][0];
       useApp.getState().go({ code: route.code, ch: first });
     }
-  }, [route.code, route.ch, nChannels]);
+  }, [route.code, route.ch, state, nChannels]);
   const side = (
     <div style={{ display: 'flex', height: '100%', flexShrink: 0 }}>
       <Rail />
@@ -72,11 +81,15 @@ function Shell() {
     <div style={{ position: 'relative', display: 'flex', height: '100%', background: 'var(--surface-page)' }}>
       {narrow
         ? drawer && (
-            <div
-              onMouseDown={(e) => e.target === e.currentTarget && useApp.setState({ drawer: false })}
-              style={{ position: 'fixed', inset: 0, zIndex: 'var(--z-dialog)' as any, background: 'var(--surface-overlay)', animation: 'ag-fade var(--dur-fast) var(--ease-out)' }}
-            >
-              <div style={{ height: '100%', width: 'min(100%, 340px)', animation: 'ag-rise var(--dur-base) var(--ease-out)' }}>{side}</div>
+            <div style={{ position: 'fixed', inset: 0, zIndex: 'var(--z-dialog)', animation: 'ag-fade var(--dur-fast) var(--ease-out)' }}>
+              {/* The dimmed backdrop is a real button, so tapping beside the drawer closes it. */}
+              <button
+                type="button"
+                aria-label="Close sidebar"
+                onClick={() => useApp.setState({ drawer: false })}
+                style={{ position: 'absolute', inset: 0, padding: 0, border: 0, background: 'var(--surface-overlay)', cursor: 'default' }}
+              />
+              <div style={{ position: 'relative', height: '100%', width: 'min(100%, 340px)', animation: 'ag-rise var(--dur-base) var(--ease-out)' }}>{side}</div>
             </div>
           )
         : side}
@@ -105,7 +118,7 @@ function Toasts() {
         flexDirection: 'column',
         alignItems: 'center',
         gap: 8,
-        zIndex: 'var(--z-toast)' as any,
+        zIndex: 'var(--z-toast)',
         pointerEvents: 'none',
         padding: '0 12px',
       }}

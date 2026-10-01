@@ -1,73 +1,32 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import { createWorkspace, inviteLink, onboard, pointAtLocalRelay } from './helpers';
 // Node's WebSocket for the in-process peer below (same polyfill as the protocol tests).
 import '../packages/protocol/test/setup';
-import { WorkspacePeer, keyFromPhrase, newRecoveryPhrase, parseInvite, guestDmChannel, type Ev, type PeerStore } from '../packages/protocol/src';
-
-const RELAY = 'ws://127.0.0.1:7777'; // local relay, started by playwright.config.ts
-
-async function onboard(page: Page, name: string) {
-  await page.getByLabel('Display name').fill(name);
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await page.getByText('I saved my recovery phrase somewhere safe').click();
-  await page.getByRole('button', { name: 'Start chatting' }).click();
-}
-
-/** Point new relay workspaces at the local relay, through the same IndexedDB settings the Settings dialog writes. */
-async function useLocalRelay(page: Page) {
-  await page.goto('./');
-  await page.evaluate(
-    (relays) =>
-      new Promise<void>((res, rej) => {
-        const r = indexedDB.open('yurt', 1);
-        r.onsuccess = () => {
-          const t = r.result.transaction('kv', 'readwrite');
-          const kv = t.objectStore('kv');
-          const get = kv.get('settings');
-          get.onsuccess = () => kv.put({ ...(get.result || {}), relays }, 'settings');
-          t.oncomplete = () => res();
-          t.onerror = () => rej(t.error);
-        };
-        r.onerror = () => rej(r.error);
-      }),
-    RELAY,
-  );
-  await page.reload();
-}
-
-const memStore = (): PeerStore => {
-  const evs = new Map<string, Ev>();
-  let mark = 0;
-  return {
-    getBlob: async () => null,
-    putBlob: async () => {},
-    load: async () => [...evs.values()],
-    save: async (xs) => {
-      xs.forEach((e) => evs.set(e.id, e));
-    },
-    loadMark: async () => mark,
-    saveMark: async (_ws, m) => {
-      mark = m;
-    },
-  };
-};
+import { memStore } from '../packages/protocol/test/util';
+import { WorkspacePeer, keyFromPhrase, newRecoveryPhrase, parseInvite, guestDmChannel } from '../packages/protocol/src';
 
 // Olu's agents are announced by a real WorkspacePeer in this process, the way yurt-bridge does it:
 // Harvey is discoverable, Mute is not. Bea, in the browser, should only be able to DM Harvey.
 test('members can find and DM discoverable agents, and are told the owner can read along', async ({ browser }) => {
   const page = await (await browser.newContext()).newPage();
-  await useLocalRelay(page);
+  await pointAtLocalRelay(page);
   await onboard(page, 'Bea');
-  await page.getByLabel('Workspace name').fill('Agents ' + Date.now());
-  await page.getByText('Encrypted on Nostr relays').click();
-  await page.getByRole('button', { name: 'Create workspace' }).click();
-  await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
-  await page.getByRole('button', { name: 'Invite people' }).first().click();
-  const invite = parseInvite(await page.getByTestId('invite-link').inputValue());
-  await page.getByTestId('invite-link').press('Escape');
+  await createWorkspace(page, 'Agents', 'relays');
+  const invite = parseInvite(await inviteLink(page));
   if (!invite) throw new Error('no invite link');
 
   const olu = keyFromPhrase(newRecoveryPhrase());
-  const owner = new WorkspacePeer({ code: invite.code, kp: olu, selfId: olu.pub.slice(0, 20), transport: invite.transport, creator: invite.creator, store: memStore() });
+  const owner = new WorkspacePeer({
+    code: invite.code,
+    kp: olu,
+    selfId: olu.pub.slice(0, 20),
+    transport: invite.transport,
+    creator: invite.creator,
+    store: memStore().store,
+    onError: (m) => {
+      throw new Error(m);
+    },
+  });
   await owner.start();
   try {
     await expect.poll(() => owner.connected && owner.state.channels.has('general'), { timeout: 30_000 }).toBe(true);

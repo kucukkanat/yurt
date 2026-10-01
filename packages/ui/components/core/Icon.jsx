@@ -1,4 +1,3 @@
-import React from 'react';
 import { ICONS } from './icons-data.js';
 
 export function Icon({ name, size = 20, strokeWidth = 2, label, color = 'currentColor', style, ...rest }) {
@@ -20,6 +19,7 @@ export function Icon({ name, size = 20, strokeWidth = 2, label, color = 'current
       aria-hidden={label ? undefined : true}
       focusable="false"
       style={{ flexShrink: 0, display: 'block', ...style }}
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: markup comes only from the bundled Lucide table (ICONS[name]), never from user input
       dangerouslySetInnerHTML={{ __html: inner || '' }}
       {...rest}
     />

@@ -10,7 +10,8 @@ export function summarize(evs: Pick<Ev, 'id' | 'ts'>[]): Summary {
   const acc: Record<string, [number, number]> = {};
   for (const e of evs) {
     const d = dayOf(e.ts);
-    const x = acc[d] || (acc[d] = [0, 0]);
+    const x = acc[d] ?? [0, 0];
+    acc[d] = x;
     x[0]++;
     x[1] = (x[1] ^ parseInt(e.id.slice(0, 8), 16)) >>> 0;
   }

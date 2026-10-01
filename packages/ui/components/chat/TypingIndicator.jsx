@@ -1,5 +1,3 @@
-import React from 'react';
-
 export function TypingIndicator({ people = [], style }) {
   if (!people.length) return <div aria-live="polite" style={{ height: 18, ...style }} />;
   const agents = people.filter((p) => p.kind === 'agent');

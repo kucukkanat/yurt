@@ -16,34 +16,14 @@ import {
   type KeyedTransport,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
+import { memStore, until as waitFor } from './util';
+
+const until = (cond: () => boolean, what: string) => waitFor(cond, 10_000, what);
 
 // Key rotation against a real local relay: every device is a real WorkspacePeer with its own store.
 const CODE = 'K7QX2MPD';
 const [A, B, C, D, E] = Array.from({ length: 5 }, () => keyFromPhrase(newRecoveryPhrase()));
 
-function memStore() {
-  const evs = new Map<string, Ev>();
-  let mark = 0;
-  const store: PeerStore = {
-    load: async () => [...evs.values()],
-    save: async (xs) => {
-      xs.forEach((e) => evs.set(e.id, e));
-    },
-    loadMark: async () => mark,
-    saveMark: async (_ws, s) => {
-      mark = s;
-    },
-  };
-  return store;
-}
-
-async function until(cond: () => boolean, what = 'condition', ms = 10_000) {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out waiting for ' + what);
-    await new Promise((r) => setTimeout(r, 25));
-  }
-}
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let relay: TestRelay;
@@ -59,7 +39,7 @@ async function join(kp: KeyPair, name: string, opts: { key?: string; store?: Pee
     selfId: kp.pub.slice(0, 20),
     transport: t,
     creator: A.pub,
-    store: opts.store ?? memStore(),
+    store: opts.store ?? memStore().store,
     onError: (m) => errors.push(m),
     onKey: opts.onKey,
   });
@@ -78,7 +58,7 @@ beforeEach(async () => {
   errors = [];
 });
 afterEach(async () => {
-  peers.splice(0).forEach((p) => p.leave());
+  for (const p of peers.splice(0)) p.leave();
   await relay.close();
   expect(errors).toEqual([]);
 });
@@ -162,7 +142,7 @@ describe('key rotation', () => {
   });
 
   it('rebuilds the key chain from the log after a restart', async () => {
-    const store = memStore();
+    const { store } = memStore();
     const a = await join(A, 'Ada');
     a.publish({ t: 'ch.create', b: { id: 'general', name: 'general' } });
     let b = await join(B, 'Bo', { store });
@@ -211,7 +191,7 @@ describe('key rotation', () => {
       kp: A,
       selfId: 'a',
       transport: newTrysteroTransport(),
-      store: memStore(),
+      store: memStore().store,
       onError: (m) => errors.push(m),
       joinRoom: () => {
         throw new Error('unused');

@@ -1,5 +1,3 @@
-import React from 'react';
-
 export const PRESENCE = {
   online: { color: 'var(--green-500)', label: 'Online' },
   away: { color: 'var(--amber-500)', label: 'Away' },

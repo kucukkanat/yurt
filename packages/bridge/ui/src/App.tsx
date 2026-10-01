@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import type React from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, IconButton, Icon, Input, Select, Switch, Checkbox, Badge, Avatar, Toast, Kbd } from '@yurt/ui';
 import { fingerprint, formatCode, slug, TOOL_KINDS, type BridgeState, type FromBridge, type ToBridge, type AgentConfig, type ToolKind, type RuntimeStatus } from '@yurt/protocol';
 
@@ -62,13 +63,14 @@ const TOOL_HELP: Record<ToolKind, string> = {
 };
 const SAFE: ToolKind[] = ['read', 'search', 'think', 'fetch'];
 
+type IconName = React.ComponentProps<typeof Icon>['name'];
 type Section = 'overview' | 'agents' | 'runtimes' | 'workspaces' | 'activity' | 'settings';
 
 export function App() {
   const b = useBridge();
   const [sec, setSec] = useState<Section>('overview');
   const s = b.state;
-  const nav: { id: Section; label: string; icon: any; count?: number }[] = [
+  const nav: { id: Section; label: string; icon: IconName; count?: number }[] = [
     { id: 'overview', label: 'Overview', icon: 'gauge' },
     { id: 'agents', label: 'Agents', icon: 'sparkles', count: s?.agents.length },
     { id: 'runtimes', label: 'Agent CLIs', icon: 'terminal', count: s?.runtimes.filter((r) => r.installed).length },
@@ -226,7 +228,7 @@ function Overview({ s, send, go }: P & { go: (x: Section) => void }) {
   );
 }
 
-function Stat({ icon, n, of, label, onClick }: { icon: any; n: number; of?: number; label: string; onClick: () => void }) {
+function Stat({ icon, n, of, label, onClick }: { icon: IconName; n: number; of?: number; label: string; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -438,6 +440,7 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
   // The bridge has no save ack: success shows up as a state holding the saved agent, failure as an error.
   // So the editor stays open until one of those arrives, and keeps the user's input on failure.
   const [saving, setSaving] = useState<{ before: string[] } | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reacts to bridge replies (state or error) only; `saving`, `a` and `onDone` are read as they are when one arrives.
   useEffect(() => {
     if (!saving) return;
     if (error) setSaving(null);
@@ -496,7 +499,10 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
           <Select
             label="Agent CLI"
             value={a.runtime}
-            onChange={(e) => up({ runtime: e.target.value as any })}
+            onChange={(e) => {
+              const r = s.runtimes.find((x) => x.id === e.target.value);
+              if (r) up({ runtime: r.id });
+            }}
             options={s.runtimes.map((r) => ({ value: r.id, label: r.name + (r.installed ? '' : ' (not installed)') }))}
             hint={rt && !rt.installed ? 'Install it under Agent CLIs first.' : rt?.auth === 'signed-out' ? 'Needs sign-in under Agent CLIs.' : undefined}
           />
@@ -532,8 +538,8 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
       </CardBox>
       <CardBox style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-strong)' }}>In rooms</span>
-        <div role="group" aria-label="Answers when" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-body)' }}>Answers when</span>
+        <fieldset style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: 0, padding: 0, border: 0, minWidth: 0 }}>
+          <legend style={{ padding: 0, marginBottom: 8, fontSize: 13.5, fontWeight: 600, color: 'var(--text-body)' }}>Answers when</legend>
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
             <Checkbox
               label="Someone @mentions it"
@@ -549,9 +555,9 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
               onChange={(e) => up({ respondTo: { ...a.respondTo, replies: e.target.checked } })}
             />
           </div>
-        </div>
-        <div role="group" aria-label="Posts" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-body)' }}>Posts its answer</span>
+        </fieldset>
+        <fieldset style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: 0, padding: 0, border: 0, minWidth: 0 }}>
+          <legend style={{ padding: 0, marginBottom: 8, fontSize: 13.5, fontWeight: 600, color: 'var(--text-body)' }}>Posts its answer</legend>
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
             <Checkbox label="In a thread" data-testid="post-thread" checked={a.postIn.thread} onChange={(e) => up({ postIn: { ...a.postIn, thread: e.target.checked } })} />
             <Checkbox label="In the channel" data-testid="post-channel" checked={a.postIn.channel} onChange={(e) => up({ postIn: { ...a.postIn, channel: e.target.checked } })} />
@@ -565,7 +571,7 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
                   ? 'Answers in a thread under the message.'
                   : 'Answers in the channel (or inside a thread when asked there).'}
           </span>
-        </div>
+        </fieldset>
         <Switch
           label="Discoverable"
           data-testid="agent-discoverable"
@@ -676,6 +682,15 @@ function WorkspacesView({ s, send }: P) {
   );
 }
 
+// Stable React keys for log entries: they carry no id, and the newest-first list shifts every index on each new line.
+const logIds = new WeakMap<Log, number>();
+let nextLogId = 0;
+const logKey = (l: Log) => {
+  const k = logIds.get(l) ?? nextLogId++;
+  logIds.set(l, k);
+  return k;
+};
+
 function Activity({ logs }: { logs: Log[] }) {
   const [acp, setAcp] = useState(false);
   const list = logs
@@ -702,9 +717,9 @@ function Activity({ logs }: { logs: Log[] }) {
         }}
       >
         {!list.length && <div style={{ color: 'var(--text-subtle)' }}>Quiet so far.</div>}
-        {list.map((l, i) => (
+        {list.map((l) => (
           <div
-            key={i}
+            key={logKey(l)}
             style={{
               display: 'flex',
               gap: 10,

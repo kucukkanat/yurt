@@ -44,11 +44,12 @@ describe('built CLI', () => {
   it('starts, serves the UI and exits cleanly on SIGINT', async () => {
     const { p, output, exited } = start(['--no-open', '--port', '0']);
     const end = Date.now() + 20_000;
-    let url: string | undefined;
-    while (!(url = /Setup\s+(http:\/\/127\.0\.0\.1:\d+\/)/.exec(output())?.[1])) {
+    const setupUrl = () => /Setup\s+(http:\/\/127\.0\.0\.1:\d+\/)/.exec(output())?.[1];
+    for (let u = setupUrl(); !u; u = setupUrl()) {
       if (Date.now() > end || p.exitCode !== null) throw new Error('bridge did not start:\n' + output());
       await new Promise((r) => setTimeout(r, 50));
     }
+    const url = setupUrl() ?? '';
     const res = await fetch(url);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('__YURT_ADMIN__');

@@ -67,11 +67,11 @@ export function Input({ label, hint, error, optional, iconLeft, suffix, size = '
           aria-describedby={error || hint ? fid + '-msg' : undefined}
           onFocus={(e) => {
             setFocus(true);
-            onFocus && onFocus(e);
+            onFocus?.(e);
           }}
           onBlur={(e) => {
             setFocus(false);
-            onBlur && onBlur(e);
+            onBlur?.(e);
           }}
           {...rest}
           style={{

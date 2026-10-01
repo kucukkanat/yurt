@@ -1,60 +1,68 @@
 import React from 'react';
 import { Icon } from '../core/Icon.jsx';
-import { shadows } from '../core/useInteraction.js';
+import { shadows, useFocusVisible } from '../core/useInteraction.js';
 
+// Per status: dot colours and icon, the spoken word, and how the title and detail read.
 const S = {
-  queued: { bg: 'var(--surface-card)', bd: 'var(--border-default)', fg: 'var(--text-subtle)', icon: null, word: 'Queued' },
-  running: { bg: 'var(--volt-400)', bd: 'var(--volt-500)', fg: 'var(--ink-950)', icon: 'loader', word: 'Running' },
-  done: { bg: 'var(--ink-900)', bd: 'var(--ink-900)', fg: '#fff', icon: 'check', word: 'Done' },
-  waiting: { bg: 'var(--coral-500)', bd: 'var(--coral-500)', fg: '#fff', icon: 'hand', word: 'Needs you' },
-  error: { bg: 'var(--red-500)', bd: 'var(--red-500)', fg: '#fff', icon: 'x', word: 'Failed' },
-  skipped: { bg: 'var(--surface-sunken)', bd: 'var(--border-default)', fg: 'var(--text-subtle)', icon: 'minus', word: 'Skipped' },
+  queued: { bg: 'var(--surface-card)', bd: 'var(--border-default)', fg: 'var(--text-subtle)', icon: null, word: 'Queued', dashed: true, dim: true },
+  running: { bg: 'var(--volt-400)', bd: 'var(--volt-500)', fg: 'var(--ink-950)', icon: 'loader', word: 'Running', anim: 'ag-pulse 1.6s var(--ease-out) infinite', spin: true },
+  done: { bg: 'var(--ink-900)', bd: 'var(--ink-900)', fg: '#fff', icon: 'check', word: 'Done', anim: 'ag-pop var(--dur-slow) var(--ease-spring)', rail: 'var(--ink-900)' },
+  waiting: { bg: 'var(--coral-500)', bd: 'var(--coral-500)', fg: '#fff', icon: 'hand', word: 'Needs you', detailFg: 'var(--human-ink)' },
+  error: { bg: 'var(--red-500)', bd: 'var(--red-500)', fg: '#fff', icon: 'x', word: 'Failed', detailFg: 'var(--danger-ink)' },
+  skipped: { bg: 'var(--surface-sunken)', bd: 'var(--border-default)', fg: 'var(--text-subtle)', icon: 'minus', word: 'Skipped', dim: true, strike: true },
 };
+
+/** The timeline column: the status dot and, unless last, the rail down to the next step. */
+function StepMarker({ s, last }) {
+  return (
+    <div style={{ position: 'relative', display: 'flex', justifyContent: 'center' }}>
+      {!last && (
+        <span
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            top: 26,
+            bottom: -4,
+            width: 2,
+            borderRadius: 2,
+            background: s.rail || 'var(--border-default)',
+            transition: 'background var(--dur-slow)',
+          }}
+        />
+      )}
+      <span
+        aria-hidden="true"
+        style={{
+          position: 'relative',
+          zIndex: 1,
+          marginTop: 2,
+          width: 22,
+          height: 22,
+          borderRadius: 99,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: s.bg,
+          border: '1.5px ' + (s.dashed ? 'dashed ' : 'solid ') + s.bd,
+          color: s.fg,
+          animation: s.anim || 'none',
+        }}
+      >
+        {s.icon && <Icon name={s.icon} size={12} strokeWidth={3} style={s.spin ? { animation: 'ag-spin 900ms linear infinite' } : null} />}
+      </span>
+    </div>
+  );
+}
 
 export function AgentStep({ status = 'done', title, detail, tool, meta, children, defaultOpen = false, last = false, style }) {
   const s = S[status] || S.done;
   const [open, setOpen] = React.useState(defaultOpen);
-  const [fv, setFv] = React.useState(false);
+  const [fv, focusHandlers] = useFocusVisible();
   const bid = React.useId();
   const expandable = !!children;
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '24px minmax(0,1fr)', columnGap: 12, animation: 'ag-rise var(--dur-slow) var(--ease-spring)', ...style }}>
-      <div style={{ position: 'relative', display: 'flex', justifyContent: 'center' }}>
-        {!last && (
-          <span
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              top: 26,
-              bottom: -4,
-              width: 2,
-              borderRadius: 2,
-              background: status === 'done' ? 'var(--ink-900)' : 'var(--border-default)',
-              transition: 'background var(--dur-slow)',
-            }}
-          />
-        )}
-        <span
-          aria-hidden="true"
-          style={{
-            position: 'relative',
-            zIndex: 1,
-            marginTop: 2,
-            width: 22,
-            height: 22,
-            borderRadius: 99,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: s.bg,
-            border: '1.5px ' + (status === 'queued' ? 'dashed ' : 'solid ') + s.bd,
-            color: s.fg,
-            animation: status === 'running' ? 'ag-pulse 1.6s var(--ease-out) infinite' : status === 'done' ? 'ag-pop var(--dur-slow) var(--ease-spring)' : 'none',
-          }}
-        >
-          {s.icon && <Icon name={s.icon} size={12} strokeWidth={3} style={status === 'running' ? { animation: 'ag-spin 900ms linear infinite' } : null} />}
-        </span>
-      </div>
+      <StepMarker s={s} last={last} />
       <div style={{ paddingBottom: last ? 0 : 18, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minHeight: 26 }}>
           <button
@@ -63,14 +71,7 @@ export function AgentStep({ status = 'done', title, detail, tool, meta, children
             aria-expanded={expandable ? open : undefined}
             aria-controls={expandable ? bid : undefined}
             onClick={() => setOpen(!open)}
-            onFocus={(e) => {
-              let v = true;
-              try {
-                v = e.target.matches(':focus-visible');
-              } catch (_) {}
-              setFv(v);
-            }}
-            onBlur={() => setFv(false)}
+            {...focusHandlers}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -84,13 +85,13 @@ export function AgentStep({ status = 'done', title, detail, tool, meta, children
               font: 'inherit',
               textAlign: 'left',
               cursor: expandable ? 'pointer' : 'default',
-              color: status === 'queued' || status === 'skipped' ? 'var(--text-subtle)' : 'var(--text-strong)',
+              color: s.dim ? 'var(--text-subtle)' : 'var(--text-strong)',
               borderRadius: 6,
               outline: 'none',
               boxShadow: shadows(fv && 'var(--focus-ring)'),
             }}
           >
-            <span style={{ fontSize: 14.5, fontWeight: 600, lineHeight: 1.35, textDecoration: status === 'skipped' ? 'line-through' : 'none' }}>{title}</span>
+            <span style={{ fontSize: 14.5, fontWeight: 600, lineHeight: 1.35, textDecoration: s.strike ? 'line-through' : 'none' }}>{title}</span>
             <span className="ag-sr-only">— {s.word}</span>
             {expandable && (
               <Icon
@@ -112,7 +113,7 @@ export function AgentStep({ status = 'done', title, detail, tool, meta, children
               marginTop: 2,
               fontSize: 13.5,
               lineHeight: 1.45,
-              color: status === 'error' ? 'var(--danger-ink)' : status === 'waiting' ? 'var(--human-ink)' : 'var(--text-muted)',
+              color: s.detailFg || 'var(--text-muted)',
             }}
           >
             {detail}

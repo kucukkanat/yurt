@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import type React from 'react';
+import { useMemo, useState } from 'react';
 import { Icon, IconButton, Tooltip, Kbd, Badge, Avatar, DaemonStatus } from '@yurt/ui';
-import { liveAgents, fingerprint, formatCode, agentDmChannel, agentKey, parseGuestDm } from '@yurt/protocol';
-import { useApp } from '../store';
+import { liveAgents, fingerprint, formatCode, agentDmChannel, agentKey, parseGuestDm, type WsState } from '@yurt/protocol';
+import { useApp, type WsRecord } from '../store';
 import { useCurrent, unread, personFor, channelTitle, othersOnline } from '../model';
 import { HuddleDock } from './Huddle';
 import { Row, Section } from './Nav';
@@ -15,12 +16,64 @@ const initialsOf = (s: string) =>
     .join('')
     .toUpperCase() || 'Y';
 
+/** Unread messages and mentions across a workspace's unmuted conversations. */
+function workspaceUnread(s: WsState, w: WsRecord, me: { pub: string; handle: string }) {
+  let m = 0;
+  let n = 0;
+  for (const ch of s.channelMsgs.keys()) {
+    if (w.muted.includes(ch)) continue;
+    const u = unread(s, w, ch, me.pub, me.handle);
+    m += u.m;
+    n += u.n;
+  }
+  return { m, n };
+}
+
+function RailButton({ w, state, active, me }: { w: WsRecord; state: WsState | undefined; active: boolean; me: { pub: string; handle: string } }) {
+  const { go } = useApp.getState();
+  const { m, n } = state && !active ? workspaceUnread(state, w, me) : { m: 0, n: 0 };
+  const name = state?.name || w.name;
+  return (
+    <Tooltip content={name} placement="bottom">
+      <button
+        type="button"
+        onClick={() => go({ code: w.code })}
+        aria-label={name + (m ? ', ' + m + ' mentions' : '')}
+        aria-current={active ? 'page' : undefined}
+        style={{
+          position: 'relative',
+          width: 40,
+          height: 40,
+          borderRadius: 12,
+          cursor: 'pointer',
+          border: '1px solid ' + (active ? 'transparent' : 'var(--border-default)'),
+          background: active ? 'var(--accent)' : 'var(--surface-card)',
+          color: active ? 'var(--text-on-accent)' : 'var(--text-strong)',
+          font: '700 15px/1 var(--font-display)',
+          letterSpacing: '-0.03em',
+          boxShadow: active ? 'var(--shadow-lip)' : 'none',
+          transition: 'transform var(--dur-fast) var(--ease-spring)',
+        }}
+      >
+        {initialsOf(name)}
+        {n > 0 && !m && <span aria-hidden="true" style={{ position: 'absolute', left: -9, top: 15, width: 4, height: 8, borderRadius: 4, background: 'var(--text-strong)' }} />}
+        {m > 0 && (
+          <Badge tone="human" variant="solid" size="sm" style={{ position: 'absolute', top: -6, right: -8 }}>
+            {m}
+          </Badge>
+        )}
+      </button>
+    </Tooltip>
+  );
+}
+
 export function Rail() {
   const workspaces = useApp((s) => s.workspaces);
   const states = useApp((s) => s.states);
   const route = useApp((s) => s.route);
-  const identity = useApp((s) => s.identity)!;
-  const { go, setDialog, openSettings } = useApp.getState();
+  const identity = useApp((s) => s.identity);
+  const { setDialog, openSettings } = useApp.getState();
+  if (!identity) return null;
   return (
     <nav
       aria-label="Workspaces"
@@ -39,54 +92,9 @@ export function Rail() {
       <span aria-hidden="true" style={{ font: '700 15px/1 var(--font-display)', letterSpacing: '-0.05em', color: 'var(--text-strong)', padding: '4px 0 6px' }}>
         yurt
       </span>
-      {workspaces.map((w) => {
-        const s = states[w.code];
-        const active = route.code === w.code;
-        let m = 0,
-          n = 0;
-        if (s && !active)
-          for (const ch of s.channelMsgs.keys()) {
-            if (w.muted.includes(ch)) continue;
-            const u = unread(s, w, ch, identity.pub, identity.handle);
-            m += u.m;
-            n += u.n;
-          }
-        const name = s?.name || w.name;
-        return (
-          <Tooltip key={w.code} content={name} placement="bottom">
-            <button
-              type="button"
-              onClick={() => go({ code: w.code })}
-              aria-label={name + (m ? ', ' + m + ' mentions' : '')}
-              aria-current={active ? 'page' : undefined}
-              style={{
-                position: 'relative',
-                width: 40,
-                height: 40,
-                borderRadius: 12,
-                cursor: 'pointer',
-                border: '1px solid ' + (active ? 'transparent' : 'var(--border-default)'),
-                background: active ? 'var(--accent)' : 'var(--surface-card)',
-                color: active ? 'var(--text-on-accent)' : 'var(--text-strong)',
-                font: '700 15px/1 var(--font-display)',
-                letterSpacing: '-0.03em',
-                boxShadow: active ? 'var(--shadow-lip)' : 'none',
-                transition: 'transform var(--dur-fast) var(--ease-spring)',
-              }}
-            >
-              {initialsOf(name)}
-              {n > 0 && !m && (
-                <span aria-hidden="true" style={{ position: 'absolute', left: -9, top: 15, width: 4, height: 8, borderRadius: 4, background: 'var(--text-strong)' }} />
-              )}
-              {m > 0 && (
-                <Badge tone="human" variant="solid" size="sm" style={{ position: 'absolute', top: -6, right: -8 }}>
-                  {m}
-                </Badge>
-              )}
-            </button>
-          </Tooltip>
-        );
-      })}
+      {workspaces.map((w) => (
+        <RailButton key={w.code} w={w} state={states[w.code]} active={route.code === w.code} me={identity} />
+      ))}
       <Tooltip content="Create or join a workspace" placement="bottom">
         <IconButton icon="plus" label="Create or join a workspace" onClick={() => setDialog('workspace')} />
       </Tooltip>
@@ -99,12 +107,154 @@ export function Rail() {
   );
 }
 
+/** One conversation in the sidebar: bold when unread, a badge for mentions, headphones when a call is on. */
+function ChannelRow({ ch, label, icon, inCall }: { ch: string; label: React.ReactNode; icon: React.ReactNode; inCall: boolean }) {
+  const { route, state, rec, identity } = useCurrent();
+  const active = route.ch === ch;
+  const muted = rec?.muted.includes(ch);
+  const u = state && !active ? unread(state, rec, ch, identity.pub, identity.handle) : { n: 0, m: 0 };
+  const bold = u.n > 0 && !muted;
+  return (
+    <Row active={active} dim={muted} onClick={() => useApp.getState().go({ code: route.code, ch })}>
+      {icon}
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          fontWeight: bold ? 700 : active ? 600 : 500,
+          color: bold ? 'var(--text-strong)' : undefined,
+        }}
+      >
+        {label}
+      </span>
+      {inCall && <Icon name="headphones" size={14} style={{ color: 'var(--agent-ink)' }} />}
+      {u.m > 0 && !muted && (
+        <Badge tone="human" variant="solid" size="sm">
+          {u.m}
+        </Badge>
+      )}
+    </Row>
+  );
+}
+
+/** The workspace name, its mode chip and the menu under it. */
+function WorkspaceMenu({ name, relayed, others }: { name: string; relayed: boolean; others: number }) {
+  const { setDialog, openSettings } = useApp.getState();
+  const [menu, setMenu] = useState(false);
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setMenu((m) => !m)}
+        aria-expanded={menu}
+        aria-haspopup="menu"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          width: '100%',
+          height: 40,
+          padding: '0 8px 0 10px',
+          border: 0,
+          borderRadius: 10,
+          background: menu ? 'var(--surface-press)' : 'transparent',
+          cursor: 'pointer',
+          color: 'var(--text-strong)',
+          textAlign: 'left',
+        }}
+      >
+        <span
+          style={{ flex: 1, minWidth: 0, font: '700 19px/1.1 var(--font-display)', letterSpacing: '-0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        >
+          {name}
+        </span>
+        <Icon name="chevron-down" size={16} style={{ color: 'var(--text-subtle)' }} />
+      </button>
+      <ModeChip relayed={relayed} onClick={() => openSettings('ws-network')} />
+      {menu && (
+        <div
+          role="menu"
+          onMouseLeave={() => setMenu(false)}
+          style={{
+            position: 'absolute',
+            top: 44,
+            left: 0,
+            right: 0,
+            zIndex: 30,
+            padding: 6,
+            borderRadius: 14,
+            background: 'var(--surface-raised)',
+            border: '1px solid var(--border-subtle)',
+            boxShadow: 'var(--shadow-lg)',
+            animation: 'ag-rise var(--dur-fast) var(--ease-out)',
+          }}
+        >
+          <div data-testid="ws-online" style={{ padding: '6px 10px 8px', font: '400 11.5px/1.4 var(--font-mono)', color: 'var(--text-subtle)' }}>
+            {others ? others + (others === 1 ? ' other member' : ' other members') + ' online' : 'No other members online'}
+          </div>
+          <Row
+            onClick={() => {
+              setMenu(false);
+              setDialog('invite');
+            }}
+          >
+            <Icon name="user-plus" size={16} />
+            <span>Invite people</span>
+          </Row>
+          <Row
+            onClick={() => {
+              setMenu(false);
+              setDialog('channel');
+            }}
+          >
+            <Icon name="hash" size={16} />
+            <span>New channel</span>
+          </Row>
+          {/* Shortcuts into the single Settings window. */}
+          <Row
+            testId="menu-settings"
+            onClick={() => {
+              setMenu(false);
+              openSettings('ws-general');
+            }}
+          >
+            <Icon name="settings" size={16} />
+            <span>Workspace settings</span>
+          </Row>
+          <Row
+            testId="menu-connection"
+            onClick={() => {
+              setMenu(false);
+              openSettings('ws-network');
+            }}
+          >
+            <Icon name="globe" size={16} />
+            <span>Network settings</span>
+          </Row>
+          <Row
+            testId="menu-leave"
+            onClick={() => {
+              setMenu(false);
+              openSettings('ws-general');
+            }}
+          >
+            <Icon name="log-out" size={16} />
+            <span style={{ color: 'var(--danger-ink)' }}>Leave workspace</span>
+          </Row>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Sidebar() {
   const { route, state, rec, identity, peer } = useCurrent();
   const bridgeStatus = useApp((s) => s.bridgeStatus);
   const bridgeState = useApp((s) => s.bridgeState);
-  const { go, setDialog, openSettings } = useApp.getState();
-  const [menu, setMenu] = useState(false);
+  const { setDialog, openSettings } = useApp.getState();
   const me = identity.pub;
   const channels = useMemo(() => (state ? [...state.channels.values()].sort((a, b) => a.name.localeCompare(b.name)) : []), [state]);
   const dms = useMemo(() => (state ? [...state.channelMsgs.keys()].filter((k) => (k.startsWith('dm:') && k.includes(me)) || parseGuestDm(k)?.member === me) : []), [state, me]);
@@ -122,44 +272,14 @@ export function Sidebar() {
   const myAgents = state ? liveAgents(state).filter((a) => a.owner === me) : [];
   const huddleChs = new Set<string>();
   if (peer) for (const h of peer.huddles.values()) if (h.ch) huddleChs.add(h.ch);
-  const code = route.code!;
+  const code = route.code ?? '';
   const wsName = state?.name || rec?.name || formatCode(code);
-  const openCh = (ch: string) => go({ code, ch });
   const daemon = bridgeStatus === 'connected' ? 'connected' : bridgeStatus === 'connecting' ? 'connecting' : 'missing';
   const nAgents = bridgeState?.agents.length;
   const relayed = rec?.transport.kind === 'nostr';
   const others = othersOnline(peer, me);
 
-  const chRow = (ch: string, label: React.ReactNode, icon: React.ReactNode, key?: string) => {
-    const active = route.ch === ch;
-    const muted = rec?.muted.includes(ch);
-    const u = state && !active ? unread(state, rec, ch, me, identity.handle) : { n: 0, m: 0 };
-    const bold = u.n > 0 && !muted;
-    return (
-      <Row key={key || ch} active={active} dim={muted} onClick={() => openCh(ch)}>
-        {icon}
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            fontWeight: bold ? 700 : active ? 600 : 500,
-            color: bold ? 'var(--text-strong)' : undefined,
-          }}
-        >
-          {label}
-        </span>
-        {huddleChs.has(ch) && <Icon name="headphones" size={14} style={{ color: 'var(--agent-ink)' }} />}
-        {u.m > 0 && !muted && (
-          <Badge tone="human" variant="solid" size="sm">
-            {u.m}
-          </Badge>
-        )}
-      </Row>
-    );
-  };
+  const chRow = (ch: string, label: React.ReactNode, icon: React.ReactNode) => <ChannelRow key={ch} ch={ch} label={label} icon={icon} inCall={huddleChs.has(ch)} />;
 
   return (
     <aside
@@ -177,108 +297,7 @@ export function Sidebar() {
         boxSizing: 'border-box',
       }}
     >
-      <div style={{ position: 'relative' }}>
-        <button
-          type="button"
-          onClick={() => setMenu((m) => !m)}
-          aria-expanded={menu}
-          aria-haspopup="menu"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            width: '100%',
-            height: 40,
-            padding: '0 8px 0 10px',
-            border: 0,
-            borderRadius: 10,
-            background: menu ? 'var(--surface-press)' : 'transparent',
-            cursor: 'pointer',
-            color: 'var(--text-strong)',
-            textAlign: 'left',
-          }}
-        >
-          <span
-            style={{ flex: 1, minWidth: 0, font: '700 19px/1.1 var(--font-display)', letterSpacing: '-0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-          >
-            {wsName}
-          </span>
-          <Icon name="chevron-down" size={16} style={{ color: 'var(--text-subtle)' }} />
-        </button>
-        <ModeChip relayed={relayed} onClick={() => openSettings('ws-network')} />
-        {menu && (
-          <div
-            role="menu"
-            onMouseLeave={() => setMenu(false)}
-            style={{
-              position: 'absolute',
-              top: 44,
-              left: 0,
-              right: 0,
-              zIndex: 30,
-              padding: 6,
-              borderRadius: 14,
-              background: 'var(--surface-raised)',
-              border: '1px solid var(--border-subtle)',
-              boxShadow: 'var(--shadow-lg)',
-              animation: 'ag-rise var(--dur-fast) var(--ease-out)',
-            }}
-          >
-            <div data-testid="ws-online" style={{ padding: '6px 10px 8px', font: '400 11.5px/1.4 var(--font-mono)', color: 'var(--text-subtle)' }}>
-              {others ? others + (others === 1 ? ' other member' : ' other members') + ' online' : 'No other members online'}
-            </div>
-            <Row
-              onClick={() => {
-                setMenu(false);
-                setDialog('invite');
-              }}
-            >
-              <Icon name="user-plus" size={16} />
-              <span>Invite people</span>
-            </Row>
-            <Row
-              onClick={() => {
-                setMenu(false);
-                setDialog('channel');
-              }}
-            >
-              <Icon name="hash" size={16} />
-              <span>New channel</span>
-            </Row>
-            {/* Shortcuts into the single Settings window. */}
-            <Row
-              testId="menu-settings"
-              onClick={() => {
-                setMenu(false);
-                openSettings('ws-general');
-              }}
-            >
-              <Icon name="settings" size={16} />
-              <span>Workspace settings</span>
-            </Row>
-            <Row
-              testId="menu-connection"
-              onClick={() => {
-                setMenu(false);
-                openSettings('ws-network');
-              }}
-            >
-              <Icon name="globe" size={16} />
-              <span>Network settings</span>
-            </Row>
-            <Row
-              testId="menu-leave"
-              onClick={() => {
-                setMenu(false);
-                openSettings('ws-general');
-              }}
-            >
-              <Icon name="log-out" size={16} />
-              <span style={{ color: 'var(--danger-ink)' }}>Leave workspace</span>
-            </Row>
-          </div>
-        )}
-      </div>
+      <WorkspaceMenu name={wsName} relayed={relayed} others={others} />
       <button
         type="button"
         onClick={() => setDialog('jump')}

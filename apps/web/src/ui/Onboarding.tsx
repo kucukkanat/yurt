@@ -4,6 +4,9 @@ import { newRecoveryPhrase, keyFromPhrase, fingerprint, isValidPhrase, normalize
 import { useApp } from '../store';
 import { handleFrom } from '../lib/format';
 
+// Stable, so React calls it once when the field appears: the user just chose to restore, so typing goes there.
+const focusOnMount = (el: HTMLElement | null) => el?.focus();
+
 type Step = 'hello' | 'restore' | 'save';
 
 export function Onboarding() {
@@ -35,10 +38,10 @@ export function Onboarding() {
             style={{ display: 'flex', flexDirection: 'column', gap: 20 }}
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <h1 style={{ margin: 0, font: '700 44px/1 var(--font-display)', letterSpacing: '-0.045em', color: 'var(--text-strong)', textWrap: 'balance' as any }}>
+              <h1 style={{ margin: 0, font: '700 44px/1 var(--font-display)', letterSpacing: '-0.045em', color: 'var(--text-strong)', textWrap: 'balance' }}>
                 {route.code ? 'You’re invited.' : 'Team chat with no server in the middle.'}
               </h1>
-              <p style={{ margin: 0, fontSize: 16, color: 'var(--text-muted)', textWrap: 'pretty' as any }}>
+              <p style={{ margin: 0, fontSize: 16, color: 'var(--text-muted)', textWrap: 'pretty' }}>
                 {route.code ? (
                   <>
                     Pick a name and you’ll join <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-strong)' }}>{formatCode(route.code)}</span>. Messages are
@@ -117,7 +120,7 @@ export function Onboarding() {
                 value={restoreText}
                 onChange={(e) => setRestoreText(e.target.value)}
                 rows={3}
-                autoFocus
+                ref={focusOnMount}
                 spellCheck={false}
                 autoCapitalize="none"
                 style={{
@@ -170,6 +173,7 @@ export function Onboarding() {
               }}
             >
               {phrase.split(' ').map((w, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: a recovery phrase never reorders and may repeat a word, so its position is the identity
                 <li key={i} style={{ font: '500 14px/1.6 var(--font-mono)', color: 'var(--text-strong)', animation: `ag-pop var(--dur-base) var(--ease-spring) ${i * 30}ms both` }}>
                   <span style={{ color: 'var(--text-subtle)' }}>{String(i + 1).padStart(2, ' ')}.</span> {w}
                 </li>

@@ -1,4 +1,4 @@
-import { agentKey, agentPrefs, fingerprint, parseGuestDm, type WsState } from '@yurt/protocol';
+import { agentKey, type agentPrefs, fingerprint, parseGuestDm, type WsState } from '@yurt/protocol';
 
 export type AgentPrefs = ReturnType<typeof agentPrefs>;
 

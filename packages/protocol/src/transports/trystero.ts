@@ -3,10 +3,9 @@ import type { TAction, TRoom } from '../peer';
 import type { DataLink, LinkHost, Presence } from '../transport';
 import { visibleTo } from '../events';
 import { summarize, diffDays, idsByDays, reconcile, type Summary } from '../sync';
+import { isObj } from '../util';
 
 type SyncMsg = { k: 'sum'; s: Summary } | { k: 'ids'; d: Record<string, string[]> } | { k: 'want'; ids: string[] };
-
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null;
 
 /**
  * Events and presence straight between online peers over the Trystero room. History exists

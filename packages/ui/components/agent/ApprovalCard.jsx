@@ -27,15 +27,15 @@ export function ApprovalCard({
     const k = (e) => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        onApprove && onApprove();
+        onApprove?.();
       }
       if (e.key === 'Escape') {
         e.preventDefault();
-        onReject && onReject();
+        onReject?.();
       }
     };
-    el && el.addEventListener('keydown', k);
-    return () => el && el.removeEventListener('keydown', k);
+    el?.addEventListener('keydown', k);
+    return () => el?.removeEventListener('keydown', k);
   }, [shortcuts, status, onApprove, onReject]);
 
   if (status !== 'pending') {
@@ -100,6 +100,7 @@ export function ApprovalCard({
         <dl style={{ margin: '14px 0 0', padding: 4, borderRadius: 'var(--radius-md)', background: 'var(--surface-sunken)', display: 'grid', gap: 2 }}>
           {changes.map((c, i) => (
             <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list from props, never reordered; labels may repeat
               key={i}
               style={{
                 display: 'grid',

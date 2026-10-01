@@ -1,4 +1,4 @@
-import type { Ev, AgentBody, AgentTriggers, AgentPlacement, ProfileBody, FileRef, TraceStep, ApprovalReq } from './types';
+import type { Ev, EvType, AgentBody, AgentTriggers, AgentPlacement, ProfileBody, FileRef, TraceStep, ApprovalReq } from './types';
 import { EDIT_WINDOW_MS, sortEvents, isEventShape } from './events';
 import { isPrivateChannel, dmChannel, parseGuestDm } from './codes';
 
@@ -166,12 +166,7 @@ export function reduce(ws: string, events: Ev[], opts: { creator?: string | null
   for (const e of evs) if (e.t === 'role' || e.t === 'ban') guarded(() => authority(s, e));
   // Rekeys stay valid if their author is later demoted: members already moved to that key, and
   // voiding it would put everyone back on an older key a banned member still holds.
-  const everAdmins = new Set(s.creator ? [s.creator] : []);
-  for (const e of evs)
-    if (e.t === 'role' && e.a === s.creator && obj(e.b)?.admin === true) {
-      const t = str(obj(e.b)?.target);
-      if (t) everAdmins.add(t);
-    }
+  const everAdmins = everAdminsOf(s.creator, evs);
   const approves: Ev[] = [];
   for (const e of evs) {
     if (s.bans.has(e.a) || e.t === 'role' || e.t === 'ban') continue;
@@ -184,16 +179,31 @@ export function reduce(ws: string, events: Ev[], opts: { creator?: string | null
       });
     else guarded(() => apply(s, e));
   }
+  settleApprovals(s, approves);
+  return s;
+}
+
+/** The creator and everyone the creator ever made admin, even if later demoted. */
+function everAdminsOf(creator: string | null, evs: readonly Ev[]): Set<string> {
+  const out = new Set(creator ? [creator] : []);
+  for (const e of evs) {
+    const b = obj(e.b);
+    const t = str(b?.target);
+    if (e.t === 'role' && e.a === creator && b?.admin === true && t) out.add(t);
+  }
+  return out;
+}
+
+/** Applies approval answers once every message is known: only the human owner of the agent that asked may answer. */
+function settleApprovals(s: WsState, approves: readonly Ev[]) {
   const reqOwners = new Map<string, Set<string>>();
   for (const m of s.msgs.values()) if (m.approval) reqOwners.set(m.approval.req, (reqOwners.get(m.approval.req) ?? new Set()).add(m.a));
   for (const e of approves) {
     const b = obj(e.b);
-    const req = str(b?.req),
-      option = str(b?.option);
-    // Only the human owner of the agent that asked may answer; never the agent itself.
+    const req = str(b?.req);
+    const option = str(b?.option);
     if (req && option !== undefined && !e.ag && reqOwners.get(req)?.has(e.a)) s.approvals.set(req, option);
   }
-  return s;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -238,138 +248,150 @@ function authority(s: WsState, e: Ev) {
   } else s.bans.delete(target);
 }
 
+// One handler per event type; each validates its own body (untrusted) and ignores what doesn't fit.
+function onWsCreate(s: WsState, e: Ev, b: Obj) {
+  if (e.a === s.creator && !s.name) s.name = (str(b.name) || 'Workspace').slice(0, 64);
+}
+
+function onProfile(s: WsState, e: Ev, b: Obj) {
+  const name = str(b.name);
+  if (!e.ag && name && optStr(b.handle)) s.profiles.set(e.a, { name: name.slice(0, 64), handle: (str(b.handle) ?? '').slice(0, 32), ts: e.ts });
+}
+
+function onChannelCreate(s: WsState, e: Ev, b: Obj) {
+  const id = str(b.id),
+    name = str(b.name);
+  if (id && name && optStr(b.topic) && !isPrivateChannel(id) && !s.channels.has(id))
+    s.channels.set(id, { id, name: name.slice(0, 60), topic: str(b.topic) ?? '', ts: e.ts, a: e.a });
+}
+
+function onChannelUpdate(s: WsState, _e: Ev, b: Obj) {
+  const c = s.channels.get(str(b.id) ?? '');
+  const name = str(b.name),
+    topic = str(b.topic);
+  if (c) {
+    if (name) c.name = name.slice(0, 60);
+    if (topic !== undefined) c.topic = topic;
+  }
+}
+
+function onMsg(s: WsState, e: Ev, b: Obj) {
+  const ch = e.ch;
+  if (!ch || s.msgs.has(e.id) || !optStr(b.text) || !optStr(b.parent) || !optStr(b.meta)) return;
+  if (isPrivateChannel(ch) ? !privateOk(e, ch) : !s.channels.has(ch)) return;
+  const parentId = str(b.parent);
+  const parent = parentId !== undefined ? s.msgs.get(parentId) : undefined;
+  if (parentId !== undefined && (!parent || parent.ch !== ch)) return;
+  const trace = b.trace === undefined ? undefined : list(b.trace, traceStep);
+  // Approval prompts come only from agents to their owner, in the owner's private agent channel.
+  const approval = ch.startsWith('adm:') ? approvalReq(b.approval) : undefined;
+  const m: Msg = {
+    id: e.id,
+    ch,
+    a: e.a,
+    ag: e.ag,
+    ts: e.ts,
+    to: e.to,
+    text: str(b.text) ?? '',
+    parent: parent?.id,
+    files: list(b.files, fileRef),
+    trace,
+    meta: str(b.meta),
+    approval,
+    edited: false,
+    deleted: false,
+    reactions: Object.create(null) as Record<string, string[]>,
+    replies: [],
+    ...(parent && b.alsoInChannel === true ? { alsoInChannel: true } : {}),
+  };
+  s.msgs.set(e.id, m);
+  if (parent) parent.replies.push(e.id);
+  // A top-level message, or a thread reply that was also sent to the channel.
+  if (!parent || m.alsoInChannel) s.channelMsgs.set(ch, [...(s.channelMsgs.get(ch) ?? []), e.id]);
+}
+
+function onEditOrDelete(s: WsState, e: Ev, b: Obj) {
+  const m = s.msgs.get(str(b.target) ?? '');
+  if (!m || m.deleted || m.a !== e.a || (m.ag || '') !== (e.ag || '')) return;
+  // Advisory only: authors choose their own ts, so a late edit can simply claim an early time.
+  // Honest clients enforce the window in the UI; this just keeps them consistent with each other.
+  if (e.ts - m.ts > EDIT_WINDOW_MS || e.ts < m.ts) return;
+  if (e.t === 'edit') {
+    const text = str(b.text);
+    if (text === undefined) return;
+    m.text = text;
+    m.edited = true;
+  } else {
+    m.deleted = true;
+    m.text = '';
+    m.files = [];
+  }
+}
+
+function onReact(s: WsState, e: Ev, b: Obj) {
+  const m = s.msgs.get(str(b.target) ?? '');
+  const icon = str(b.icon);
+  if (!m || m.deleted || !icon || icon.length > 64 || typeof b.on !== 'boolean') return;
+  const who = reactorKey(e);
+  const set = new Set(Object.hasOwn(m.reactions, icon) ? m.reactions[icon] : []);
+  if (b.on) set.add(who);
+  else set.delete(who);
+  if (set.size) m.reactions[icon] = [...set];
+  else delete m.reactions[icon];
+}
+
+function onPin(s: WsState, _e: Ev, b: Obj) {
+  const m = s.msgs.get(str(b.target) ?? '');
+  if (!m || typeof b.on !== 'boolean') return;
+  const set = s.pins.get(m.ch) || new Set<string>();
+  if (b.on) set.add(m.id);
+  else set.delete(m.id);
+  s.pins.set(m.ch, set);
+}
+
+function onAgent(s: WsState, e: Ev, b: Obj) {
+  const { id, name, handle, runtime } = b;
+  if (typeof id !== 'string' || !id || typeof handle !== 'string' || !handle || typeof name !== 'string' || typeof runtime !== 'string') return;
+  if (!optStr(b.model) || (b.replyIn !== 'thread' && b.replyIn !== 'channel') || !(b.removed === undefined || typeof b.removed === 'boolean')) return;
+  // Newer fields are optional (older bridges don't send them); wrong types are ignored, never coerced.
+  const flags = <K extends string>(x: unknown, keys: readonly K[]) => {
+    const o = obj(x);
+    return o && keys.every((k) => typeof o[k] === 'boolean') ? (Object.fromEntries(keys.map((k) => [k, o[k] as boolean])) as Record<K, boolean>) : undefined;
+  };
+  const respondTo = flags(b.respondTo, ['mentions', 'replies'] as const);
+  const postIn = flags(b.postIn, ['thread', 'channel'] as const);
+  s.agents.set(agentKey(e.a, id), {
+    id,
+    name,
+    handle,
+    runtime,
+    model: str(b.model),
+    replyIn: b.replyIn,
+    removed: b.removed === true || undefined,
+    owner: e.a,
+    ts: e.ts,
+    ...(respondTo ? { respondTo } : {}),
+    ...(postIn ? { postIn } : {}),
+    ...(b.discoverable === true ? { discoverable: true } : {}),
+  });
+}
+
+const APPLY: Partial<Record<EvType, (s: WsState, e: Ev, b: Obj) => void>> = {
+  'ws.create': onWsCreate,
+  profile: onProfile,
+  'ch.create': onChannelCreate,
+  'ch.update': onChannelUpdate,
+  msg: onMsg,
+  edit: onEditOrDelete,
+  del: onEditOrDelete,
+  react: onReact,
+  pin: onPin,
+  agent: onAgent,
+};
+
 function apply(s: WsState, e: Ev) {
   const b = obj(e.b);
-  if (!b) return;
-  switch (e.t) {
-    case 'ws.create':
-      if (e.a === s.creator && !s.name) s.name = (str(b.name) || 'Workspace').slice(0, 64);
-      break;
-    case 'profile': {
-      const name = str(b.name);
-      if (!e.ag && name && optStr(b.handle)) s.profiles.set(e.a, { name: name.slice(0, 64), handle: (str(b.handle) ?? '').slice(0, 32), ts: e.ts });
-      break;
-    }
-    case 'ch.create': {
-      const id = str(b.id),
-        name = str(b.name);
-      if (id && name && optStr(b.topic) && !isPrivateChannel(id) && !s.channels.has(id))
-        s.channels.set(id, { id, name: name.slice(0, 60), topic: str(b.topic) ?? '', ts: e.ts, a: e.a });
-      break;
-    }
-    case 'ch.update': {
-      const c = s.channels.get(str(b.id) ?? '');
-      const name = str(b.name),
-        topic = str(b.topic);
-      if (c) {
-        if (name) c.name = name.slice(0, 60);
-        if (topic !== undefined) c.topic = topic;
-      }
-      break;
-    }
-    case 'msg': {
-      const ch = e.ch;
-      if (!ch || s.msgs.has(e.id) || !optStr(b.text) || !optStr(b.parent) || !optStr(b.meta)) return;
-      if (isPrivateChannel(ch) ? !privateOk(e, ch) : !s.channels.has(ch)) return;
-      const parentId = str(b.parent);
-      const parent = parentId !== undefined ? s.msgs.get(parentId) : undefined;
-      if (parentId !== undefined && (!parent || parent.ch !== ch)) return;
-      const trace = b.trace === undefined ? undefined : list(b.trace, traceStep);
-      // Approval prompts come only from agents to their owner, in the owner's private agent channel.
-      const approval = ch.startsWith('adm:') ? approvalReq(b.approval) : undefined;
-      const m: Msg = {
-        id: e.id,
-        ch,
-        a: e.a,
-        ag: e.ag,
-        ts: e.ts,
-        to: e.to,
-        text: str(b.text) ?? '',
-        parent: parent?.id,
-        files: list(b.files, fileRef),
-        trace,
-        meta: str(b.meta),
-        approval,
-        edited: false,
-        deleted: false,
-        reactions: Object.create(null) as Record<string, string[]>,
-        replies: [],
-        ...(parent && b.alsoInChannel === true ? { alsoInChannel: true } : {}),
-      };
-      s.msgs.set(e.id, m);
-      if (parent) parent.replies.push(e.id);
-      // A top-level message, or a thread reply that was also sent to the channel.
-      if (!parent || m.alsoInChannel) s.channelMsgs.set(ch, [...(s.channelMsgs.get(ch) ?? []), e.id]);
-      break;
-    }
-    case 'edit':
-    case 'del': {
-      const m = s.msgs.get(str(b.target) ?? '');
-      if (!m || m.deleted || m.a !== e.a || (m.ag || '') !== (e.ag || '')) return;
-      // Advisory only: authors choose their own ts, so a late edit can simply claim an early time.
-      // Honest clients enforce the window in the UI; this just keeps them consistent with each other.
-      if (e.ts - m.ts > EDIT_WINDOW_MS || e.ts < m.ts) return;
-      if (e.t === 'edit') {
-        const text = str(b.text);
-        if (text === undefined) return;
-        m.text = text;
-        m.edited = true;
-      } else {
-        m.deleted = true;
-        m.text = '';
-        m.files = [];
-      }
-      break;
-    }
-    case 'react': {
-      const m = s.msgs.get(str(b.target) ?? '');
-      const icon = str(b.icon);
-      if (!m || m.deleted || !icon || icon.length > 64 || typeof b.on !== 'boolean') return;
-      const who = reactorKey(e);
-      const set = new Set(Object.hasOwn(m.reactions, icon) ? m.reactions[icon] : []);
-      if (b.on) set.add(who);
-      else set.delete(who);
-      if (set.size) m.reactions[icon] = [...set];
-      else delete m.reactions[icon];
-      break;
-    }
-    case 'pin': {
-      const m = s.msgs.get(str(b.target) ?? '');
-      if (!m || typeof b.on !== 'boolean') return;
-      const set = s.pins.get(m.ch) || new Set<string>();
-      if (b.on) set.add(m.id);
-      else set.delete(m.id);
-      s.pins.set(m.ch, set);
-      break;
-    }
-    case 'agent': {
-      const { id, name, handle, runtime } = b;
-      if (typeof id !== 'string' || !id || typeof handle !== 'string' || !handle || typeof name !== 'string' || typeof runtime !== 'string') return;
-      if (!optStr(b.model) || (b.replyIn !== 'thread' && b.replyIn !== 'channel') || !(b.removed === undefined || typeof b.removed === 'boolean')) return;
-      // Newer fields are optional (older bridges don't send them); wrong types are ignored, never coerced.
-      const flags = <K extends string>(x: unknown, keys: readonly K[]) => {
-        const o = obj(x);
-        return o && keys.every((k) => typeof o[k] === 'boolean') ? (Object.fromEntries(keys.map((k) => [k, o[k] as boolean])) as Record<K, boolean>) : undefined;
-      };
-      const respondTo = flags(b.respondTo, ['mentions', 'replies'] as const);
-      const postIn = flags(b.postIn, ['thread', 'channel'] as const);
-      s.agents.set(agentKey(e.a, id), {
-        id,
-        name,
-        handle,
-        runtime,
-        model: str(b.model),
-        replyIn: b.replyIn,
-        removed: b.removed === true || undefined,
-        owner: e.a,
-        ts: e.ts,
-        ...(respondTo ? { respondTo } : {}),
-        ...(postIn ? { postIn } : {}),
-        ...(b.discoverable === true ? { discoverable: true } : {}),
-      });
-      break;
-    }
-  }
+  if (b) APPLY[e.t]?.(s, e, b);
 }
 
 /** People who have introduced themselves and aren't banned. */

@@ -12,49 +12,19 @@ import {
   uploadFile,
   sha256Buf,
   seal,
-  type Ev,
   type KeyPair,
-  type PeerStore,
   type WsTransport,
   type KeyedTransport,
   type WorkspacePeerOpts,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
 import { startBlossom, type TestBlossom } from './blossom-server';
+import { memStore, until } from './util';
 
 const CODE = 'K7QX2MPD';
 const A = keyFromPhrase(newRecoveryPhrase());
 const B = keyFromPhrase(newRecoveryPhrase());
 const C = keyFromPhrase(newRecoveryPhrase());
-
-/** In-memory PeerStore: a real implementation of the interface, one per simulated device. */
-function memStore(initial: Ev[] = [], mark = 0) {
-  const evs = new Map<string, Ev>(initial.map((e) => [e.id, e]));
-  const blobs = new Map<string, ArrayBuffer>();
-  const store: PeerStore = {
-    getBlob: async (id) => blobs.get(id) ?? null,
-    putBlob: async (id, b) => {
-      blobs.set(id, b);
-    },
-    load: async () => [...evs.values()],
-    save: async (xs) => {
-      xs.forEach((e) => evs.set(e.id, e));
-    },
-    loadMark: async () => mark,
-    saveMark: async (_ws, s) => {
-      mark = s;
-    },
-  };
-  return { store, mark: () => mark };
-}
-
-async function until(cond: () => boolean, ms = 8000) {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out waiting for condition');
-    await new Promise((r) => setTimeout(r, 25));
-  }
-}
 
 let relay: TestRelay;
 let transport: KeyedTransport;
@@ -94,7 +64,7 @@ beforeEach(async () => {
   transport = newNostrTransport([relay.url]);
 });
 afterEach(async () => {
-  open.splice(0).forEach((p) => p.leave());
+  for (const p of open.splice(0)) p.leave();
   await relay.close();
   expect(errors).toEqual([]);
 });
@@ -218,7 +188,7 @@ describe('nostr transport', () => {
 
   it('re-sends my events that never reached a relay before the app closed', async () => {
     const unsent = makeEvent(A, { ws: CODE, t: 'ws.create', b: { name: 'Survived a restart' } });
-    await join(A, transport, memStore([unsent]).store);
+    await join(A, transport, memStore({ initial: [unsent] }).store);
     const b = await join(B);
     await until(() => b.state.name === 'Survived a restart');
   });
@@ -277,7 +247,13 @@ describe('nostr transport', () => {
 
   it('gives up on an event relays keep refusing, says why once, and keeps it queued', async () => {
     let refusals = 0;
-    await useRelay({ refuse: (e) => (e.kind === 4344 ? (refusals++, 'blocked: members of the relay only') : null) });
+    await useRelay({
+      refuse: (e) => {
+        if (e.kind !== 4344) return null;
+        refusals++;
+        return 'blocked: members of the relay only';
+      },
+    });
     const a = await join(A);
     const e = a.publish({ t: 'msg', ch: 'general', b: { text: 'refused' } });
     await until(() => errors.length > 0, 45_000);
@@ -295,7 +271,7 @@ describe('nostr transport', () => {
     const since = Math.floor(Date.now() / 1000) - 30 * 3600; // where the next backfill starts (mark − 1 day)
     const ev = makeEvent(A, { ws: CODE, t: 'ws.create', b: { name: 'Backdated' }, ts: (since + 600) * 1000 });
     relay.stored.push(rawEvent(seal(k.enc, k.tag, JSON.stringify(ev)), k.tag, since - 600)); // created_at backdated past `since`
-    const s = memStore([ev], since + 86_400);
+    const s = memStore({ initial: [ev], mark: since + 86_400 });
     await join(A, transport, s.store);
     await until(() => s.mark() > since + 86_400);
     await new Promise((r) => setTimeout(r, 300));

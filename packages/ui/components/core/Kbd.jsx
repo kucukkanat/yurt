@@ -1,5 +1,3 @@
-import React from 'react';
-
 const MAC = {
   mod: '⌘',
   cmd: '⌘',
@@ -29,32 +27,36 @@ export function Kbd({ keys, tone = 'default', size = 'md', style }) {
   }[tone];
   const h = size === 'sm' ? 18 : 22;
   return (
-    <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center', ...style }} aria-label={list.join(' + ')}>
-      {list.map((k, i) => (
-        <kbd
-          key={i}
-          aria-hidden="true"
-          style={{
-            minWidth: h,
-            height: h,
-            padding: '0 5px',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontFamily: 'var(--font-mono)',
-            fontSize: size === 'sm' ? 10.5 : 11.5,
-            fontWeight: 500,
-            lineHeight: 1,
-            color: t.fg,
-            background: t.bg,
-            border: '1px solid ' + t.bd,
-            borderBottomWidth: 2,
-            borderRadius: 5,
-          }}
-        >
-          {MAC[k.trim().toLowerCase()] || k.trim().toUpperCase()}
-        </kbd>
-      ))}
+    // Screen readers get the combination as text ("mod + k"); the drawn keycaps are hidden from them.
+    <span style={{ display: 'inline-flex', alignItems: 'center', ...style }}>
+      <span className="ag-sr-only">{list.join(' + ')}</span>
+      <span aria-hidden="true" style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
+        {list.map((k, i) => (
+          <kbd
+            // biome-ignore lint/suspicious/noArrayIndexKey: a fixed key combination; a position is its identity and keys may repeat
+            key={i}
+            style={{
+              minWidth: h,
+              height: h,
+              padding: '0 5px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontFamily: 'var(--font-mono)',
+              fontSize: size === 'sm' ? 10.5 : 11.5,
+              fontWeight: 500,
+              lineHeight: 1,
+              color: t.fg,
+              background: t.bg,
+              border: '1px solid ' + t.bd,
+              borderBottomWidth: 2,
+              borderRadius: 5,
+            }}
+          >
+            {MAC[k.trim().toLowerCase()] || k.trim().toUpperCase()}
+          </kbd>
+        ))}
+      </span>
     </span>
   );
 }

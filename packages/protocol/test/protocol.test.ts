@@ -21,22 +21,15 @@ import {
   mentions,
   type Ev,
 } from '../src';
+import { eventClock, northwind } from './util';
 
 const WS = 'K7QX2MPD';
 const A = keyFromPhrase(newRecoveryPhrase());
 const B = keyFromPhrase(newRecoveryPhrase());
 const C = keyFromPhrase(newRecoveryPhrase());
-let clock = 1_700_000_000_000;
-const ev = (kp = A, t: any, b: any, extra: any = {}) => makeEvent(kp, { ws: WS, t, b, ts: (clock += 1000), ...extra });
+const { ev, later } = eventClock(WS);
 
-function base(): Ev[] {
-  return [
-    ev(A, 'ws.create', { name: 'Northwind' }),
-    ev(A, 'ch.create', { id: 'general', name: 'general' }),
-    ev(A, 'profile', { name: 'Ada', handle: 'ada' }),
-    ev(B, 'profile', { name: 'Bo', handle: 'bo' }),
-  ];
-}
+const base = (): Ev[] => northwind(ev, A, B);
 
 describe('identity', () => {
   it('derives the same key from the same phrase', () => {
@@ -95,17 +88,17 @@ describe('reduce', () => {
     const s = reduce(WS, [r, m, ...evs]);
     expect(s.name).toBe('Northwind');
     expect(s.channelMsgs.get('general')).toEqual([m.id]);
-    expect(s.msgs.get(m.id)!.replies).toEqual([r.id]);
+    expect(s.msgs.get(m.id)?.replies).toEqual([r.id]);
   });
   it('enforces the 15 minute edit window and authorship', () => {
     const evs = base();
     const m = ev(B, 'msg', { text: 'v1' }, { ch: 'general' });
     const byOther = ev(A, 'edit', { target: m.id, text: 'hacked' });
     const ok = ev(B, 'edit', { target: m.id, text: 'v2' });
-    clock += EDIT_WINDOW_MS;
+    later(EDIT_WINDOW_MS);
     const late = ev(B, 'edit', { target: m.id, text: 'v3' });
     const s = reduce(WS, [...evs, m, byOther, ok, late]);
-    expect(s.msgs.get(m.id)!.text).toBe('v2');
+    expect(s.msgs.get(m.id)?.text).toBe('v2');
   });
   it('lets only the creator promote and never demotes the creator', () => {
     const evs = base();

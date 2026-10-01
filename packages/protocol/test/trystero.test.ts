@@ -14,40 +14,21 @@ import {
   type Ev,
   type JoinRoom,
   type KeyPair,
-  type PeerStore,
   type WsTransport,
   type HuddleState,
   type WsState,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
+import { memStore, until as waitFor } from './util';
+
+// WebRTC needs longer than relays to find peers.
+const until = (cond: () => boolean, ms = 20_000, what?: string) => waitFor(cond, ms, what);
 
 // Real WebRTC (werift, as the bridge uses) with Trystero signaling over the local test relay.
 const CODE = 'K7QX2MPD';
 const A = keyFromPhrase(newRecoveryPhrase());
 const B = keyFromPhrase(newRecoveryPhrase());
 const C = keyFromPhrase(newRecoveryPhrase());
-
-function memStore(blobs = new Map<string, ArrayBuffer>()): PeerStore {
-  const evs = new Map<string, Ev>();
-  return {
-    load: async () => [...evs.values()],
-    save: async (xs) => {
-      xs.forEach((e) => evs.set(e.id, e));
-    },
-    getBlob: async (id) => blobs.get(id) ?? null,
-    putBlob: async (id, buf) => {
-      blobs.set(id, buf);
-    },
-  };
-}
-
-async function until(cond: () => boolean, ms = 20_000, what = 'condition') {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out waiting for ' + what);
-    await new Promise((r) => setTimeout(r, 50));
-  }
-}
 
 let relay: TestRelay;
 let keyed: WsTransport; // one fresh workspace per test
@@ -71,7 +52,7 @@ async function device(kp: KeyPair, opts: DeviceOpts = {}) {
   const transport = opts.transport ?? keyed;
   // Like the app: the workspace's signaling method picks the Trystero strategy.
   const { joinRoom, selfId } = signalingOf(transport).kind === 'torrent' ? await import('@trystero-p2p/torrent') : await import('trystero');
-  const store = memStore(opts.blobs);
+  const { store } = memStore({ blobs: opts.blobs });
   if (opts.events) await store.save(opts.events);
   const { loading } = opts;
   const blobsSeen: string[] = [];
@@ -118,7 +99,7 @@ beforeEach(() => {
   errors = [];
 });
 afterEach(() => {
-  open.splice(0).forEach((p) => p.leave());
+  for (const p of open.splice(0)) p.leave();
   expect(errors).toEqual([]);
 });
 
@@ -177,7 +158,7 @@ describe('trystero transport', () => {
   it('refuses a banned member at the handshake', async () => {
     const create = (await device(A)).p.publish({ t: 'ws.create', b: { name: 'Strict' } });
     const ban = open[0].publish({ t: 'ban', b: { target: C.pub, on: true } });
-    open.splice(0).forEach((p) => p.leave());
+    for (const p of open.splice(0)) p.leave();
     const events = [create, ban];
     const { p: a } = await device(A, { events });
     const { p: c } = await device(C);
@@ -373,8 +354,8 @@ describe('BitTorrent signaling', () => {
     } finally {
       // The torrent strategy keeps tracker sockets in a module-wide pool that outlives rooms, and the
       // tracker only closes once its sockets do: drop them from the server side.
-      open.splice(0).forEach((p) => p.leave());
-      sockets.forEach((sock) => sock.destroy());
+      for (const p of open.splice(0)) p.leave();
+      for (const sock of sockets) sock.destroy();
       await new Promise<void>((r) => tracker.close(() => r()));
     }
   }, 60_000);

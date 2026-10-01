@@ -1,11 +1,50 @@
+import type React from 'react';
 import { Button, Icon, IconButton } from '@yurt/ui';
 import { formatCode } from '@yurt/protocol';
 import { useApp } from '../store';
 import { useCurrent, othersOnline } from '../model';
 import { CreateJoin } from './Dialogs';
 
+/** What a joined workspace's page says while its channels and history are still arriving. */
+function syncingText(relayed: boolean, connected: boolean, members: number): { verb: string; detail: string } {
+  if (relayed) return { verb: 'Fetching ', detail: connected ? 'Downloading encrypted history from relays.' : 'Connecting to relays. Keep this tab open; it retries on its own.' };
+  if (members) return { verb: 'Syncing ', detail: 'Pulling channels and history from ' + members + (members === 1 ? ' member' : ' members') + '.' };
+  return { verb: 'Looking for members of ', detail: 'Channels and history arrive once another member is online. Keep this tab open; it connects on its own.' };
+}
+
+function Joining({ code, menu }: { code: string; menu: React.ReactNode }) {
+  const { state, rec, peer, identity } = useCurrent();
+  const text = syncingText(peer?.transport.kind === 'nostr', !!peer?.connected, othersOnline(peer, identity.pub));
+  return (
+    <div
+      style={{
+        position: 'relative',
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 14,
+        padding: 32,
+        textAlign: 'center',
+      }}
+    >
+      {menu}
+      <span style={{ display: 'flex', color: 'var(--accent)', animation: 'ag-spin 1.2s linear infinite' }}>
+        <Icon name="loader" size={28} />
+      </span>
+      <div style={{ font: '700 28px/1.1 var(--font-display)', letterSpacing: '-0.04em', color: 'var(--text-strong)' }}>
+        {text.verb}
+        {state?.name || rec?.name || formatCode(code)}
+      </div>
+      <div style={{ fontSize: 14.5, color: 'var(--text-muted)', maxWidth: 440, textWrap: 'pretty' }}>{text.detail}</div>
+      <span style={{ font: '500 13px var(--font-mono)', color: 'var(--text-subtle)' }}>{formatCode(code)}</span>
+    </div>
+  );
+}
+
 export function Home({ narrow }: { narrow: boolean }) {
-  const { route, state, rec, peer, identity } = useCurrent();
+  const { route } = useCurrent();
   const workspaces = useApp((s) => s.workspaces);
   const app = useApp.getState();
   const menu = narrow && (
@@ -14,50 +53,13 @@ export function Home({ narrow }: { narrow: boolean }) {
     </div>
   );
 
-  if (route.code) {
-    const n = othersOnline(peer, identity.pub);
-    const relayed = peer?.transport.kind === 'nostr';
-    return (
-      <div
-        style={{
-          position: 'relative',
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 14,
-          padding: 32,
-          textAlign: 'center',
-        }}
-      >
-        {menu}
-        <span style={{ display: 'flex', color: 'var(--accent)', animation: 'ag-spin 1.2s linear infinite' }}>
-          <Icon name="loader" size={28} />
-        </span>
-        <div style={{ font: '700 28px/1.1 var(--font-display)', letterSpacing: '-0.04em', color: 'var(--text-strong)' }}>
-          {relayed ? 'Fetching ' : n ? 'Syncing ' : 'Looking for members of '}
-          {state?.name || rec?.name || formatCode(route.code)}
-        </div>
-        <div style={{ fontSize: 14.5, color: 'var(--text-muted)', maxWidth: 440, textWrap: 'pretty' as any }}>
-          {relayed
-            ? peer?.connected
-              ? 'Downloading encrypted history from relays.'
-              : 'Connecting to relays. Keep this tab open; it retries on its own.'
-            : n
-              ? 'Pulling channels and history from ' + n + (n === 1 ? ' member' : ' members') + '.'
-              : 'Channels and history arrive once another member is online. Keep this tab open; it connects on its own.'}
-        </div>
-        <span style={{ font: '500 13px var(--font-mono)', color: 'var(--text-subtle)' }}>{formatCode(route.code)}</span>
-      </div>
-    );
-  }
+  if (route.code) return <Joining code={route.code} menu={menu} />;
 
   return (
     <div style={{ position: 'relative', flex: 1, overflow: 'auto', display: 'flex', justifyContent: 'center', padding: narrow ? '56px 16px 24px' : '72px 32px' }}>
       {menu}
       <div style={{ width: '100%', maxWidth: 560, display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <h1 style={{ margin: 0, font: '700 44px/1 var(--font-display)', letterSpacing: '-0.045em', color: 'var(--text-strong)', textWrap: 'balance' as any }}>
+        <h1 style={{ margin: 0, font: '700 44px/1 var(--font-display)', letterSpacing: '-0.045em', color: 'var(--text-strong)', textWrap: 'balance' }}>
           {workspaces.length ? 'Where to?' : 'Start your first workspace.'}
         </h1>
         {workspaces.length > 0 && (

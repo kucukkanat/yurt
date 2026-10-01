@@ -3,7 +3,8 @@ import type { Ev, PeerStore } from '@yurt/protocol';
 let dbp: Promise<IDBDatabase> | null = null;
 
 function open(): Promise<IDBDatabase> {
-  return (dbp ??= new Promise((res, rej) => {
+  if (dbp) return dbp;
+  dbp = new Promise((res, rej) => {
     const r = indexedDB.open('yurt', 1);
     r.onupgradeneeded = () => {
       const d = r.result;
@@ -13,43 +14,50 @@ function open(): Promise<IDBDatabase> {
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
-  }));
+  });
+  return dbp;
 }
 
-async function run<T>(store: string, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T> | void): Promise<T> {
-  const d = await open();
-  return new Promise((res, rej) => {
-    const t = d.transaction(store, mode);
-    const req = fn(t.objectStore(store));
-    t.oncomplete = () => res(req ? req.result : (undefined as T));
-    t.onerror = () => rej(t.error);
-  });
+/** Runs `fn` in a transaction on `store` and resolves once it commits: with the request's result for reads, nothing for writes. */
+function tx<T>(store: string, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => T): Promise<T> {
+  return open().then(
+    (d) =>
+      new Promise<T>((res, rej) => {
+        const t = d.transaction(store, mode);
+        const out = fn(t.objectStore(store));
+        t.oncomplete = () => res(out);
+        t.onerror = () => rej(t.error);
+      }),
+  );
 }
+
+const read = <T>(store: string, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> => tx(store, 'readonly', fn).then((req) => req.result);
+const write = (store: string, fn: (s: IDBObjectStore) => void): Promise<void> => tx(store, 'readwrite', fn);
 
 export const kv = {
-  get: <T>(k: string) => run<T | undefined>('kv', 'readonly', (s) => s.get(k) as IDBRequest<T | undefined>),
+  get: <T>(k: string) => read<T | undefined>('kv', (s) => s.get(k) as IDBRequest<T | undefined>),
   set: (k: string, v: unknown) =>
-    run('kv', 'readwrite', (s) => {
+    write('kv', (s) => {
       s.put(v, k);
     }),
   del: (k: string) =>
-    run('kv', 'readwrite', (s) => {
+    write('kv', (s) => {
       s.delete(k);
     }),
   clear: () =>
-    run('kv', 'readwrite', (s) => {
+    write('kv', (s) => {
       s.clear();
     }),
 };
 
 export const eventsDb = {
-  byWs: (ws: string) => run<Ev[]>('events', 'readonly', (s) => s.index('ws').getAll(ws) as IDBRequest<Ev[]>),
+  byWs: (ws: string) => read<Ev[]>('events', (s) => s.index('ws').getAll(ws) as IDBRequest<Ev[]>),
   put: (evs: Ev[]) =>
-    run('events', 'readwrite', (s) => {
+    write('events', (s) => {
       for (const e of evs) s.put(e);
     }),
   clear: () =>
-    run('events', 'readwrite', (s) => {
+    write('events', (s) => {
       s.clear();
     }),
   deleteWs: async (ws: string) => {
@@ -71,17 +79,17 @@ export const eventsDb = {
 };
 
 export const blobsDb = {
-  get: (id: string) => run<ArrayBuffer | undefined>('blobs', 'readonly', (s) => s.get(id) as IDBRequest<ArrayBuffer | undefined>),
+  get: (id: string) => read<ArrayBuffer | undefined>('blobs', (s) => s.get(id) as IDBRequest<ArrayBuffer | undefined>),
   put: (id: string, buf: ArrayBuffer) =>
-    run('blobs', 'readwrite', (s) => {
+    write('blobs', (s) => {
       s.put(buf, id);
     }),
   del: (ids: readonly string[]) =>
-    run('blobs', 'readwrite', (s) => {
+    write('blobs', (s) => {
       for (const id of ids) s.delete(id);
     }),
   clear: () =>
-    run('blobs', 'readwrite', (s) => {
+    write('blobs', (s) => {
       s.clear();
     }),
 };

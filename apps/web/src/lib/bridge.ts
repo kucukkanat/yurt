@@ -26,7 +26,7 @@ class BridgeClient {
   }
   private set(s: BridgeStatus) {
     this.status = s;
-    this.listeners.forEach((l) => l(this.status, this.state));
+    for (const l of this.listeners) l(this.status, this.state);
   }
 
   async autoStart(identity: { phrase: string; name: string; handle: string }) {
@@ -92,7 +92,7 @@ class BridgeClient {
   }
 
   private onMsg(m: FromBridge) {
-    [...this.waiters].forEach((w) => w(m));
+    for (const w of [...this.waiters]) w(m);
     if (m.t === 'hello') {
       if (m.paired) {
         this.set('connected');

@@ -18,6 +18,7 @@ export function Tooltip({ content, kbd, placement = 'top', delay = 350, children
   const top = placement === 'top';
   const child = React.isValidElement(children) ? React.cloneElement(children, { 'aria-describedby': vis ? id : undefined }) : children;
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: listens to events bubbling from the trigger inside; the wrapper itself is never focused or clicked
     <span
       style={{ position: 'relative', display: 'inline-flex' }}
       onPointerEnter={() => show(false)}

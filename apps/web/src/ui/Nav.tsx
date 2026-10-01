@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import type React from 'react';
+import { useState } from 'react';
 import { IconButton } from '@yurt/ui';
 
 // Rows and titled groups shared by the sidebar and the Settings side nav.

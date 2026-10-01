@@ -1,11 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
-
-async function onboard(page: Page, name: string, finish: 'Start chatting' | 'Join workspace') {
-  await page.getByLabel('Display name').fill(name);
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await page.getByText('I saved my recovery phrase somewhere safe').click();
-  await page.getByRole('button', { name: finish }).click();
-}
+import { test, expect } from '@playwright/test';
+import { createWorkspace, inviteLink, onboard } from './helpers';
 
 test('two peers create, join, sync history and chat', async ({ browser }) => {
   const a = await (await browser.newContext()).newPage();
@@ -13,15 +7,10 @@ test('two peers create, join, sync history and chat', async ({ browser }) => {
 
   await a.goto('./');
   await onboard(a, 'Ada', 'Start chatting');
-  await a.getByLabel('Workspace name').fill('E2E ' + Date.now());
-  await a.getByRole('button', { name: 'Create workspace' }).click();
-  await expect(a).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
-  await a.getByRole('button', { name: 'Invite people' }).first().click();
-  const link = await a.getByTestId('invite-link').inputValue();
+  await createWorkspace(a, 'E2E');
+  const link = await inviteLink(a);
   // New peer-to-peer workspaces signal over wss://nos.lol by default, so the link carries that too.
   expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/k\/[A-Za-z0-9_-]{43}\/s\/nostr%2Cwss%3A%2F%2Fnos\.lol\/o\/[0-9a-f]{64}$/); // link-only: the key lets people in; /o/ pins the creator
-  await a.getByTestId('invite-link').press('Escape'); // the dialog handles Escape when focus is inside it
-  await expect(a.getByRole('dialog')).toHaveCount(0);
 
   // Written before anyone else is here: must arrive through history sync.
   const composerA = a.getByRole('textbox', { name: 'Message #general' });

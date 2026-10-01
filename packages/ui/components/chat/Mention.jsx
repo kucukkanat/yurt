@@ -44,13 +44,22 @@ export function Mention({ handle, kind = 'human', self = false, onClick, style }
 
 /** Splits plain text on @handles and renders known ones as Mention chips. */
 export function MentionText({ text = '', members = [], meId, onMention }) {
-  const parts = String(text).split(/(@[A-Za-z0-9_-]+)/g);
-  return parts.map((p, i) => {
-    if (p[0] !== '@') return <React.Fragment key={i}>{p}</React.Fragment>;
+  // Each piece is keyed by where it starts in the text: stable for a given text, unique once empty pieces are dropped.
+  let at = 0;
+  const parts = String(text)
+    .split(/(@[A-Za-z0-9_-]+)/g)
+    .map((p) => {
+      const start = at;
+      at += p.length;
+      return { p, start };
+    })
+    .filter(({ p }) => p);
+  return parts.map(({ p, start }) => {
+    if (p[0] !== '@') return <React.Fragment key={start}>{p}</React.Fragment>;
     const h = p.slice(1).toLowerCase();
-    if (h === 'room' || h === 'here') return <Mention key={i} handle={h} kind="room" />;
+    if (h === 'room' || h === 'here') return <Mention key={start} handle={h} kind="room" />;
     const m = members.find((x) => (x.handle || '').toLowerCase() === h);
-    if (!m) return <React.Fragment key={i}>{p}</React.Fragment>;
-    return <Mention key={i} handle={m.handle} kind={m.kind} self={m.id === meId} onClick={onMention ? () => onMention(m) : undefined} />;
+    if (!m) return <React.Fragment key={start}>{p}</React.Fragment>;
+    return <Mention key={start} handle={m.handle} kind={m.kind} self={m.id === meId} onClick={onMention ? () => onMention(m) : undefined} />;
   });
 }

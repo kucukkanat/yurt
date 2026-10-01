@@ -1,4 +1,3 @@
-import React from 'react';
 import { Icon } from '../core/Icon.jsx';
 
 export function ConnectionBanner({ state = 'offline', queued = 0, peers, onRetry, style }) {

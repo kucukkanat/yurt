@@ -82,7 +82,7 @@ export class Workspaces {
     if (next?.pub === this.kp?.pub) return;
     for (const code of [...this.peers.keys()]) this.stop(code);
     this.kp = next;
-    this.cfg.workspaces.forEach((w) => this.start(w.code));
+    for (const w of this.cfg.workspaces) this.start(w.code);
   }
 
   get me() {

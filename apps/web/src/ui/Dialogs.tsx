@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import type React from 'react';
+import { useState } from 'react';
 import { Dialog, Button, Input, Tabs, Switch, Radio, Icon, Kbd, Avatar } from '@yurt/ui';
 import {
   formatCode,
@@ -13,8 +14,10 @@ import {
   DEFAULT_SIGNAL_URLS,
   type WsTransport,
   type SignalKind,
+  type WorkspacePeer,
+  type WsState,
 } from '@yurt/protocol';
-import { useApp } from '../store';
+import { useApp, type WsRecord } from '../store';
 import { useCurrent, roster } from '../model';
 import { defaultNewNet, netFromForm } from '../lib/newNet';
 import { Settings, SignalFields, InviteBody, listError, rejected } from './Settings';
@@ -285,7 +288,8 @@ function ChannelSettings({ onClose }: { onClose: () => void }) {
   const ch = state?.channels.get(route.ch || '');
   const [name, setName] = useState(ch?.name || '');
   const [topic, setTopic] = useState(ch?.topic || '');
-  if (!ch || !route.code) return null;
+  const code = route.code;
+  if (!ch || !code) return null;
   const muted = !!rec?.muted.includes(ch.id);
   return (
     <Dialog
@@ -301,7 +305,7 @@ function ChannelSettings({ onClose }: { onClose: () => void }) {
           <Button
             variant="primary"
             onClick={() => {
-              useApp.getState().publish(route.code!, { t: 'ch.update', b: { id: ch.id, name: name.trim() || ch.name, topic } });
+              useApp.getState().publish(code, { t: 'ch.update', b: { id: ch.id, name: name.trim() || ch.name, topic } });
               onClose();
             }}
           >
@@ -315,7 +319,7 @@ function ChannelSettings({ onClose }: { onClose: () => void }) {
         <Input label="Topic" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="What happens here" />
         <Switch
           checked={muted}
-          onChange={() => useApp.getState().toggleMute(route.code!, ch.id)}
+          onChange={() => useApp.getState().toggleMute(code, ch.id)}
           label="Mute channel"
           description="No notifications or unread bold. Mentions still count."
         />
@@ -324,50 +328,66 @@ function ChannelSettings({ onClose }: { onClose: () => void }) {
   );
 }
 
+type Item = { id: string; label: string; sub?: string; icon: React.ReactNode; go(): void };
+
+const agentIcon = (name: string) => <Avatar name={name} kind="agent" size={20} decorative />;
+
+/** People (a DM each), my agents (their private chat), others' discoverable agents (a guest DM). */
+function conversationItems(state: WsState, peer: WorkspacePeer | undefined, me: string, code: string): Item[] {
+  const go = (ch: string) => () => useApp.getState().go({ code, ch });
+  const people = roster(state, peer, me)
+    .filter((p) => p.kind === 'human')
+    .map((p) => ({
+      id: 'p' + p.id,
+      label: p.name + (p.self ? ' (you)' : ''),
+      sub: '@' + p.handle,
+      icon: <Avatar name={p.name} self={p.self} presence={p.presence} size={20} decorative />,
+      go: go(dmChannel(me, p.pub)),
+    }));
+  const agents = liveAgents(state).flatMap((a): Item[] => {
+    const icon = agentIcon(a.name);
+    if (a.owner === me) return [{ id: 'a' + a.id, label: a.name, sub: 'Your agent · private chat', icon, go: go(agentDmChannel(me, a.id)) }];
+    // Someone else's agent only when its owner made it discoverable; the rest are reached by @mention.
+    if (!agentPrefs(a).discoverable) return [];
+    return [
+      {
+        id: 'g' + a.owner + a.id,
+        label: a.name,
+        sub: (state.profiles.get(a.owner)?.name || 'Someone') + '’s agent · discoverable',
+        icon,
+        go: go(guestDmChannel(me, a.owner, a.id)),
+      },
+    ];
+  });
+  return [...people, ...agents];
+}
+
+/** Everything ⌘K can jump to: this workspace's channels and conversations, then the other workspaces. */
+function jumpItems(state: WsState | undefined, peer: WorkspacePeer | undefined, me: string, code: string | undefined, workspaces: WsRecord[]): Item[] {
+  const app = useApp.getState();
+  const here: Item[] =
+    state && code
+      ? [
+          ...[...state.channels.values()].map((c) => ({ id: 'c' + c.id, label: c.name, sub: c.topic, icon: <Icon name="hash" size={16} />, go: () => app.go({ code, ch: c.id }) })),
+          ...conversationItems(state, peer, me, code),
+        ]
+      : [];
+  const elsewhere = workspaces
+    .filter((w) => w.code !== code)
+    .map((w) => ({ id: 'w' + w.code, label: w.name, sub: 'Workspace · ' + formatCode(w.code), icon: <Icon name="layers" size={16} />, go: () => app.go({ code: w.code }) }));
+  return [...here, ...elsewhere];
+}
+
 function JumpDialog({ onClose }: { onClose: () => void }) {
   const { route, state, peer, identity } = useCurrent();
   const workspaces = useApp((s) => s.workspaces);
-  const app = useApp.getState();
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
   const me = identity.pub;
-  type Item = { id: string; label: string; sub?: string; icon: React.ReactNode; go(): void };
-  const items = useMemo<Item[]>(() => {
-    const out: Item[] = [];
-    const code = route.code;
-    if (state && code) {
-      for (const c of state.channels.values())
-        out.push({ id: 'c' + c.id, label: c.name, sub: c.topic, icon: <Icon name="hash" size={16} />, go: () => app.go({ code, ch: c.id }) });
-      for (const p of roster(state, peer, me)) {
-        if (p.kind === 'human')
-          out.push({
-            id: 'p' + p.id,
-            label: p.name + (p.self ? ' (you)' : ''),
-            sub: '@' + p.handle,
-            icon: <Avatar name={p.name} self={p.self} presence={p.presence} size={20} decorative />,
-            go: () => app.go({ code, ch: dmChannel(me, p.pub) }),
-          });
-      }
-      for (const a of liveAgents(state)) {
-        const icon = <Avatar name={a.name} kind="agent" size={20} decorative />;
-        if (a.owner === me) out.push({ id: 'a' + a.id, label: a.name, sub: 'Your agent · private chat', icon, go: () => app.go({ code, ch: agentDmChannel(me, a.id) }) });
-        // Someone else's agent only when its owner made it discoverable; the rest are reached by @mention.
-        else if (agentPrefs(a).discoverable)
-          out.push({
-            id: 'g' + a.owner + a.id,
-            label: a.name,
-            sub: (state.profiles.get(a.owner)?.name || 'Someone') + '’s agent · discoverable',
-            icon,
-            go: () => app.go({ code, ch: guestDmChannel(me, a.owner, a.id) }),
-          });
-      }
-    }
-    for (const w of workspaces)
-      if (w.code !== route.code)
-        out.push({ id: 'w' + w.code, label: w.name, sub: 'Workspace · ' + formatCode(w.code), icon: <Icon name="layers" size={16} />, go: () => app.go({ code: w.code }) });
-    const s = q.trim().toLowerCase();
-    return (s ? out.filter((i) => i.label.toLowerCase().includes(s) || i.sub?.toLowerCase().includes(s)) : out).slice(0, 12);
-  }, [q, state, workspaces]);
+  const s = q.trim().toLowerCase();
+  const all = jumpItems(state, peer, me, route.code, workspaces);
+  // Rebuilt every render (useCurrent re-renders on each tick), so names and presence are never stale.
+  const items = (s ? all.filter((i) => i.label.toLowerCase().includes(s) || i.sub?.toLowerCase().includes(s)) : all).slice(0, 12);
   const choose = (i: Item | undefined) => {
     if (i) {
       i.go();

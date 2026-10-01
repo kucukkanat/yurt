@@ -24,7 +24,7 @@ export function eventId(e: UnsignedEv): string {
   return sha256hex(canonical(e)).slice(0, 32);
 }
 
-export interface EventFields<B = any> {
+export interface EventFields<B = unknown> {
   ws: string;
   t: EvType;
   b: B;

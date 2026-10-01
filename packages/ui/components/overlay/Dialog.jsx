@@ -12,11 +12,11 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
     prev.current = document.activeElement;
     const t = setTimeout(() => {
       const el = panel.current && (panel.current.querySelector('[data-autofocus]') || panel.current.querySelector(FOCUSABLE));
-      el && el.focus();
+      el?.focus();
     }, 20);
     return () => {
       clearTimeout(t);
-      prev.current && prev.current.focus && prev.current.focus();
+      prev.current?.focus?.();
     };
   }, [open]);
   // Escape must close the dialog even when focus isn't inside it yet (focus moves in after a tick) or
@@ -27,7 +27,7 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
   React.useEffect(() => {
     if (!open || !dismissible) return;
     const k = (e) => {
-      if (e.key === 'Escape' && !(panel.current && panel.current.contains(e.target))) closeRef.current && closeRef.current();
+      if (e.key === 'Escape' && !panel.current?.contains(e.target)) closeRef.current?.();
     };
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
@@ -36,13 +36,13 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
   const onKey = (e) => {
     if (e.key === 'Escape' && dismissible) {
       e.stopPropagation();
-      onClose && onClose();
+      onClose?.();
     }
     if (e.key === 'Tab' && panel.current) {
       const f = [...panel.current.querySelectorAll(FOCUSABLE)];
       if (!f.length) return;
-      const first = f[0],
-        last = f[f.length - 1];
+      const first = f[0];
+      const last = f[f.length - 1];
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
         last.focus();
@@ -53,8 +53,8 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
     }
   };
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: clicking the backdrop dismisses; Escape is the keyboard equivalent (handled on the panel and window)
     <div
-      onKeyDown={onKey}
       style={{
         position: inline ? 'absolute' : 'fixed',
         inset: 0,
@@ -68,12 +68,13 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
         animation: 'ag-fade var(--dur-base) var(--ease-out)',
       }}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && dismissible) onClose && onClose();
+        if (e.target === e.currentTarget && dismissible) onClose?.();
       }}
     >
       <div
         ref={panel}
         role="dialog"
+        onKeyDown={onKey}
         aria-modal="true"
         aria-labelledby={title ? tid : undefined}
         style={{

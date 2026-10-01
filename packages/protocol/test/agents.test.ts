@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { newRecoveryPhrase, keyFromPhrase, makeEvent, reduce, agentKey, agentPrefs, guestDmChannel, parseGuestDm, isPrivateChannel, type Ev, type EvType } from '../src';
+import { newRecoveryPhrase, keyFromPhrase, reduce, agentKey, agentPrefs, guestDmChannel, parseGuestDm, isPrivateChannel, type Ev } from '../src';
+import { eventClock } from './util';
 
 const WS = 'K7QX2MPD';
 const OWNER = keyFromPhrase(newRecoveryPhrase());
 const MEMBER = keyFromPhrase(newRecoveryPhrase());
 const OTHER = keyFromPhrase(newRecoveryPhrase());
-let clock = 1_700_000_000_000;
-const ev = (kp: typeof OWNER, t: EvType, b: unknown, extra: { ch?: string; to?: string; ag?: string } = {}) => makeEvent(kp, { ws: WS, t, b, ts: (clock += 1000), ...extra });
+const { ev } = eventClock(WS);
 const agentBody = { id: 'harvey', name: 'Harvey', handle: 'harvey', runtime: 'copilot', replyIn: 'thread' };
 const base = (): Ev[] => [ev(OWNER, 'ws.create', { name: 'W' }), ev(OWNER, 'ch.create', { id: 'general', name: 'general' })];
 const state = (evs: Ev[]) => reduce(WS, evs, { creator: OWNER.pub });

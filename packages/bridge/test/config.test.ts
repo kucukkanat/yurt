@@ -43,6 +43,7 @@ describe('agent room settings', () => {
     expect('replyIn' in a).toBe(false);
   });
 
+  // `as never`: deliberately malformed input, the way an outdated or hostile page could send it.
   it('keeps valid new settings and drops malformed ones on save', () => {
     const prefs = { respondTo: { mentions: false, replies: true }, postIn: { thread: true, channel: true }, discoverable: true };
     expect(sanitize({ ...old, ...prefs } as never)).toMatchObject(prefs);

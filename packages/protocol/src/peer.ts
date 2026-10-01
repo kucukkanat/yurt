@@ -10,30 +10,36 @@ import { LEGACY_TRYSTERO, signalingOf, type WsTransport } from './invite';
 import type { DataLink, LinkHost, LinkKeys, Presence } from './transport';
 import { TrysteroData } from './transports/trystero';
 import { NostrData } from './transports/nostr';
+import { isObj, errMsg } from './util';
 
 export type { Presence } from './transport';
 
 /* Structural subset of the Trystero ≥0.25 room API, so this package doesn't depend on it. */
 export interface TCtx {
   peerId: string;
-  metadata?: any;
+  metadata?: unknown;
 }
-export interface TAction<T = any> {
-  send(data: T, opts?: { target?: string | string[] | null; metadata?: any; onProgress?: (p: number, c: { peerId: string }) => void }): Promise<unknown>;
+export interface TAction<T = unknown> {
+  send(data: T, opts?: { target?: string | string[] | null; metadata?: unknown; onProgress?: (p: number, c: { peerId: string }) => void }): Promise<unknown>;
   onMessage: ((data: T, ctx: TCtx) => void) | null;
   onReceiveProgress?: ((p: number, ctx: TCtx) => void) | null;
 }
 export interface TRoom {
-  makeAction<T = any>(name: string): TAction<T>;
+  makeAction<T = unknown>(name: string): TAction<T>;
   onPeerJoin: ((peerId: string) => void) | null;
   onPeerLeave: ((peerId: string) => void) | null;
-  onPeerStream: ((stream: MediaStream, peerId: string, metadata?: any) => void) | null;
-  addStream(stream: MediaStream, opts?: { target?: string | string[] | null; metadata?: any }): unknown;
+  onPeerStream: ((stream: MediaStream, peerId: string, metadata?: unknown) => void) | null;
+  addStream(stream: MediaStream, opts?: { target?: string | string[] | null; metadata?: unknown }): unknown;
   removeStream(stream: MediaStream, opts?: { target?: string | string[] | null }): unknown;
   getPeers(): Record<string, RTCPeerConnection>;
   leave(): unknown;
 }
-export type JoinRoom = (config: any, roomId: string, callbacks?: any) => TRoom;
+/** The callbacks this package passes to Trystero's joinRoom. Handshake payloads come from other peers: untrusted. */
+export interface TJoinCallbacks {
+  onJoinError?(details: unknown): void;
+  onPeerHandshake?(peerId: string, send: (data: unknown) => Promise<void>, receive: () => Promise<{ data: unknown }>): Promise<void>;
+}
+export type JoinRoom = (config: Record<string, unknown>, roomId: string, callbacks?: TJoinCallbacks) => TRoom;
 
 export interface HuddleState {
   ch: string | null;
@@ -88,6 +94,13 @@ export interface WorkspacePeerOpts {
 }
 
 const hsMsg = (code: string, from: string, to: string) => `yurt-hs:${code}:${from}>${to}`;
+
+/** A peer's handshake reply, if it has the expected shape (it comes from an unauthenticated peer). */
+function handshakeOf(d: unknown): { pub: string; sig: string } | null {
+  if (!isObj(d)) return null;
+  const { pub, sig } = d;
+  return typeof pub === 'string' && typeof sig === 'string' ? { pub, sig } : null;
+}
 const FUTURE_SKEW_MS = 10 * 60 * 1000;
 const NO_PRESENCE: ReadonlyMap<string, Presence> = new Map();
 const NO_RELAYS: ReadonlyMap<string, boolean> = new Map();
@@ -99,9 +112,6 @@ async function sha256Buf(buf: ArrayBuffer): Promise<string> {
   return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 export { sha256Buf };
-
-const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null;
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 // Files only travel over WebRTC in Trystero workspaces; relay workspaces use Blossom.
 type FileActs = { fwant: TAction<{ id: string }>; file: TAction<ArrayBuffer> };
@@ -224,7 +234,8 @@ export class WorkspacePeer implements LinkHost {
     if (t.kind !== 'nostr') return;
     const raw = [...this.events.values()].flatMap((e) => (e.t === 'rekey' ? [parseRekey(e)] : [])).filter((r): r is ValidRekey => !!r);
     const before = this.ring;
-    const ring = (this.ring = buildKeyring(t.key, raw, this.state.rekeys, this.o.kp));
+    const ring = buildKeyring(t.key, raw, this.state.rekeys, this.o.kp);
+    this.ring = ring;
     if (before && before.write.key === ring.write.key && before.keys.size === ring.keys.size) return;
     this.data?.setKeys?.(this.linkKeys(ring));
     if (before?.write.key !== ring.write.key) {
@@ -285,16 +296,17 @@ export class WorkspacePeer implements LinkHost {
     };
     const room = joinRoom(config, k?.room ?? roomIdFor(code), {
       onJoinError: (d: unknown) => this.o.onJoinError?.(d),
-      onPeerHandshake: async (peerId: string, send: (d: any) => Promise<void>, receive: () => Promise<{ data: any }>) => {
+      onPeerHandshake: async (peerId, send, receive) => {
         await send({ pub: kp.pub, sig: sign(kp.sec, hsMsg(code, selfId, peerId)) });
-        const { data } = await receive();
-        if (!data || typeof data.pub !== 'string' || !verify(data.pub, hsMsg(code, peerId, selfId), data.sig)) throw new Error('identity check failed');
+        const data = handshakeOf((await receive()).data);
+        if (!data || !verify(data.pub, hsMsg(code, peerId, selfId), data.sig)) throw new Error('identity check failed');
         if (this.state.bans.has(data.pub)) throw new Error('banned');
         this.pendingPub.set(peerId, data.pub);
       },
     });
     this.room = room;
-    const hud = (this.hud = room.makeAction<HuddleState>('hud'));
+    const hud = room.makeAction<HuddleState>('hud');
+    this.hud = hud;
     hud.onMessage = (h, { peerId }) => {
       if (!this.peers.has(peerId)) return;
       this.huddles.set(peerId, h);
@@ -356,7 +368,7 @@ export class WorkspacePeer implements LinkHost {
         .catch((err: unknown) => this.error(`Couldn't serve file ${id}: ${errMsg(err)}`));
     };
     file.onMessage = (data: unknown, { peerId, metadata }) => {
-      const id: unknown = metadata?.id;
+      const id = isObj(metadata) ? metadata.id : undefined;
       const who = this.peers.get(peerId);
       // Only files I'm fetching, from a member who may see them: anything else is a peer pushing bytes at me.
       if (!who || typeof id !== 'string' || !this.fetching.has(id) || !this.canSeeFile(id, who.pub)) return;
@@ -366,7 +378,7 @@ export class WorkspacePeer implements LinkHost {
       this.storeFile(id, buf).catch((err: unknown) => this.error(`Couldn't store file ${id}: ${errMsg(err)}`));
     };
     file.onReceiveProgress = (p, { metadata }) => {
-      const id: unknown = metadata?.id;
+      const id = isObj(metadata) ? metadata.id : undefined;
       if (typeof id === 'string' && this.fetching.has(id)) this.o.onBlobProgress?.(id, p);
     };
     return { fwant, file };
@@ -387,7 +399,7 @@ export class WorkspacePeer implements LinkHost {
   private settle(id: string, buf: ArrayBuffer | null) {
     clearTimeout(this.fetching.get(id));
     this.fetching.delete(id);
-    this.waiters.get(id)?.forEach((w) => w(buf));
+    for (const w of this.waiters.get(id) ?? []) w(buf);
     this.waiters.delete(id);
   }
 
@@ -469,7 +481,7 @@ export class WorkspacePeer implements LinkHost {
 
   delivered(ids: readonly string[]) {
     if (!ids.length) return;
-    ids.forEach((id) => this.queued.delete(id));
+    for (const id of ids) this.queued.delete(id);
     this.o.onPeers?.();
   }
 

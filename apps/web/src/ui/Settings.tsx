@@ -1,4 +1,5 @@
-import React, { useEffect, useReducer, useState } from 'react';
+import type React from 'react';
+import { useEffect, useReducer, useState } from 'react';
 import { Dialog, Button, Input, Switch, Checkbox, Radio, Icon, Avatar, IconButton } from '@yurt/ui';
 import { fingerprint, inviteHash, parseRelays, parseServers, signalingOf, formatCode, agentPrefs, type SignalKind } from '@yurt/protocol';
 import { useApp, type SettingsSection } from '../store';
@@ -16,7 +17,7 @@ import { ModeChip } from './Sidebar';
 /** Entries of a free-text URL list that `parse` rejects, so a typo is reported instead of silently dropped. */
 export const rejected = (text: string, parse: (s: string) => string[]) => text.split(/[\s,]+/).filter((t) => t && !parse(t).length);
 export const listError = (bad: string[], what: string) => (bad.length ? 'Not ' + what + ': ' + bad.join(', ') : undefined);
-export function copy(text: string, what: string) {
+function copy(text: string, what: string) {
   navigator.clipboard?.writeText(text).then(() => useApp.getState().toast({ tone: 'success', title: what + ' copied', duration: 2500 }));
 }
 type Turn = Pick<NetSettings, 'turn' | 'turnUrls' | 'turnUser' | 'turnPass'>;
@@ -130,7 +131,7 @@ const Muted = ({ children, testId }: { children: React.ReactNode; testId?: strin
     {children}
   </span>
 );
-export const SubHead = ({ children }: { children: React.ReactNode }) => (
+const SubHead = ({ children }: { children: React.ReactNode }) => (
   <span
     style={{
       marginTop: 'var(--space-2)',
@@ -207,6 +208,7 @@ function IdentitySection() {
           }}
         >
           {identity.phrase.split(' ').map((w, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a recovery phrase never reorders and may repeat a word, so its position is the identity
             <span key={i} style={{ font: '500 13.5px/1.4 var(--font-mono)', color: 'var(--text-strong)' }}>
               <span style={{ color: 'var(--text-subtle)' }}>{i + 1}.</span> {w}
             </span>
@@ -386,59 +388,63 @@ function PairForm() {
   );
 }
 
+function Step({ n, children }: { n: number; children: React.ReactNode }) {
+  return (
+    <li style={{ display: 'flex', gap: 12, fontSize: 14, color: 'var(--text-body)' }}>
+      <span
+        style={{
+          width: 24,
+          height: 24,
+          borderRadius: 999,
+          background: 'var(--surface-sunken)',
+          border: '1px solid var(--border-subtle)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          font: '600 12px var(--font-mono)',
+          flexShrink: 0,
+        }}
+      >
+        {n}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+    </li>
+  );
+}
+
 function InstallSteps() {
   const cmd = 'npx yurt-bridge';
   return (
     <ol data-testid="bridge-install" style={{ display: 'flex', flexDirection: 'column', gap: 14, margin: 0, padding: 0, listStyle: 'none' }}>
-      {[
-        <>
-          Open a terminal and run
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              marginTop: 8,
-              padding: '8px 8px 8px 14px',
-              borderRadius: 12,
-              background: 'var(--surface-sunken)',
-              border: '1px solid var(--border-subtle)',
-            }}
-          >
-            <code style={{ flex: 1, font: '500 14px var(--font-mono)', color: 'var(--text-strong)' }}>{cmd}</code>
-            <Button size="sm" variant="secondary" iconLeft="copy" onClick={() => copy(cmd, 'Command')}>
-              Copy
-            </Button>
-          </div>
-          <div style={{ marginTop: 6, fontSize: 12.5, color: 'var(--text-subtle)' }}>
-            Needs Node 20+ or Bun. <code style={{ fontFamily: 'var(--font-mono)' }}>bunx yurt-bridge</code> works too.
-          </div>
-        </>,
-        <>
-          A setup page opens at <span style={{ fontFamily: 'var(--font-mono)' }}>127.0.0.1:7717</span>. It installs agent CLIs and lets you create agents. No config files.
-        </>,
-        <>Come back here and enter the pairing code it shows.</>,
-      ].map((c, i) => (
-        <li key={i} style={{ display: 'flex', gap: 12, fontSize: 14, color: 'var(--text-body)' }}>
-          <span
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: 999,
-              background: 'var(--surface-sunken)',
-              border: '1px solid var(--border-subtle)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              font: '600 12px var(--font-mono)',
-              flexShrink: 0,
-            }}
-          >
-            {i + 1}
-          </span>
-          <div style={{ flex: 1, minWidth: 0 }}>{c}</div>
-        </li>
-      ))}
+      <Step n={1}>
+        Open a terminal and run
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginTop: 8,
+            padding: '8px 8px 8px 14px',
+            borderRadius: 12,
+            background: 'var(--surface-sunken)',
+            border: '1px solid var(--border-subtle)',
+          }}
+        >
+          <code style={{ flex: 1, font: '500 14px var(--font-mono)', color: 'var(--text-strong)' }}>{cmd}</code>
+          <Button size="sm" variant="secondary" iconLeft="copy" onClick={() => copy(cmd, 'Command')}>
+            Copy
+          </Button>
+        </div>
+        <div style={{ marginTop: 6, fontSize: 12.5, color: 'var(--text-subtle)' }}>
+          Needs Node 20+ or Bun. <code style={{ fontFamily: 'var(--font-mono)' }}>bunx yurt-bridge</code> works too.
+        </div>
+      </Step>
+      <Step n={2}>
+        A setup page opens at <span style={{ fontFamily: 'var(--font-mono)' }}>127.0.0.1:7717</span>. It installs agent CLIs and lets you create agents. No config files.
+      </Step>
+      <Step n={3}>
+        <>Come back here and enter the pairing code it shows.</>
+      </Step>
       <li style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-subtle)' }}>
         <Icon name="loader" size={14} style={{ animation: 'ag-spin 1s linear infinite' }} />
         Looking for the bridge on this machine…
@@ -574,6 +580,15 @@ const Fact = ({ k, v, testId }: { k: string; v: React.ReactNode; testId?: string
   </div>
 );
 
+/** What's wrong with typed network settings, per field; every value undefined means they can be saved. */
+function networkErrors(nostr: boolean, f: { relays: string; blossom: string; sigUrls: string }): { relays?: string; blossom?: string; signal?: string } {
+  if (!nostr) return { signal: listError(rejected(f.sigUrls, parseRelays), 'a ws:// or wss:// server') };
+  return {
+    relays: listError(rejected(f.relays, parseRelays), 'a ws:// or wss:// relay') ?? (parseRelays(f.relays).length ? undefined : 'Add at least one ws:// or wss:// relay.'),
+    blossom: listError(rejected(f.blossom, parseServers), 'an http(s) server'),
+  };
+}
+
 /** This workspace's own network, for its mode only. Device settings (TURN, calls) are under You → Connection. */
 function NetworkSection() {
   const { route, rec, peer } = useCurrent();
@@ -596,12 +611,7 @@ function NetworkSection() {
   if (!rec || !t || !code) return null;
   const nostr = t.kind === 'nostr';
   const save = async () => {
-    const errs = nostr
-      ? {
-          relays: listError(rejected(relays, parseRelays), 'a ws:// or wss:// relay') ?? (parseRelays(relays).length ? undefined : 'Add at least one ws:// or wss:// relay.'),
-          blossom: listError(rejected(blossom, parseServers), 'an http(s) server'),
-        }
-      : { signal: listError(rejected(sigUrls, parseRelays), 'a ws:// or wss:// server') };
+    const errs = networkErrors(nostr, { relays, blossom, sigUrls });
     setErr(errs);
     if (Object.values(errs).some(Boolean)) return;
     setBusy(true);
@@ -724,11 +734,13 @@ function WsAgentsSection() {
   const { route, state } = useCurrent();
   const app = useApp.getState();
   const code = route.code;
-  const inWs = bs?.workspaces.find((w) => w.code === code)?.agents ?? [];
-  const [picked, setPicked] = useState<string[]>(inWs);
+  // What the bridge has saved for this workspace. Unsaved picks reset only when that changes (another workspace,
+  // the bridge's list arriving, a save), not on every bridge status update.
+  const saved = (bs?.workspaces.find((w) => w.code === code)?.agents ?? []).join(',');
+  const [picked, setPicked] = useState<string[]>(() => (saved ? saved.split(',') : []));
   useEffect(() => {
-    setPicked(inWs);
-  }, [bs?.workspaces.length, code]);
+    setPicked(saved ? saved.split(',') : []);
+  }, [saved]);
   if (!code) return null;
   if (status !== 'connected' || !bs)
     return (
@@ -750,7 +762,7 @@ function WsAgentsSection() {
             Pick which of your agents join <b>{state?.name}</b>. Each one answers as set up in the bridge.
           </span>
           {bs.agents.map((a) => (
-            <label
+            <div
               key={a.id}
               style={{
                 display: 'flex',
@@ -760,21 +772,28 @@ function WsAgentsSection() {
                 borderRadius: 14,
                 border: '1px solid ' + (picked.includes(a.id) ? 'var(--agent-ink)' : 'var(--border-subtle)'),
                 background: picked.includes(a.id) ? 'var(--agent-soft)' : 'var(--surface-card)',
-                cursor: 'pointer',
               }}
             >
-              <Checkbox checked={picked.includes(a.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, a.id] : picked.filter((x) => x !== a.id))} aria-label={a.name} />
-              <Avatar name={a.name} kind="agent" presence="online" size={28} decorative />
-              <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
-                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)' }}>
-                  {a.name} <span style={{ fontWeight: 400, color: 'var(--text-subtle)' }}>@{a.handle}</span>
+              {/* Checkbox brings its own <label>; the details get a second one pointing at the same input (labels can't nest). */}
+              <Checkbox
+                id={'ws-agent-' + a.id}
+                checked={picked.includes(a.id)}
+                onChange={(e) => setPicked(e.target.checked ? [...picked, a.id] : picked.filter((x) => x !== a.id))}
+                aria-label={a.name}
+              />
+              <label htmlFor={'ws-agent-' + a.id} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                <Avatar name={a.name} kind="agent" presence="online" size={28} decorative />
+                <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)' }}>
+                    {a.name} <span style={{ fontWeight: 400, color: 'var(--text-subtle)' }}>@{a.handle}</span>
+                  </span>
+                  <span style={{ font: '400 11.5px/1.3 var(--font-mono)', color: 'var(--text-subtle)' }}>
+                    {a.runtime}
+                    {a.model ? ' · ' + a.model : ''} · {prefsLine(agentPrefs({ replyIn: 'thread', ...a }))}
+                  </span>
                 </span>
-                <span style={{ font: '400 11.5px/1.3 var(--font-mono)', color: 'var(--text-subtle)' }}>
-                  {a.runtime}
-                  {a.model ? ' · ' + a.model : ''} · {prefsLine(agentPrefs({ replyIn: 'thread', ...a }))}
-                </span>
-              </span>
-            </label>
+              </label>
+            </div>
           ))}
           <div>
             <Button

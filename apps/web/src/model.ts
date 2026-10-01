@@ -29,8 +29,10 @@ export function useCurrent() {
   const route = useApp((s) => s.route);
   const state = useApp((s) => (route.code ? s.states[route.code] : undefined));
   const rec = useApp((s) => s.workspaces.find((w) => w.code === route.code));
-  const identity = useApp((s) => s.identity)!;
+  const identity = useApp((s) => s.identity);
   useApp((s) => s.tick);
+  // Workspace views only render after onboarding; reaching one without an identity is a bug.
+  if (!identity) throw new Error('useCurrent needs an identity: render workspace views only after onboarding');
   return { route, state, rec, identity, peer: getPeer(route.code) };
 }
 
@@ -126,7 +128,8 @@ export function unread(state: WsState, rec: WsRecord | undefined, ch: string, me
   let n = 0,
     m = 0;
   for (let i = ids.length - 1; i >= 0; i--) {
-    const x = state.msgs.get(ids[i])!;
+    const x = state.msgs.get(ids[i] ?? '');
+    if (!x) continue;
     if (x.ts <= last) break;
     if ((x.a === me && !x.ag) || x.deleted) continue;
     n++;
@@ -158,26 +161,37 @@ export function channelTitle(state: WsState | undefined, ch: string, me: string)
  * other unread messages, calls, and whether we're cut off. The channel on screen doesn't count while
  * the tab is visible, matching the sidebar.
  */
+/** A call is going on in this workspace that I'm not in. */
+function callNearby(s: AppState, code: string, p: WorkspacePeer | undefined): boolean {
+  if (!p) return false;
+  for (const h of p.huddles.values()) if (h.ch && !(s.huddle.code === code && s.huddle.ch === h.ch)) return true;
+  return false;
+}
+
+/** Mentions and whether anything is unread in a workspace, skipping muted conversations and the one on screen. */
+function unreadIn(s: AppState, w: WsRecord, me: { pub: string; handle: string }, visible: boolean): { m: number; n: boolean } {
+  const st = s.states[w.code];
+  let m = 0;
+  let n = false;
+  if (st)
+    for (const ch of st.channelMsgs.keys()) {
+      if (w.muted.includes(ch) || (visible && s.route.code === w.code && s.route.ch === ch)) continue;
+      const u = unread(st, w, ch, me.pub, me.handle);
+      m += u.m;
+      n ||= u.n > 0;
+    }
+  return { m, n };
+}
+
 export function faviconStateOf(s: AppState, peerOf: (code: string) => WorkspacePeer | undefined, visible: boolean): FaviconState {
   const me = s.identity;
   if (!me) return CALM;
-  let mentionCount = 0,
-    unreadAny = false,
-    callNearby = false;
-  for (const w of s.workspaces) {
-    const st = s.states[w.code];
-    if (st)
-      for (const ch of st.channelMsgs.keys()) {
-        if (w.muted.includes(ch) || (visible && s.route.code === w.code && s.route.ch === ch)) continue;
-        const u = unread(st, w, ch, me.pub, me.handle);
-        mentionCount += u.m;
-        if (u.n) unreadAny = true;
-      }
-    const p = peerOf(w.code);
-    if (p) for (const h of p.huddles.values()) if (h.ch && !(s.huddle.code === w.code && s.huddle.ch === h.ch)) callNearby = true;
-  }
+  const counts = s.workspaces.map((w) => unreadIn(s, w, me, visible));
+  const mentionCount = counts.reduce((sum, c) => sum + c.m, 0);
+  const unreadAny = counts.some((c) => c.n);
+  const nearby = s.workspaces.some((w) => callNearby(s, w.code, peerOf(w.code)));
   const cur = s.route.code ? peerOf(s.route.code) : undefined;
   // Peer-to-peer workspaces are often alone, which isn't being offline; relay workspaces are offline without relays.
   const offline = !s.online || (cur?.transport.kind === 'nostr' && !cur.connected);
-  return { mentions: mentionCount, unread: unreadAny, inCall: !!s.huddle.ch, callNearby, offline };
+  return { mentions: mentionCount, unread: unreadAny, inCall: !!s.huddle.ch, callNearby: nearby, offline };
 }

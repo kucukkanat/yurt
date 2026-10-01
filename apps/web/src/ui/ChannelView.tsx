@@ -1,8 +1,10 @@
-import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import type React from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { Icon, IconButton, Button, Tooltip, Kbd, Avatar, DayDivider, UnreadDivider, TypingIndicator, ConnectionBanner } from '@yurt/ui';
-import { agentKey, parseGuestDm, type Msg } from '@yurt/protocol';
+import { agentKey, parseGuestDm, type Channel, type Msg, type WorkspacePeer, type WsState } from '@yurt/protocol';
 import { useApp } from '../store';
-import { useCurrent, roster, personFor, authorKey, channelTitle, othersOnline } from '../model';
+import { useCurrent, roster, personFor, authorKey, channelTitle, othersOnline, type Person } from '../model';
+import { privateTarget } from '../lib/private';
 import { fmtDay } from '../lib/format';
 import { MessageItem, type MsgCtx } from './Message';
 import { Composer } from './Composer';
@@ -29,9 +31,11 @@ function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: strin
     const el = scroller.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only on mount (the list is keyed per conversation); a highlight scrolls itself below
   useEffect(() => {
     if (!highlight) toBottom(false);
   }, []);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: follows new messages only; scrolling away (`away`) must not snap back by itself
   useEffect(() => {
     if (!away) toBottom(false);
   }, [ids.length]);
@@ -41,8 +45,8 @@ function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: strin
     if (el) scroller.current.scrollTop = el.offsetTop - scroller.current.clientHeight / 3;
   }, [highlight]);
   const onScroll = () => {
-    const el = scroller.current!;
-    setAway(el.scrollHeight - el.scrollTop - el.clientHeight > 160);
+    const el = scroller.current;
+    if (el) setAway(el.scrollHeight - el.scrollTop - el.clientHeight > 160);
   };
   const rows: React.ReactNode[] = [];
   let prev: Msg | null = null;
@@ -104,6 +108,381 @@ function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: strin
   );
 }
 
+/** What the open route shows: one kind per conversation, each with everything its view needs (nothing optional). */
+type Conversation =
+  | { kind: 'channel'; channel: Channel }
+  | { kind: 'dm'; other: Person }
+  | { kind: 'agent'; agent: Person }
+  // A member's private chat with someone else's agent; its owner can read along but not write.
+  | { kind: 'guest'; agent: Person; owner: Person; member: Person; ownerView: boolean };
+
+function conversationOf(state: WsState, peer: WorkspacePeer | undefined, ch: string, me: string): Conversation | null {
+  const person = (key: string) => personFor(state, peer, key, me);
+  if (ch.startsWith('dm:')) return { kind: 'dm', other: person(privateTarget(ch, me) ?? me) };
+  if (ch.startsWith('adm:')) {
+    const [, owner = '', id = ''] = ch.split(':');
+    return { kind: 'agent', agent: person(agentKey(owner, id)) };
+  }
+  const g = parseGuestDm(ch);
+  if (g) return { kind: 'guest', agent: person(agentKey(g.owner, g.agentId)), owner: person(g.owner), member: person(g.member), ownerView: g.owner === me };
+  const channel = state.channels.get(ch);
+  return channel ? { kind: 'channel', channel } : null;
+}
+
+/** The hint under the composer: connection trouble first, then who can see this conversation. */
+function composerNote(c: Conversation, net: { online: boolean; relayed: boolean; connected: boolean; nobody: boolean }): React.ReactNode {
+  if (!net.online) return net.relayed ? 'Offline · sends when a relay is reachable' : 'Offline · sends when a member is reachable';
+  if (net.relayed && !net.connected) return 'Relays unreachable · sends when one is back';
+  if (c.kind === 'guest')
+    return c.agent.presence === 'offline'
+      ? c.agent.name + ' answers when ' + c.owner.name + '’s machine is on'
+      : 'Only you and ' + c.owner.name + ', who runs ' + c.agent.name + ', see this';
+  if (c.kind === 'agent') return c.agent.presence === 'offline' ? c.agent.name + ' is off. Start yurt-bridge to get replies.' : 'Only you and ' + c.agent.name + ' see this';
+  if (net.nobody) return 'No one else is online · sends when someone joins';
+  return c.kind === 'dm' ? 'Private between you two' : <>Type @ to mention a person or agent</>;
+}
+
+function composerPlaceholder(c: Conversation, title: string): string {
+  if (c.kind === 'guest') return 'Message ' + c.agent.name;
+  if (c.kind === 'agent') return 'Message ' + title + ' privately';
+  return c.kind === 'dm' ? 'Message ' + title : 'Message #' + title;
+}
+
+function EmptyState({ c, relayed }: { c: Conversation; relayed: boolean }) {
+  const app = useApp.getState();
+  switch (c.kind) {
+    case 'guest': {
+      const { agent, owner, member, ownerView } = c;
+      return (
+        <Intro
+          avatar={
+            <Avatar name={agent.name} kind="agent" owner={{ name: owner.name, self: ownerView }} presence={agent.presence} size={56} decorative cutout="var(--surface-page)" />
+          }
+          title={ownerView ? member.name + ' and ' + agent.name : 'You and ' + agent.name}
+          body={
+            agent.name +
+            ' is ' +
+            (ownerView ? 'your agent' : owner.name + '’s agent') +
+            '. It runs ' +
+            (agent.runtime || 'an agent CLI') +
+            ' on ' +
+            (ownerView ? 'your' : owner.name + '’s') +
+            ' machine and answers here while that machine is on.'
+          }
+        />
+      );
+    }
+    case 'agent':
+      return (
+        <Intro
+          avatar={<Avatar name={c.agent.name} kind="agent" owner={{ name: 'You', self: true }} presence={c.agent.presence} size={56} decorative cutout="var(--surface-page)" />}
+          title={'You and ' + c.agent.name}
+          body={
+            'Only you can see this chat. ' +
+            c.agent.name +
+            ' runs ' +
+            (c.agent.runtime || 'an agent CLI') +
+            ' on your machine through yurt-bridge, with the tools you allowed there.'
+          }
+        />
+      );
+    case 'dm':
+      return (
+        <Intro
+          avatar={<Avatar name={c.other.name} self={c.other.self} presence={c.other.presence} size={56} decorative cutout="var(--surface-page)" />}
+          title={c.other.self ? 'Notes to yourself' : 'You and ' + c.other.name}
+          body={
+            c.other.self
+              ? 'Drafts, links, reminders. Only you see these.'
+              : relayed
+                ? 'Only the two of you can read this conversation. Relays keep it end-to-end encrypted.'
+                : 'Only the two of you hold this conversation. It syncs directly between your devices.'
+          }
+        />
+      );
+    case 'channel':
+      return (
+        <Intro
+          title={'#' + c.channel.name + ' is ready'}
+          body="Invite people with a link, then add an agent. Everyone here sees everything said, agents included."
+          actions={
+            <>
+              <Button variant="primary" iconLeft="user-plus" onClick={() => app.setDialog('invite')}>
+                Invite people
+              </Button>
+              <Button variant="agent" iconLeft="sparkles" onClick={() => app.openSettings('ws-agents')}>
+                Add agent
+              </Button>
+            </>
+          }
+        />
+      );
+  }
+}
+
+const titleStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  font: '700 16px/1.2 var(--font-display)',
+  letterSpacing: '-0.02em',
+  color: 'var(--text-strong)',
+};
+const subtitleStyle: React.CSSProperties = { fontSize: 12, color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+
+/** Avatar, title and subtitle of a private conversation. */
+function PrivateTitle({ avatar, title, subtitle, testId }: { avatar: React.ReactNode; title: string; subtitle: string; testId?: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+      {avatar}
+      <div style={{ minWidth: 0, lineHeight: 1.25 }}>
+        <div style={titleStyle}>
+          {title}
+          <Icon name="lock" size={13} style={{ color: 'var(--text-subtle)' }} />
+        </div>
+        <div data-testid={testId} style={subtitleStyle}>
+          {subtitle}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const presenceLine = (p: Person) => (p.presence === 'online' ? 'Online' : p.presence === 'away' ? 'Away' : 'Offline · messages sync when they’re back');
+
+function ConversationTitle({ c, title, narrow, muted }: { c: Conversation; title: string; narrow: boolean; muted: boolean }) {
+  switch (c.kind) {
+    case 'guest':
+      return (
+        <PrivateTitle
+          avatar={<Avatar name={c.agent.name} kind="agent" presence={c.agent.presence} working={c.agent.working} size={28} decorative />}
+          title={c.ownerView ? title : c.agent.name}
+          subtitle={c.ownerView ? 'Your agent · ' + c.member.name + ' started this chat' : c.owner.name + '’s agent'}
+          testId="guest-dm-subtitle"
+        />
+      );
+    case 'agent':
+      return (
+        <PrivateTitle
+          avatar={<Avatar name={c.agent.name} kind="agent" presence={c.agent.presence} working={c.agent.working} size={28} decorative />}
+          title={title}
+          subtitle={'Private · ' + (c.agent.runtime || 'agent') + ' on your machine'}
+        />
+      );
+    case 'dm':
+      return (
+        <PrivateTitle avatar={<Avatar name={c.other.name} self={c.other.self} presence={c.other.presence} size={28} decorative />} title={title} subtitle={presenceLine(c.other)} />
+      );
+    case 'channel':
+      return (
+        <button
+          type="button"
+          onClick={() => useApp.getState().setDialog('channelSettings')}
+          aria-label="Channel settings"
+          style={{ minWidth: 0, flex: 1, lineHeight: 1.25, textAlign: 'left', padding: 0, border: 0, background: 'none', cursor: 'pointer' }}
+        >
+          <div style={{ ...titleStyle, gap: 4, whiteSpace: 'nowrap', overflow: 'hidden' }}>
+            <Icon name="hash" size={16} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.channel.name}</span>
+            {muted && <Icon name="bell" size={13} style={{ color: 'var(--text-subtle)', opacity: 0.6 }} />}
+            <Icon name="chevron-down" size={14} style={{ color: 'var(--text-subtle)' }} />
+          </div>
+          {!narrow && c.channel.topic && <div style={subtitleStyle}>{c.channel.topic}</div>}
+        </button>
+      );
+  }
+}
+
+/** Pins, invite and "Add agent": only channels have them. */
+function ChannelActions({ ch, narrow, panelType, togglePanel }: { ch: string; narrow: boolean; panelType: string | null; togglePanel: (t: 'pinned') => void }) {
+  const state = useCurrent().state;
+  const app = useApp.getState();
+  const pinnedN = state?.pins.get(ch)?.size || 0;
+  if (narrow) return <IconButton icon="sparkles" label="Add agent" variant="agent" size="sm" onClick={() => app.openSettings('ws-agents')} />;
+  return (
+    <>
+      <Tooltip content={'Pinned · ' + pinnedN} placement="bottom">
+        <IconButton icon="pin" label={'Pinned, ' + pinnedN} size="sm" active={panelType === 'pinned'} onClick={() => togglePanel('pinned')} />
+      </Tooltip>
+      <Tooltip content="Invite people" placement="bottom">
+        <IconButton icon="user-plus" label="Invite people" size="sm" onClick={() => app.setDialog('invite')} />
+      </Tooltip>
+      <Button variant="agent" size="sm" iconLeft="sparkles" onClick={() => app.openSettings('ws-agents')}>
+        Add agent
+      </Button>
+    </>
+  );
+}
+
+function MembersButton({ people, narrow, active, onClick }: { people: Person[]; narrow: boolean; active: boolean; onClick: () => void }) {
+  const humans = people.filter((p) => p.kind === 'human').length;
+  const agents = people.length - humans;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      aria-label={'Members: ' + humans + ' people, ' + agents + ' agents'}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        height: 32,
+        padding: '0 10px 0 5px',
+        borderRadius: 999,
+        border: '1px solid ' + (active ? 'var(--accent)' : 'var(--border-subtle)'),
+        background: active ? 'var(--accent-soft)' : 'transparent',
+        cursor: 'pointer',
+        color: 'var(--text-muted)',
+        font: '500 12.5px var(--font-body)',
+        flexShrink: 0,
+        marginLeft: 2,
+      }}
+    >
+      <span style={{ display: 'flex' }}>
+        {people.slice(0, 3).map((m, i) => (
+          <Avatar
+            key={m.id}
+            name={m.name}
+            kind={m.kind}
+            self={m.self}
+            size={22}
+            decorative
+            style={{ marginLeft: i ? -7 : 0, borderRadius: 999, boxShadow: '0 0 0 2px var(--surface-page)' }}
+          />
+        ))}
+      </span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+        {humans}
+        <Icon name="user" size={12} />
+      </span>
+      {agents > 0 && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+          {agents}
+          <Icon name="sparkles" size={12} style={{ color: 'var(--agent-ink)' }} />
+        </span>
+      )}
+      {!narrow && <Kbd keys="mod+i" size="sm" />}
+    </button>
+  );
+}
+
+const bannerStyle: React.CSSProperties = {
+  padding: '6px 16px',
+  background: 'var(--surface-raised)',
+  borderBottom: '1px solid var(--border-subtle)',
+  font: '500 13px/1.3 var(--font-body)',
+  color: 'var(--text-body)',
+};
+
+/** Who can read a guest DM, said up front: the agent's owner runs it, so they can. */
+function GuestNotice({ c }: { c: Extract<Conversation, { kind: 'guest' }> }) {
+  return (
+    <div role="note" data-testid="guest-dm-notice" style={{ ...bannerStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-2)', background: 'var(--agent-soft)' }}>
+      <Icon name="eye" size={14} style={{ color: 'var(--agent-ink)', flexShrink: 0 }} />
+      {c.ownerView
+        ? c.member.name + ' is talking to your agent ' + c.agent.name + '. Only the two of you see this.'
+        : 'Conversations with ' + c.agent.name + ' are visible to ' + c.owner.name + ', who runs it.'}
+    </div>
+  );
+}
+
+/** Freezes "last read" on entering a conversation, so the New divider stays put while you read; marks it read as messages arrive. */
+function useReadMarks(code: string, ch: string, count: number): number {
+  const lastRead = useCurrent().rec?.lastRead[ch] || 0;
+  const [entryRead, setEntryRead] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: captured once per conversation on purpose; later reads must not move the divider
+  useEffect(() => {
+    setEntryRead(lastRead);
+  }, [code, ch]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `count` re-marks the conversation read as new messages arrive while it's open
+  useEffect(() => {
+    const mark = () => !document.hidden && useApp.getState().markRead(code, ch);
+    mark();
+    document.addEventListener('visibilitychange', mark);
+    return () => document.removeEventListener('visibilitychange', mark);
+  }, [code, ch, count]);
+  return entryRead;
+}
+
+/** Files dropped on a conversation; they belong to it (`at`), never to the next one opened. */
+function useFileDrop(at: string) {
+  const [dropped, setDropped] = useState<{ at: string; files: File[] } | undefined>();
+  const [dragging, setDragging] = useState(false);
+  return {
+    dragging,
+    files: dropped?.at === at ? dropped.files : undefined,
+    handlers: {
+      onDragOver: (e: React.DragEvent) => {
+        if (!e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        setDragging(true);
+      },
+      onDragLeave: (e: React.DragEvent) => e.currentTarget === e.target && setDragging(false),
+      onDrop: (e: React.DragEvent) => {
+        e.preventDefault();
+        setDragging(false);
+        const files = Array.from(e.dataTransfer.files || []);
+        if (files.length) setDropped({ at, files });
+      },
+    },
+  };
+}
+
+/** Status lines above the messages: removed from the workspace, a guessable legacy code, guest-DM visibility, connection. */
+function Banners({ c, online }: { c: Conversation; online: boolean }) {
+  const { rec, peer } = useCurrent();
+  const relayed = peer?.transport.kind === 'nostr';
+  return (
+    <>
+      {peer?.lockedOut && (
+        <div role="status" data-testid="removed-banner" style={bannerStyle}>
+          You no longer receive new messages here: you were removed, or your invite predates a key change. Ask a member for a new invite link.
+        </div>
+      )}
+      {rec && !rec.transport.key && (
+        <div role="status" data-testid="legacy-warning" style={bannerStyle}>
+          This workspace uses a short code anyone on the network can guess. Create a new workspace to keep conversations private.
+        </div>
+      )}
+      {c.kind === 'guest' && <GuestNotice c={c} />}
+      <ConnectionBanner state={!online ? 'offline' : relayed && !peer?.connected ? 'reconnecting' : 'online'} queued={peer?.queued.size || 0} />
+    </>
+  );
+}
+
+function ComposerArea(p: { c: Conversation; ch: string; draftKey: string; narrow: boolean; people: Person[]; dropFiles?: File[]; placeholder: string; note: React.ReactNode }) {
+  const typing = useTyping(p.ch);
+  const app = useApp.getState();
+  return (
+    <div style={{ padding: p.narrow ? '0 10px 10px' : '0 20px 16px', flexShrink: 0 }}>
+      {p.narrow && (
+        <div style={{ paddingBottom: 8 }}>
+          <HuddleDock />
+        </div>
+      )}
+      <TypingIndicator people={typing} style={{ padding: '0 4px 6px' }} />
+      {p.c.kind === 'guest' && p.c.ownerView ? (
+        <div data-testid="guest-dm-readonly" style={{ padding: '10px 4px', fontSize: 13, color: 'var(--text-subtle)' }}>
+          {p.c.agent.name} answers here for you. You can read along; to talk to {p.c.member.name} yourself, message them directly.
+        </div>
+      ) : (
+        // Keyed per conversation so a draft or attachment can never be sent somewhere else.
+        <Composer
+          key={p.draftKey}
+          members={p.people.filter((m) => !m.self)}
+          dropFiles={p.dropFiles}
+          autoFocus
+          placeholder={p.placeholder}
+          note={p.note}
+          onTyping={() => app.setTyping(p.ch)}
+          onSend={(t, f) => app.send(t, f)}
+        />
+      )}
+    </div>
+  );
+}
+
 export function ChannelView({ narrow }: { narrow: boolean }) {
   const { route, state, rec, identity, peer } = useCurrent();
   const panel = useApp((s) => s.panel);
@@ -112,161 +491,34 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
   const hud = useApp((s) => s.huddle);
   const app = useApp.getState();
   const [, force] = useReducer((x: number) => x + 1, 0);
-  // Dropped files belong to the conversation they were dropped on, never the next one opened.
-  const [drop, setDrop] = useState<{ at: string; files: File[] } | undefined>();
-  const [dragging, setDragging] = useState(false);
-  const code = route.code!;
-  const ch = route.ch!;
+  const code = route.code ?? '';
+  const ch = route.ch ?? '';
   const draftKey = code + '/' + ch;
+  const drop = useFileDrop(draftKey);
   const me = identity.pub;
-  const isDm = ch.startsWith('dm:');
-  const isAgentDm = ch.startsWith('adm:');
-  // A member's private chat with someone else's agent; its owner can read along but not write.
-  const guest = parseGuestDm(ch);
-  const isPrivate = isDm || isAgentDm || !!guest;
-  const channel = state?.channels.get(ch);
-  const people = useMemo(() => roster(state, peer, me), [state, peer?.peers.size, me, useApp.getState().tick]);
   const ids = state?.channelMsgs.get(ch) || [];
-  const typing = useTyping(ch);
+  const entryRead = useReadMarks(code, ch, ids.length);
 
-  // Freeze "last read" when entering a channel so the New divider stays put while you read.
-  const [entryRead, setEntryRead] = useState(0);
-  useEffect(() => {
-    setEntryRead(rec?.lastRead[ch] || 0);
-  }, [code, ch]);
-  useEffect(() => {
-    const mark = () => !document.hidden && app.markRead(code, ch);
-    mark();
-    document.addEventListener('visibilitychange', mark);
-    return () => document.removeEventListener('visibilitychange', mark);
-  }, [code, ch, ids.length]);
-
-  if (!state) return null;
-  const agentKeyForDm = isAgentDm ? ch.split(':')[1] + '/' + ch.split(':')[2] : '';
-  const agent = isAgentDm ? personFor(state, peer, agentKeyForDm, me) : null;
-  const dmOther = isDm
-    ? ch
-        .slice(3)
-        .split(':')
-        .find((k) => k !== me) || me
-    : '';
-  const other = isDm ? personFor(state, peer, dmOther, me) : null;
-  const gAgent = guest ? personFor(state, peer, agentKey(guest.owner, guest.agentId), me) : null;
-  const gOwner = guest ? personFor(state, peer, guest.owner, me) : null;
-  const gMember = guest ? personFor(state, peer, guest.member, me) : null;
-  const ownerView = guest?.owner === me;
+  if (!state || !route.code || !route.ch) return null;
   // On Nostr the relays hold messages, so being alone is fine; only unreachable relays matter.
   const relayed = peer?.transport.kind === 'nostr';
-  if (!isPrivate && !channel) {
+  const c = conversationOf(state, peer, ch, me);
+  if (!c) {
     return (
       <Centered title="Channel not synced yet" body={relayed ? 'It shows up once it arrives from the workspace’s relays.' : 'It shows up once a member who has it comes online.'} />
     );
   }
+  // useCurrent re-renders on every tick, so the roster is always current.
+  const people = roster(state, peer, me);
   const ctx: MsgCtx = { state, peer, me, handle: identity.handle.toLowerCase(), roster: people, code, forceRender: force };
   const title = channelTitle(state, ch, me);
-  const humans = people.filter((p) => p.kind === 'human');
-  const agents = people.filter((p) => p.kind === 'agent');
-  const pinnedN = state.pins.get(ch)?.size || 0;
   const togglePanel = (type: 'members' | 'pinned' | 'search') => app.setPanel(panel.type === type ? { type: null } : { type });
-  const nobody = !relayed && othersOnline(peer, me) === 0;
-  const note = !online ? (
-    relayed ? (
-      'Offline · sends when a relay is reachable'
-    ) : (
-      'Offline · sends when a member is reachable'
-    )
-  ) : relayed && !peer?.connected ? (
-    'Relays unreachable · sends when one is back'
-  ) : guest && gAgent?.presence === 'offline' ? (
-    gAgent.name + ' answers when ' + gOwner?.name + '’s machine is on'
-  ) : guest ? (
-    'Only you and ' + gOwner?.name + ', who runs ' + gAgent?.name + ', see this'
-  ) : isAgentDm ? (
-    agent?.presence === 'offline' ? (
-      agent.name + ' is off. Start yurt-bridge to get replies.'
-    ) : (
-      'Only you and ' + agent?.name + ' see this'
-    )
-  ) : nobody ? (
-    'No one else is online · sends when someone joins'
-  ) : isDm ? (
-    'Private between you two'
-  ) : (
-    <>Type @ to mention a person or agent</>
-  );
-
-  const emptyState = ids.length ? null : guest ? (
-    <Intro
-      avatar={
-        <Avatar name={gAgent!.name} kind="agent" owner={{ name: gOwner!.name, self: ownerView }} presence={gAgent!.presence} size={56} decorative cutout="var(--surface-page)" />
-      }
-      title={ownerView ? gMember!.name + ' and ' + gAgent!.name : 'You and ' + gAgent!.name}
-      body={
-        gAgent!.name +
-        ' is ' +
-        (ownerView ? 'your agent' : gOwner!.name + '’s agent') +
-        '. It runs ' +
-        (gAgent!.runtime || 'an agent CLI') +
-        ' on ' +
-        (ownerView ? 'your' : gOwner!.name + '’s') +
-        ' machine and answers here while that machine is on.'
-      }
-    />
-  ) : isAgentDm ? (
-    <Intro
-      avatar={<Avatar name={agent!.name} kind="agent" owner={{ name: 'You', self: true }} presence={agent!.presence} size={56} decorative cutout="var(--surface-page)" />}
-      title={'You and ' + agent!.name}
-      body={
-        'Only you can see this chat. ' + agent!.name + ' runs ' + (agent!.runtime || 'an agent CLI') + ' on your machine through yurt-bridge, with the tools you allowed there.'
-      }
-    />
-  ) : isDm ? (
-    <Intro
-      avatar={<Avatar name={other!.name} self={other!.self} presence={other!.presence} size={56} decorative cutout="var(--surface-page)" />}
-      title={other!.self ? 'Notes to yourself' : 'You and ' + other!.name}
-      body={
-        other!.self
-          ? 'Drafts, links, reminders. Only you see these.'
-          : relayed
-            ? 'Only the two of you can read this conversation. Relays keep it end-to-end encrypted.'
-            : 'Only the two of you hold this conversation. It syncs directly between your devices.'
-      }
-    />
-  ) : (
-    <Intro
-      title={'#' + channel!.name + ' is ready'}
-      body="Invite people with a link, then add an agent. Everyone here sees everything said, agents included."
-      actions={
-        <>
-          <Button variant="primary" iconLeft="user-plus" onClick={() => app.setDialog('invite')}>
-            Invite people
-          </Button>
-          <Button variant="agent" iconLeft="sparkles" onClick={() => app.openSettings('ws-agents')}>
-            Add agent
-          </Button>
-        </>
-      }
-    />
-  );
-
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    const fs = Array.from(e.dataTransfer.files || []);
-    if (fs.length) setDrop({ at: draftKey, files: fs });
-  };
-
+  const note = composerNote(c, { online, relayed, connected: !!peer?.connected, nobody: !relayed && othersOnline(peer, me) === 0 });
+  const huddles = c.kind === 'channel' || c.kind === 'dm';
   return (
     <section
-      aria-label={isPrivate ? 'Conversation with ' + title : '#' + title}
-      onDragOver={(e) => {
-        if (e.dataTransfer.types.includes('Files')) {
-          e.preventDefault();
-          setDragging(true);
-        }
-      }}
-      onDragLeave={(e) => e.currentTarget === e.target && setDragging(false)}
-      onDrop={onDrop}
+      aria-label={c.kind === 'channel' ? '#' + title : 'Conversation with ' + title}
+      {...drop.handlers}
       style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}
     >
       <header
@@ -281,223 +533,20 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
         }}
       >
         {narrow && <IconButton icon="menu" label="Open sidebar" size="sm" onClick={() => useApp.setState({ drawer: true })} />}
-        {guest ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-            <Avatar name={gAgent!.name} kind="agent" presence={gAgent!.presence} working={gAgent!.working} size={28} decorative />
-            <div style={{ minWidth: 0, lineHeight: 1.25 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, font: '700 16px/1.2 var(--font-display)', letterSpacing: '-0.02em', color: 'var(--text-strong)' }}>
-                {ownerView ? title : gAgent!.name}
-                <Icon name="lock" size={13} style={{ color: 'var(--text-subtle)' }} />
-              </div>
-              <div data-testid="guest-dm-subtitle" style={{ fontSize: 12, color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {ownerView ? 'Your agent · ' + gMember!.name + ' started this chat' : gOwner!.name + '’s agent'}
-              </div>
-            </div>
-          </div>
-        ) : isAgentDm || isDm ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-            {isAgentDm ? (
-              <Avatar name={agent!.name} kind="agent" presence={agent!.presence} working={agent!.working} size={28} decorative />
-            ) : (
-              <Avatar name={other!.name} self={other!.self} presence={other!.presence} size={28} decorative />
-            )}
-            <div style={{ minWidth: 0, lineHeight: 1.25 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, font: '700 16px/1.2 var(--font-display)', letterSpacing: '-0.02em', color: 'var(--text-strong)' }}>
-                {title}
-                <Icon name="lock" size={13} style={{ color: 'var(--text-subtle)' }} />
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {isAgentDm
-                  ? 'Private · ' + (agent!.runtime || 'agent') + ' on your machine'
-                  : other!.presence === 'online'
-                    ? 'Online'
-                    : other!.presence === 'away'
-                      ? 'Away'
-                      : 'Offline · messages sync when they’re back'}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => app.setDialog('channelSettings')}
-            aria-label="Channel settings"
-            style={{ minWidth: 0, flex: 1, lineHeight: 1.25, textAlign: 'left', padding: 0, border: 0, background: 'none', cursor: 'pointer' }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                font: '700 16px/1.2 var(--font-display)',
-                letterSpacing: '-0.02em',
-                color: 'var(--text-strong)',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-              }}
-            >
-              <Icon name="hash" size={16} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{channel!.name}</span>
-              {rec?.muted.includes(ch) && <Icon name="bell" size={13} style={{ color: 'var(--text-subtle)', opacity: 0.6 }} />}
-              <Icon name="chevron-down" size={14} style={{ color: 'var(--text-subtle)' }} />
-            </div>
-            {!narrow && channel!.topic && (
-              <div style={{ fontSize: 12, color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{channel!.topic}</div>
-            )}
-          </button>
-        )}
-        {!isAgentDm && !guest && <HuddleButton ch={ch} />}
+        <ConversationTitle c={c} title={title} narrow={narrow} muted={!!rec?.muted.includes(ch)} />
+        {huddles && <HuddleButton ch={ch} />}
         <Tooltip content="Search" kbd="mod+f" placement="bottom">
           <IconButton icon="search" label="Search" size="sm" active={panel.type === 'search'} onClick={() => togglePanel('search')} />
         </Tooltip>
-        {!narrow && !isPrivate && (
-          <Tooltip content={'Pinned · ' + pinnedN} placement="bottom">
-            <IconButton icon="pin" label={'Pinned, ' + pinnedN} size="sm" active={panel.type === 'pinned'} onClick={() => togglePanel('pinned')} />
-          </Tooltip>
-        )}
-        {!isPrivate && !narrow && (
-          <Tooltip content="Invite people" placement="bottom">
-            <IconButton icon="user-plus" label="Invite people" size="sm" onClick={() => app.setDialog('invite')} />
-          </Tooltip>
-        )}
-        {!isPrivate &&
-          (narrow ? (
-            <IconButton icon="sparkles" label="Add agent" variant="agent" size="sm" onClick={() => app.openSettings('ws-agents')} />
-          ) : (
-            <Button variant="agent" size="sm" iconLeft="sparkles" onClick={() => app.openSettings('ws-agents')}>
-              Add agent
-            </Button>
-          ))}
-        {!isAgentDm && !guest && (
-          <button
-            type="button"
-            onClick={() => togglePanel('members')}
-            aria-pressed={panel.type === 'members'}
-            aria-label={'Members: ' + humans.length + ' people, ' + agents.length + ' agents'}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              height: 32,
-              padding: '0 10px 0 5px',
-              borderRadius: 999,
-              border: '1px solid ' + (panel.type === 'members' ? 'var(--accent)' : 'var(--border-subtle)'),
-              background: panel.type === 'members' ? 'var(--accent-soft)' : 'transparent',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              font: '500 12.5px var(--font-body)',
-              flexShrink: 0,
-              marginLeft: 2,
-            }}
-          >
-            <span style={{ display: 'flex' }}>
-              {people.slice(0, 3).map((m, i) => (
-                <Avatar
-                  key={m.id}
-                  name={m.name}
-                  kind={m.kind}
-                  self={m.self}
-                  size={22}
-                  decorative
-                  style={{ marginLeft: i ? -7 : 0, borderRadius: 999, boxShadow: '0 0 0 2px var(--surface-page)' }}
-                />
-              ))}
-            </span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-              {humans.length}
-              <Icon name="user" size={12} />
-            </span>
-            {agents.length > 0 && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                {agents.length}
-                <Icon name="sparkles" size={12} style={{ color: 'var(--agent-ink)' }} />
-              </span>
-            )}
-            {!narrow && <Kbd keys="mod+i" size="sm" />}
-          </button>
-        )}
+        {c.kind === 'channel' && <ChannelActions ch={ch} narrow={narrow} panelType={panel.type} togglePanel={togglePanel} />}
+        {huddles && <MembersButton people={people} narrow={narrow} active={panel.type === 'members'} onClick={() => togglePanel('members')} />}
       </header>
-      {peer?.lockedOut && (
-        <div
-          role="status"
-          data-testid="removed-banner"
-          style={{
-            padding: '6px 16px',
-            background: 'var(--surface-raised)',
-            borderBottom: '1px solid var(--border-subtle)',
-            font: '500 13px/1.3 var(--font-body)',
-            color: 'var(--text-body)',
-          }}
-        >
-          You no longer receive new messages here: you were removed, or your invite predates a key change. Ask a member for a new invite link.
-        </div>
-      )}
-      {rec && !rec.transport.key && (
-        <div
-          role="status"
-          data-testid="legacy-warning"
-          style={{
-            padding: '6px 16px',
-            background: 'var(--surface-raised)',
-            borderBottom: '1px solid var(--border-subtle)',
-            font: '500 13px/1.3 var(--font-body)',
-            color: 'var(--text-body)',
-          }}
-        >
-          This workspace uses a short code anyone on the network can guess. Create a new workspace to keep conversations private.
-        </div>
-      )}
-      {guest && (
-        <div
-          role="note"
-          data-testid="guest-dm-notice"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-2)',
-            padding: '6px 16px',
-            background: 'var(--agent-soft)',
-            borderBottom: '1px solid var(--border-subtle)',
-            font: '500 13px/1.3 var(--font-body)',
-            color: 'var(--text-body)',
-          }}
-        >
-          <Icon name="eye" size={14} style={{ color: 'var(--agent-ink)', flexShrink: 0 }} />
-          {ownerView
-            ? gMember!.name + ' is talking to your agent ' + gAgent!.name + '. Only the two of you see this.'
-            : 'Conversations with ' + gAgent!.name + ' are visible to ' + gOwner!.name + ', who runs it.'}
-        </div>
-      )}
-      <ConnectionBanner state={!online ? 'offline' : relayed && !peer?.connected ? 'reconnecting' : 'online'} queued={peer?.queued.size || 0} />
+      <Banners c={c} online={online} />
       <HuddleStrip ch={ch} />
       {hud.code === code && hud.ch === ch && <HuddleStage />}
-      <MessageList key={code + ch} ids={ids} ctx={ctx} lastRead={entryRead} emptyState={emptyState} highlight={highlight} />
-      <div style={{ padding: narrow ? '0 10px 10px' : '0 20px 16px', flexShrink: 0 }}>
-        {narrow && (
-          <div style={{ paddingBottom: 8 }}>
-            <HuddleDock />
-          </div>
-        )}
-        <TypingIndicator people={typing} style={{ padding: '0 4px 6px' }} />
-        {/* Keyed per conversation so a draft or attachment can never be sent somewhere else. */}
-        {ownerView ? (
-          <div data-testid="guest-dm-readonly" style={{ padding: '10px 4px', fontSize: 13, color: 'var(--text-subtle)' }}>
-            {gAgent!.name} answers here for you. You can read along; to talk to {gMember!.name} yourself, message them directly.
-          </div>
-        ) : (
-          <Composer
-            key={draftKey}
-            members={people.filter((m) => !m.self)}
-            dropFiles={drop?.at === draftKey ? drop.files : undefined}
-            autoFocus
-            placeholder={guest ? 'Message ' + gAgent!.name : isAgentDm ? 'Message ' + title + ' privately' : isDm ? 'Message ' + title : 'Message #' + title}
-            note={note}
-            onTyping={() => app.setTyping(ch)}
-            onSend={(t, f) => app.send(t, f)}
-          />
-        )}
-      </div>
-      {dragging && (
+      <MessageList key={code + ch} ids={ids} ctx={ctx} lastRead={entryRead} emptyState={ids.length ? null : <EmptyState c={c} relayed={relayed} />} highlight={highlight} />
+      <ComposerArea c={c} ch={ch} draftKey={draftKey} narrow={narrow} people={people} dropFiles={drop.files} placeholder={composerPlaceholder(c, title)} note={note} />
+      {drop.dragging && (
         <div
           style={{
             position: 'absolute',
@@ -525,7 +574,7 @@ function Intro({ avatar, title, body, actions }: { avatar?: React.ReactNode; tit
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 12, padding: '32px 16px 20px' }}>
       {avatar}
       <div style={{ font: '700 28px/1.1 var(--font-display)', letterSpacing: '-0.04em', color: 'var(--text-strong)' }}>{title}</div>
-      <div style={{ fontSize: 14, color: 'var(--text-muted)', maxWidth: 520, textWrap: 'pretty' as any }}>{body}</div>
+      <div style={{ fontSize: 14, color: 'var(--text-muted)', maxWidth: 520, textWrap: 'pretty' }}>{body}</div>
       {actions && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{actions}</div>}
     </div>
   );

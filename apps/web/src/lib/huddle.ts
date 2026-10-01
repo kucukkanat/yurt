@@ -3,6 +3,12 @@ import { getPeer } from './net';
 
 export const MAX_VIDEO = 4;
 
+/** Stream metadata comes from another member: read only a known kind and a channel id. */
+function streamMeta(m: unknown): { kind: keyof RemoteMedia; ch?: string } {
+  const o = typeof m === 'object' && m !== null ? (m as Record<string, unknown>) : {};
+  return { kind: o.kind === 'cam' || o.kind === 'screen' ? o.kind : 'mic', ch: typeof o.ch === 'string' ? o.ch : undefined };
+}
+
 interface RemoteMedia {
   mic?: MediaStream;
   cam?: MediaStream;
@@ -36,7 +42,7 @@ class Huddle {
   }
   private emit(p: Partial<HuddleView>) {
     this.view = { ...this.view, ...p };
-    this.listeners.forEach((l) => l(this.view));
+    for (const l of this.listeners) l(this.view);
   }
 
   videoCount(peer: WorkspacePeer | undefined, ch: string): number {
@@ -65,16 +71,16 @@ class Huddle {
     const peer = getPeer(target.code);
     const room = peer?.ensureRoom();
     if (!peer || !room) {
-      mic.getTracks().forEach((t) => t.stop());
+      for (const t of mic.getTracks()) t.stop();
       this.emit({ error: peer ? off : 'You left this workspace.' });
       return;
     }
     this.peer = peer;
     this.streams = { mic };
     this.sentTo.clear();
-    room.onPeerStream = (stream, peerId, meta) => {
-      const kind = (meta?.kind || 'mic') as keyof RemoteMedia;
-      if (meta?.ch !== this.view.ch) return;
+    room.onPeerStream = (stream, peerId, metadata) => {
+      const { kind, ch: streamCh } = streamMeta(metadata);
+      if (streamCh !== this.view.ch) return;
       const cur = this.view.remote[peerId] || {};
       this.emit({ remote: { ...this.view.remote, [peerId]: { ...cur, [kind]: stream } } });
     };
@@ -84,33 +90,40 @@ class Huddle {
     for (const [pid, h] of peer.huddles) this.onPeerHuddle(pid, h);
   }
 
+  /** A member's huddle state changed: send them my streams when they join mine, stop when they leave it. */
   private onPeerHuddle(peerId: string, h: HuddleState | null) {
     const room = this.peer?.room;
     if (!room || !this.view.ch) return;
-    if (h && h.ch === this.view.ch) {
-      if (!this.sentTo.has(peerId)) {
-        this.sentTo.add(peerId);
-        for (const k of ['mic', 'cam', 'screen'] as const) {
-          const s = this.streams[k];
-          if (s) room.addStream(s, { target: peerId, metadata: { kind: k, ch: this.view.ch } });
-        }
+    if (h && h.ch === this.view.ch) this.withPeer(room, peerId, h);
+    else if (this.sentTo.has(peerId)) this.withoutPeer(room, peerId);
+  }
+
+  private withPeer(room: NonNullable<WorkspacePeer['room']>, peerId: string, h: HuddleState) {
+    if (!this.sentTo.has(peerId)) {
+      this.sentTo.add(peerId);
+      for (const k of ['mic', 'cam', 'screen'] as const) {
+        const s = this.streams[k];
+        if (s) room.addStream(s, { target: peerId, metadata: { kind: k, ch: this.view.ch } });
       }
-      const cur = this.view.remote[peerId];
-      if (cur && ((!h.cam && cur.cam) || (!h.screen && cur.screen))) {
-        this.emit({ remote: { ...this.view.remote, [peerId]: { mic: cur.mic, cam: h.cam ? cur.cam : undefined, screen: h.screen ? cur.screen : undefined } } });
-      }
-    } else if (this.sentTo.has(peerId)) {
-      this.sentTo.delete(peerId);
-      for (const s of Object.values(this.streams))
-        if (s)
-          try {
-            room.removeStream(s, { target: peerId });
-          } catch {
-            /* peer gone */
-          }
-      const { [peerId]: _gone, ...rest } = this.view.remote;
-      this.emit({ remote: rest });
     }
+    // Drop their video tiles as soon as they say it's off, without waiting for the stream to end.
+    const cur = this.view.remote[peerId];
+    if (cur && ((!h.cam && cur.cam) || (!h.screen && cur.screen))) {
+      this.emit({ remote: { ...this.view.remote, [peerId]: { mic: cur.mic, cam: h.cam ? cur.cam : undefined, screen: h.screen ? cur.screen : undefined } } });
+    }
+  }
+
+  private withoutPeer(room: NonNullable<WorkspacePeer['room']>, peerId: string) {
+    this.sentTo.delete(peerId);
+    for (const s of Object.values(this.streams))
+      if (s)
+        try {
+          room.removeStream(s, { target: peerId });
+        } catch {
+          /* peer gone */
+        }
+    const { [peerId]: _gone, ...rest } = this.view.remote;
+    this.emit({ remote: rest });
   }
 
   private targets() {
@@ -163,7 +176,7 @@ class Huddle {
   private stopKind(k: 'cam' | 'screen') {
     const s = this.streams[k];
     if (!s) return;
-    s.getTracks().forEach((x) => x.stop());
+    for (const x of s.getTracks()) x.stop();
     const t = this.targets();
     if (t.length)
       try {
@@ -180,7 +193,7 @@ class Huddle {
     const p = this.peer;
     for (const s of Object.values(this.streams))
       if (s) {
-        s.getTracks().forEach((x) => x.stop());
+        for (const x of s.getTracks()) x.stop();
         const t = this.targets();
         if (p?.room && t.length)
           try {

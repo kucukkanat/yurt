@@ -131,7 +131,7 @@ export async function login(id: RuntimeId): Promise<void> {
   set(id, { busy: undefined });
 }
 
-export function openTerminal(command: string) {
+function openTerminal(command: string) {
   log('info', 'bridge', 'opening a terminal for: ' + command);
   if (process.platform === 'darwin')
     spawn('osascript', ['-e', `tell application "Terminal" to do script "${command.replace(/"/g, '\\"')}"`, '-e', 'tell application "Terminal" to activate']);

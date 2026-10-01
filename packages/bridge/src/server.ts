@@ -197,58 +197,19 @@ export class BridgeServer {
       try {
         this.handle(c, m);
       } catch (e) {
-        this.sendTo(c, { t: 'error', msg: (e as Error).message });
+        this.sendTo(c, { t: 'error', msg: e instanceof Error ? e.message : String(e) });
       }
     });
   }
 
   private handle(c: Client, m: ToBridge) {
-    if (m.t === 'hello') {
-      c.admin = !!m.token && m.token === this.cfg.adminToken;
-      c.paired = c.admin || (!!m.token && this.cfg.tokens.includes(m.token));
-      this.sendTo(c, { t: 'hello', ok: true, paired: c.paired, admin: c.admin, version: VERSION });
-      if (c.paired) this.sendTo(c, { t: 'state', state: this.state(c.admin) });
-      if (c.admin) for (const e of recentLogs()) this.sendTo(c, e);
-      return;
-    }
-    if (m.t === 'pair') {
-      const wait = this.lockedUntil - Date.now();
-      if (wait <= 0 && m.code === this.code) {
-        this.lockouts = 0;
-        this.recentMisses = [];
-        const token = crypto.randomBytes(24).toString('hex');
-        this.cfg.tokens = [...this.cfg.tokens.slice(-9), token];
-        saveConfig(this.cfg);
-        c.paired = true;
-        this.sendTo(c, { t: 'paired', token });
-        this.sendTo(c, { t: 'state', state: this.state(c.admin) });
-        log('info', 'bridge', 'paired a browser');
-        this.rotate();
-        return;
-      }
-      if (wait > 0) this.sendTo(c, { t: 'error', msg: `Too many wrong pairing codes. Try again in ${Math.ceil(wait / 1000)} s.` });
-      else {
-        this.sendTo(c, { t: 'error', msg: 'Wrong pairing code' });
-        this.miss();
-      }
-      if (++c.misses >= CONN_MISSES) {
-        log('warn', 'bridge', 'closed a connection after ' + c.misses + ' pairing attempts');
-        c.sock.close(1008, 'Too many pairing attempts');
-      }
-      return;
-    }
+    if (m.t === 'hello') return this.hello(c, m.token);
+    if (m.t === 'pair') return this.pair(c, m.code);
     if (!c.paired) return this.sendTo(c, { t: 'error', msg: 'Not paired' });
     switch (m.t) {
-      case 'identity': {
-        if (!isValidPhrase(m.phrase)) throw new Error('Invalid identity');
-        const cur = loadIdentity();
-        if (!cur || cur.phrase !== m.phrase || cur.name !== m.name || cur.handle !== m.handle) {
-          saveIdentity({ phrase: m.phrase, name: m.name, handle: m.handle });
-          if (cur && cur.phrase !== m.phrase) log('warn', 'bridge', 'identity replaced by a paired browser');
-        }
-        this.ws.setIdentity(m.phrase);
+      case 'identity':
+        this.identity(m);
         break;
-      }
       case 'ws.join':
         this.ws.join(m.code, m.name, m.creator, m.agents, m.transport);
         break;
@@ -263,6 +224,51 @@ export class BridgeServer {
         this.admin(m);
     }
     this.changed();
+  }
+
+  private hello(c: Client, token?: string) {
+    c.admin = !!token && token === this.cfg.adminToken;
+    c.paired = c.admin || (!!token && this.cfg.tokens.includes(token));
+    this.sendTo(c, { t: 'hello', ok: true, paired: c.paired, admin: c.admin, version: VERSION });
+    if (c.paired) this.sendTo(c, { t: 'state', state: this.state(c.admin) });
+    if (c.admin) for (const e of recentLogs()) this.sendTo(c, e);
+  }
+
+  private pair(c: Client, code: string) {
+    const wait = this.lockedUntil - Date.now();
+    if (wait <= 0 && code === this.code) {
+      this.lockouts = 0;
+      this.recentMisses = [];
+      const token = crypto.randomBytes(24).toString('hex');
+      this.cfg.tokens = [...this.cfg.tokens.slice(-9), token];
+      saveConfig(this.cfg);
+      c.paired = true;
+      this.sendTo(c, { t: 'paired', token });
+      this.sendTo(c, { t: 'state', state: this.state(c.admin) });
+      log('info', 'bridge', 'paired a browser');
+      this.rotate();
+      return;
+    }
+    if (wait > 0) this.sendTo(c, { t: 'error', msg: `Too many wrong pairing codes. Try again in ${Math.ceil(wait / 1000)} s.` });
+    else {
+      this.sendTo(c, { t: 'error', msg: 'Wrong pairing code' });
+      this.miss();
+    }
+    c.misses++;
+    if (c.misses >= CONN_MISSES) {
+      log('warn', 'bridge', 'closed a connection after ' + c.misses + ' pairing attempts');
+      c.sock.close(1008, 'Too many pairing attempts');
+    }
+  }
+
+  private identity(m: Extract<ToBridge, { t: 'identity' }>) {
+    if (!isValidPhrase(m.phrase)) throw new Error('Invalid identity');
+    const cur = loadIdentity();
+    if (!cur || cur.phrase !== m.phrase || cur.name !== m.name || cur.handle !== m.handle) {
+      saveIdentity({ phrase: m.phrase, name: m.name, handle: m.handle });
+      if (cur && cur.phrase !== m.phrase) log('warn', 'bridge', 'identity replaced by a paired browser');
+    }
+    this.ws.setIdentity(m.phrase);
   }
 
   private miss() {

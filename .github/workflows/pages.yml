@@ -29,6 +29,8 @@ jobs:
         with:
           node-version: 22
       - run: bun install --frozen-lockfile
+      # Types (tests and e2e included), dead code (Knip), duplication (jscpd, max 2%), lint + format (Biome).
+      - run: bun run quality
       # Protocol + bridge unit/integration tests (the bridge suite also builds and starts dist/cli.js).
       - run: bun run test
       - run: bun run build

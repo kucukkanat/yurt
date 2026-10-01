@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { newRecoveryPhrase } from '@yurt/protocol';
 
 export const FAKE_ACP = fileURLToPath(new URL('./fixtures/fake-acp.mjs', import.meta.url));
 
@@ -29,10 +30,24 @@ export const alive = (pid: number) => {
   }
 };
 
-export async function until(cond: () => boolean, ms = 5000) {
-  const end = Date.now() + ms;
-  while (!cond()) {
-    if (Date.now() > end) throw new Error('timed out waiting for condition');
-    await new Promise((r) => setTimeout(r, 25));
-  }
+export { memStore, until } from '../../protocol/test/util';
+
+/**
+ * A headless bridge (config, workspace peers and agent host, wired as cli.ts does) homed in `home`.
+ * config.ts reads YURT_HOME on import, so modules load only after it's set; `prepare` edits the config before any peer starts.
+ */
+export async function startBridge(home: string, prepare: (cfg: import('../src/config').Config) => void = () => {}) {
+  process.env.YURT_HOME = home;
+  const [{ loadConfig }, { Workspaces }, { AgentHost }] = await Promise.all([import('../src/config'), import('../src/workspaces'), import('../src/agents')]);
+  const cfg = loadConfig();
+  prepare(cfg);
+  const ws = new Workspaces(cfg, () => {});
+  ws.host = new AgentHost(
+    cfg,
+    () => ws.me,
+    () => {},
+    () => {},
+  );
+  ws.setIdentity(newRecoveryPhrase());
+  return { cfg, ws };
 }

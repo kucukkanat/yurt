@@ -53,6 +53,7 @@ export function AgentActivity({ summary, meta, steps = [], defaultOpen = false, 
           }}
         >
           {steps.map((s, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a run's trace only grows at the end, so a position always names the same step
             <AgentStep key={i} {...s} last={i === steps.length - 1} />
           ))}
         </div>

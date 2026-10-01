@@ -15,13 +15,12 @@ import {
   type KeyPair,
   type KeyedTransport,
   type Msg,
-  type PeerStore,
 } from '@yurt/protocol';
 import { startRelay, type TestRelay } from '../../protocol/test/relay';
 import type { Config } from '../src/config';
 import type { Workspaces } from '../src/workspaces';
 import { placement, repliedAgents } from '../src/agents';
-import { fakeCopilotOnPath, tempDir, until } from './helpers';
+import { fakeCopilotOnPath, memStore, startBridge, tempDir, until } from './helpers';
 
 const CODE = 'TRIG2RSX';
 const agentCfg = (p: Partial<AgentConfig> = {}): AgentConfig => ({
@@ -62,17 +61,25 @@ describe('repliedAgents', () => {
   const OWNER = keyFromPhrase(newRecoveryPhrase());
   const MEMBER = keyFromPhrase(newRecoveryPhrase());
   let ts = 1_700_000_000_000;
-  const ev = (kp: KeyPair, b: unknown, extra: { ch?: string; ag?: string } = {}) => makeEvent(kp, { ws: CODE, t: 'msg', b, ts: (ts += 1000), ch: 'general', ...extra });
+  const tick = () => {
+    ts += 1000;
+    return ts;
+  };
+  const ev = (kp: KeyPair, b: unknown, extra: { ch?: string; ag?: string } = {}) => makeEvent(kp, { ws: CODE, t: 'msg', b, ts: tick(), ch: 'general', ...extra });
   const setup = [
-    makeEvent(OWNER, { ws: CODE, t: 'ws.create', b: { name: 'W' }, ts: (ts += 1000) }),
-    makeEvent(OWNER, { ws: CODE, t: 'ch.create', b: { id: 'general', name: 'general' }, ts: (ts += 1000) }),
+    makeEvent(OWNER, { ws: CODE, t: 'ws.create', b: { name: 'W' }, ts: tick() }),
+    makeEvent(OWNER, { ws: CODE, t: 'ch.create', b: { id: 'general', name: 'general' }, ts: tick() }),
   ];
   const root = ev(MEMBER, { text: 'question for @scout' });
   const answer = ev(OWNER, { text: 'answer', parent: root.id }, { ag: 'scout-1' });
   const follow = ev(MEMBER, { text: 'and then?', parent: root.id });
   const elsewhere = ev(MEMBER, { text: 'unrelated thread', parent: ev(MEMBER, { text: 'x' }).id });
   const s = reduce(CODE, [...setup, root, answer, follow], { creator: OWNER.pub });
-  const msg = (e: Ev) => s.msgs.get(e.id) as Msg;
+  const msg = (e: Ev): Msg => {
+    const m = s.msgs.get(e.id);
+    if (!m) throw new Error('not in state: ' + e.id);
+    return m;
+  };
   const on = [agentCfg({ respondTo: { mentions: true, replies: true } })];
 
   it('finds agents taking part in the thread when replies are on', () => {
@@ -88,27 +95,6 @@ describe('repliedAgents', () => {
     expect(repliedAgents(on, ['scout-1'], s, msg(follow), MEMBER.pub)).toEqual([]); // someone else's agent of the same id
   });
 });
-
-/** In-memory PeerStore: a real implementation of the interface, one per simulated member device. */
-const memStore = (): PeerStore => {
-  const evs = new Map<string, Ev>();
-  const blobs = new Map<string, ArrayBuffer>();
-  let mark = 0;
-  return {
-    getBlob: async (id) => blobs.get(id) ?? null,
-    putBlob: async (id, b) => {
-      blobs.set(id, b);
-    },
-    load: async () => [...evs.values()],
-    save: async (xs) => {
-      xs.forEach((e) => evs.set(e.id, e));
-    },
-    loadMark: async () => mark,
-    saveMark: async (_ws, m) => {
-      mark = m;
-    },
-  };
-};
 
 // End to end: the real bridge Workspaces + AgentHost running an echoing fake ACP agent, and members on real
 // WorkspacePeers, all over a local Nostr relay. The echo carries the agent's pid (which session ran) and its
@@ -134,7 +120,7 @@ describe('agent triggers, end to end', () => {
       kp,
       selfId: kp.pub.slice(0, 20),
       transport,
-      store: memStore(),
+      store: memStore().store,
       onError: (m) => {
         throw new Error(m);
       },
@@ -160,24 +146,13 @@ describe('agent triggers, end to end', () => {
     restorePath = fakeCopilotOnPath();
     relay = await startRelay();
     transport = newNostrTransport([relay.url]);
-    process.env.YURT_HOME = home;
-    const [{ loadConfig }, { Workspaces }, { AgentHost }] = await Promise.all([import('../src/config'), import('../src/workspaces'), import('../src/agents')]);
-    cfg = loadConfig();
-    cfg.agents.push(agentCfg({ workdir }));
     b = await member(B);
     b.publish({ t: 'ws.create', b: { name: 'Triggers' } });
     b.publish({ t: 'ch.create', b: { id: 'general', name: 'general' } });
     b.publish({ t: 'profile', b: { name: 'Bea', handle: 'bea' } });
     c = await member(C);
     c.publish({ t: 'profile', b: { name: 'Cy', handle: 'cy' } });
-    ws = new Workspaces(cfg, () => {});
-    ws.host = new AgentHost(
-      cfg,
-      () => ws.me,
-      () => {},
-      () => {},
-    );
-    ws.setIdentity(newRecoveryPhrase());
+    ({ cfg, ws } = await startBridge(home, (c) => c.agents.push(agentCfg({ workdir }))));
     owner = ws.me ?? '';
     ws.join(CODE, 'Triggers', B.pub, ['scout-1'], transport);
     await until(() => !!b.state.agents.size && !!c.state.agents.size, 10_000);

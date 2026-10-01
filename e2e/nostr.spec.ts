@@ -1,53 +1,17 @@
 import { test, expect, type Page } from '@playwright/test';
-
-const RELAY = 'ws://127.0.0.1:7777'; // local relay and Blossom server, started by playwright.config.ts
-const BLOSSOM = 'http://127.0.0.1:7778';
-
-async function onboard(page: Page, name: string, finish: 'Start chatting' | 'Join workspace') {
-  await page.getByLabel('Display name').fill(name);
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await page.getByText('I saved my recovery phrase somewhere safe').click();
-  await page.getByRole('button', { name: finish }).click();
-}
-
-/** Point new relay workspaces at the local relay and file server, through the same IndexedDB settings the Settings dialog writes. */
-async function useLocalRelay(page: Page) {
-  await page.goto('./');
-  await page.evaluate(
-    ({ relays, servers }) =>
-      new Promise<void>((res, rej) => {
-        const r = indexedDB.open('yurt', 1);
-        r.onsuccess = () => {
-          const t = r.result.transaction('kv', 'readwrite');
-          const kv = t.objectStore('kv');
-          const get = kv.get('settings');
-          get.onsuccess = () => kv.put({ ...(get.result || {}), relays, blossom: servers }, 'settings');
-          t.oncomplete = () => res();
-          t.onerror = () => rej(t.error);
-        };
-        r.onerror = () => rej(r.error);
-      }),
-    { relays: RELAY, servers: BLOSSOM },
-  );
-  await page.reload();
-}
+import { createWorkspace, inviteLink, onboard, pointAtLocalRelay, RELAY, BLOSSOM } from './helpers';
 
 test('relay workspace keeps encrypted history for members who join after everyone left', async ({ browser }) => {
   const actx = await browser.newContext();
   const a = await actx.newPage();
-  await useLocalRelay(a);
+  await pointAtLocalRelay(a);
   await onboard(a, 'Ada', 'Start chatting');
-  await a.getByLabel('Workspace name').fill('Relay ' + Date.now());
-  await a.getByText('Encrypted on Nostr relays').click();
-  await a.getByRole('button', { name: 'Create workspace' }).click();
-  await expect(a).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
-
+  await createWorkspace(a, 'Relay', 'relays');
   await a.getByRole('button', { name: 'Invite people' }).first().click();
-  const link = await a.getByTestId('invite-link').inputValue();
+  await expect(a.getByRole('button', { name: 'Copy code' })).toHaveCount(0); // relay invites are link-only
+  await a.getByTestId('invite-link').press('Escape');
+  const link = await inviteLink(a);
   expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/k\/[A-Za-z0-9_-]{43}\/n\//);
-  await expect(a.getByRole('button', { name: 'Copy code' })).toHaveCount(0);
-  await a.getByTestId('invite-link').press('Escape'); // the dialog handles Escape when focus is inside it
-  await expect(a.getByRole('dialog')).toHaveCount(0);
 
   // Calls need the explicit WebRTC opt-in in relay workspaces.
   await expect(a.getByTestId('huddle-button')).toBeDisabled();
@@ -73,7 +37,7 @@ test('relay workspace keeps encrypted history for members who join after everyon
 
 test('the WebRTC switch enables calls in relay workspaces', async ({ browser }) => {
   const page = await (await browser.newContext()).newPage();
-  await useLocalRelay(page);
+  await pointAtLocalRelay(page);
   await onboard(page, 'Di', 'Start chatting');
   await page.getByLabel('Workspace name').fill('Calls ' + Date.now());
   await page.getByText('Encrypted on Nostr relays').click();
@@ -96,7 +60,7 @@ test('bare codes and keyless links are refused', async ({ browser }) => {
 });
 
 async function relayWorkspace(page: Page, who: string) {
-  await useLocalRelay(page);
+  await pointAtLocalRelay(page);
   await onboard(page, who, 'Start chatting');
   await page.getByLabel('Workspace name').fill('Relay ' + Date.now());
   await page.getByText('Encrypted on Nostr relays').click();
@@ -111,7 +75,7 @@ async function openConnection(page: Page) {
 
 test('one Settings: a single button, "you" sections outside a workspace, device connection without mode tabs', async ({ browser }) => {
   const page = await (await browser.newContext()).newPage();
-  await useLocalRelay(page);
+  await pointAtLocalRelay(page);
   await onboard(page, 'Ed', 'Start chatting');
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(1);
   await page.getByTestId('settings-button').click();
@@ -171,7 +135,7 @@ test('inside a workspace, Settings adds its own group for its mode, and the work
 
 test('Settings on a narrow screen: list, section, back', async ({ browser }) => {
   const page = await (await browser.newContext({ viewport: { width: 420, height: 800 } })).newPage();
-  await useLocalRelay(page);
+  await pointAtLocalRelay(page);
   await onboard(page, 'Mo', 'Start chatting');
   // On a phone-sized screen the rail lives in the drawer.
   await page.getByRole('button', { name: 'Open sidebar' }).click();
@@ -216,7 +180,7 @@ test('a relay workspace’s network settings show live relay status and edit rel
 
 test('a peer-to-peer workspace’s network settings show only WebRTC: signaling goes into the invite link', async ({ browser }) => {
   const page = await (await browser.newContext()).newPage();
-  await useLocalRelay(page);
+  await pointAtLocalRelay(page);
   await onboard(page, 'Gu', 'Start chatting');
   await page.getByLabel('Workspace name').fill('P2P ' + Date.now());
   await page.getByRole('button', { name: 'Create workspace' }).click();
@@ -355,6 +319,11 @@ test('the tab icon shows unread messages on top of whatever favicon is set, and 
   await a.getByRole('button', { name: 'Create channel' }).click();
   await expect(a).toHaveURL(/\/c\/side/);
   const icon = () => a.locator('link[rel~="icon"]').getAttribute('href');
+  const openGeneral = () =>
+    a
+      .getByRole('button', { name: /general/ })
+      .first()
+      .click();
   const say = async (text: string) => {
     const c = b.getByRole('textbox', { name: 'Message #general' });
     await c.fill(text);
@@ -362,10 +331,7 @@ test('the tab icon shows unread messages on top of whatever favicon is set, and 
   };
   await say('unread one');
   await expect.poll(icon, { timeout: 30_000 }).toMatch(/^data:image\/png/);
-  await a
-    .getByRole('button', { name: /general/ })
-    .first()
-    .click();
+  await openGeneral();
   await expect.poll(icon).toBe(original);
 
   // Swap the favicon: the badges now decorate the new icon, and reading restores the new one.
@@ -377,16 +343,13 @@ test('the tab icon shows unread messages on top of whatever favicon is set, and 
   await a.getByRole('button', { name: /side/ }).first().click();
   await say('unread two');
   await expect.poll(icon, { timeout: 30_000 }).toMatch(/^data:image\/png/);
-  await a
-    .getByRole('button', { name: /general/ })
-    .first()
-    .click();
+  await openGeneral();
   await expect.poll(icon).toBe(custom);
 });
 
 test('the create step sets the new workspace’s own network settings for the chosen mode', async ({ browser }) => {
   const page = await (await browser.newContext()).newPage();
-  await useLocalRelay(page);
+  await pointAtLocalRelay(page);
   await onboard(page, 'Ky', 'Start chatting');
 
   // Peer-to-peer: collapsed by default with a summary of the defaults; expand to pick trackers.

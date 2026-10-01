@@ -1,4 +1,3 @@
-import React from 'react';
 import { Icon } from '../core/Icon.jsx';
 import { Kbd } from '../core/Kbd.jsx';
 import { useInteraction, mergeHandlers, shadows } from '../core/useInteraction.js';
@@ -41,6 +40,19 @@ export const BUTTON_VARIANTS = {
   danger: { bg: 'var(--danger)', hover: 'var(--red-700)', press: 'var(--red-700)', fg: '#fff', bd: 'transparent', lip: 'var(--shadow-lip)', kbd: 'onAccent' },
 };
 
+/** Background and lift for the current interaction state; a disabled or loading button stays still. */
+function motion(v, st, off) {
+  if (off) return { bg: v.bg, transform: 'none' };
+  if (st.press) return { bg: v.press, transform: 'translateY(1px) scale(.98)' };
+  if (st.hover) return { bg: v.hover, transform: 'translateY(-1px)' };
+  return { bg: v.bg, transform: 'none' };
+}
+
+const cursorFor = (off, loading) => {
+  if (!off) return 'pointer';
+  return loading ? 'progress' : 'not-allowed';
+};
+
 export function Button({
   variant = 'primary',
   size = 'md',
@@ -59,8 +71,7 @@ export function Button({
   const s = SIZES[size] || SIZES.md;
   const off = disabled || loading;
   const [st, h] = useInteraction(off);
-  const bg = off ? v.bg : st.press ? v.press : st.hover ? v.hover : v.bg;
-  const transform = off ? 'none' : st.press ? 'translateY(1px) scale(.98)' : st.hover ? 'translateY(-1px)' : 'none';
+  const { bg, transform } = motion(v, st, off);
   return (
     <button
       type={type}
@@ -89,7 +100,7 @@ export function Button({
         borderRadius: s.r,
         boxShadow: shadows(st.focus && 'var(--focus-ring)', !st.press && v.lip),
         opacity: disabled ? 0.45 : 1,
-        cursor: off ? (loading ? 'progress' : 'not-allowed') : 'pointer',
+        cursor: cursorFor(off, loading),
         transform,
         transition: 'transform var(--dur-fast) var(--ease-spring), background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
         outline: 'none',

@@ -29,31 +29,36 @@ export function startRelay(port = 0, opts: RelayOpts = {}): Promise<TestRelay> {
   const wss = new WebSocketServer({ port, host: '127.0.0.1' });
   const send = (ws: WebSocket, msg: unknown[]) => ws.send(JSON.stringify(msg));
 
+  const publish = (ws: WebSocket, e: Event) => {
+    if (!verifyEvent(e)) return send(ws, ['OK', e.id, false, 'invalid: bad signature']);
+    const refused = opts.refuse?.(e);
+    if (refused) return send(ws, ['OK', e.id, false, refused]);
+    const dup = stored.some((x) => x.id === e.id);
+    if (!dup && !isEphemeral(e.kind)) stored.push(e);
+    send(ws, ['OK', e.id, true, dup ? 'duplicate:' : '']);
+    if (dup) return;
+    for (const [c, m] of subs) for (const [id, fs] of m) if (fs.some((f) => matchFilter(f, e))) send(c, ['EVENT', id, e]);
+  };
+
+  const subscribe = (ws: WebSocket, id: string, fs: Filter[]) => {
+    subs.get(ws)?.set(id, fs);
+    for (const f of fs) {
+      const hits = stored.filter((e) => matchFilter(f, e)).sort((a, b) => b.created_at - a.created_at);
+      for (const e of hits.slice(0, Math.min(f.limit ?? hits.length, opts.maxLimit ?? Infinity))) send(ws, ['EVENT', id, e]);
+    }
+    send(ws, ['EOSE', id]);
+  };
+
   wss.on('connection', (ws) => {
     subs.set(ws, new Map());
     ws.on('close', () => subs.delete(ws));
     ws.on('message', (raw) => {
       const [type, ...rest] = JSON.parse(String(raw)) as [string, ...unknown[]];
-      if (type === 'EVENT') {
-        const e = rest[0] as Event;
-        if (!verifyEvent(e)) return send(ws, ['OK', e.id, false, 'invalid: bad signature']);
-        const refused = opts.refuse?.(e);
-        if (refused) return send(ws, ['OK', e.id, false, refused]);
-        const dup = stored.some((x) => x.id === e.id);
-        if (!dup && !isEphemeral(e.kind)) stored.push(e);
-        send(ws, ['OK', e.id, true, dup ? 'duplicate:' : '']);
-        if (!dup) for (const [c, m] of subs) for (const [id, fs] of m) if (fs.some((f) => matchFilter(f, e))) send(c, ['EVENT', id, e]);
-      } else if (type === 'REQ') {
+      if (type === 'EVENT') publish(ws, rest[0] as Event);
+      else if (type === 'REQ') {
         const [id, ...fs] = rest as [string, ...Filter[]];
-        subs.get(ws)?.set(id, fs);
-        for (const f of fs) {
-          const hits = stored.filter((e) => matchFilter(f, e)).sort((a, b) => b.created_at - a.created_at);
-          for (const e of hits.slice(0, Math.min(f.limit ?? hits.length, opts.maxLimit ?? Infinity))) send(ws, ['EVENT', id, e]);
-        }
-        send(ws, ['EOSE', id]);
-      } else if (type === 'CLOSE') {
-        subs.get(ws)?.delete(rest[0] as string);
-      }
+        subscribe(ws, id, fs);
+      } else if (type === 'CLOSE') subs.get(ws)?.delete(rest[0] as string);
     });
   });
 
