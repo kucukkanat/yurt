@@ -1,3 +1,4 @@
+import type { AgentTriggers, AgentPlacement } from './types';
 import type { WsTransport } from './invite';
 /** Messages between the Yurt web app / bridge UI and the local bridge over ws://127.0.0.1:7717/ws. */
 
@@ -28,7 +29,12 @@ export interface AgentConfig {
   instructions: string;
   autoApprove: ToolKind[];
   contextSize: number;       // last N messages sent as context
-  replyIn: 'thread' | 'channel';
+  /** What makes it answer in rooms: @mentions and/or replies in threads it takes part in. */
+  respondTo: AgentTriggers;
+  /** Where it answers: a thread, the channel, or both (thread reply also shown in the channel). At least one. */
+  postIn: AgentPlacement;
+  /** Others in the workspace may find it and message it directly; its owner can read those chats. */
+  discoverable: boolean;
 }
 
 export interface BridgeWorkspace { code: string; name: string; agents: string[]; peers?: number }

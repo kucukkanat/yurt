@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, IconButton, Icon, Input, Select, Switch, Checkbox, Radio, Badge, Avatar, Toast, Kbd } from '@yurt/ui';
+import { Button, IconButton, Icon, Input, Select, Switch, Checkbox, Badge, Avatar, Toast, Kbd } from '@yurt/ui';
 import { fingerprint, formatCode, slug, TOOL_KINDS, type BridgeState, type FromBridge, type ToBridge, type AgentConfig, type ToolKind, type RuntimeStatus } from '@yurt/protocol';
 
 declare global { interface Window { __YURT_ADMIN__?: string } }
@@ -192,7 +192,8 @@ function Runtimes({ s, send }: P) {
 
 const blank = (s: BridgeState): AgentConfig => {
   const rt = s.runtimes.find((r) => r.installed)?.id || 'copilot';
-  return { id: '', name: '', handle: '', runtime: rt, model: '', workdir: (s.home || '~') + '/yurt-agents/', instructions: '', autoApprove: [...SAFE], contextSize: 20, replyIn: 'thread' };
+  return { id: '', name: '', handle: '', runtime: rt, model: '', workdir: (s.home || '~') + '/yurt-agents/', instructions: '', autoApprove: [...SAFE], contextSize: 20,
+    respondTo: { mentions: true, replies: false }, postIn: { thread: true, channel: false }, discoverable: false };
 };
 
 type SaveAck = { error: string | null; clearError: () => void };
@@ -233,7 +234,7 @@ function Agents({ s, send, error, clearError }: P & SaveAck) {
 /** True once the bridge's state holds `a` as `agent.save` normalizes it (server.ts sanitize); a new agent must be new. */
 const isSaved = (a: AgentConfig, x: AgentConfig, before: readonly string[]) =>
   (a.id ? x.id === a.id : !before.includes(x.id)) && x.handle === slug(a.handle || a.name).slice(0, 24) && x.name === a.name.trim().slice(0, 40) && x.runtime === a.runtime
-  && x.instructions === a.instructions.slice(0, 8000) && x.replyIn === a.replyIn && [...x.autoApprove].sort().join() === [...a.autoApprove].sort().join();
+  && x.instructions === a.instructions.slice(0, 8000) && JSON.stringify([x.respondTo, x.postIn, x.discoverable]) === JSON.stringify([a.respondTo, a.postIn, a.discoverable]) && [...x.autoApprove].sort().join() === [...a.autoApprove].sort().join();
 
 function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck & { agent: AgentConfig; onDone: () => void }) {
   const [a, setA] = useState<AgentConfig>(agent);
@@ -249,6 +250,7 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
   const [confirmDel, setConfirmDel] = useState(false);
   const up = (p: Partial<AgentConfig>) => setA((x) => ({ ...x, ...p }));
   const isNew = !agent.id;
+  const noPlacement = !a.postIn.thread && !a.postIn.channel;
   const autoHandle = (n: string) => n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24);
   const setName = (name: string) => up({ name, ...(handleTouched ? {} : { handle: autoHandle(name) }), ...(isNew && a.workdir.endsWith('/yurt-agents/' + a.handle) || a.workdir.endsWith('/yurt-agents/') ? { workdir: (s.home || '~') + '/yurt-agents/' + autoHandle(name) } : {}) });
   const rt = s.runtimes.find((r) => r.id === a.runtime);
@@ -278,10 +280,25 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
       </CardBox>
       <CardBox style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-strong)' }}>In rooms</span>
-        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-          <Radio name="replyIn" value="thread" label="Reply in a thread" checked={a.replyIn === 'thread'} onChange={() => up({ replyIn: 'thread' })} />
-          <Radio name="replyIn" value="channel" label="Reply in the channel" checked={a.replyIn === 'channel'} onChange={() => up({ replyIn: 'channel' })} />
+        <div role="group" aria-label="Answers when" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-body)' }}>Answers when</span>
+          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+            <Checkbox label="Someone @mentions it" data-testid="respond-mentions" checked={a.respondTo.mentions} onChange={(e) => up({ respondTo: { ...a.respondTo, mentions: e.target.checked } })} />
+            <Checkbox label="Someone replies in a thread it's part of" description="No @ needed for follow-ups" data-testid="respond-replies" checked={a.respondTo.replies} onChange={(e) => up({ respondTo: { ...a.respondTo, replies: e.target.checked } })} />
+          </div>
         </div>
+        <div role="group" aria-label="Posts" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-body)' }}>Posts its answer</span>
+          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+            <Checkbox label="In a thread" data-testid="post-thread" checked={a.postIn.thread} onChange={(e) => up({ postIn: { ...a.postIn, thread: e.target.checked } })} />
+            <Checkbox label="In the channel" data-testid="post-channel" checked={a.postIn.channel} onChange={(e) => up({ postIn: { ...a.postIn, channel: e.target.checked } })} />
+          </div>
+          <span style={{ fontSize: 12.5, color: noPlacement ? 'var(--danger-ink)' : 'var(--text-subtle)' }}>
+            {noPlacement ? 'Pick at least one.' : a.postIn.thread && a.postIn.channel ? 'Answers in the thread and also shows the answer in the channel.' : a.postIn.thread ? 'Answers in a thread under the message.' : 'Answers in the channel (or inside a thread when asked there).'}
+          </span>
+        </div>
+        <Switch label="Discoverable" data-testid="agent-discoverable" checked={a.discoverable} onChange={(on) => up({ discoverable: on })}
+          description="Others in the workspace can find this agent and message it directly. You can read those conversations, and they're told so. Off: they can only @mention it in channels and reply to its messages." />
         <Input label="Context" type="number" min={1} max={200} value={String(a.contextSize)} onChange={(e) => up({ contextSize: Number(e.target.value) })} suffix={<span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>recent messages</span>} hint="How many recent messages from the channel or thread the agent sees when mentioned." />
       </CardBox>
       <CardBox style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -296,7 +313,7 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
         </div>
       </CardBox>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button type="submit" variant="agent" iconLeft="check" data-testid="agent-save" loading={!!saving} disabled={!a.name.trim() || !a.handle || !a.workdir.trim()}>{isNew ? 'Create agent' : 'Save changes'}</Button>
+        <Button type="submit" variant="agent" iconLeft="check" data-testid="agent-save" loading={!!saving} disabled={!a.name.trim() || !a.handle || !a.workdir.trim() || noPlacement}>{isNew ? 'Create agent' : 'Save changes'}</Button>
         <Button variant="ghost" onClick={onDone}>Cancel</Button>
         <span style={{ flex: 1 }} />
         {!isNew && (confirmDel

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { joinRoom as joinNostr, selfId } from 'trystero';
 import { joinRoom as joinTorrent } from '@trystero-p2p/torrent';
 import { RTCPeerConnection } from 'werift';
-import { WorkspacePeer, agentKey, keyFromPhrase, LEGACY_TRYSTERO, signalingOf, type WsTransport, type Ev, type PeerStore, type JoinRoom, type KeyPair, type AgentBody } from '@yurt/protocol';
+import { WorkspacePeer, agentKey, agentPrefs, keyFromPhrase, LEGACY_TRYSTERO, signalingOf, type WsTransport, type Ev, type PeerStore, type JoinRoom, type KeyPair, type AgentBody } from '@yurt/protocol';
 import { WS_DIR, BLOB_DIR, saveConfig, type Config } from './config';
 import type { AgentHost } from './agents';
 import { log } from './log';
@@ -98,10 +98,13 @@ export class Workspaces {
     if (!p || !w || !this.kp) return;
     const me = this.kp.pub;
     for (const a of this.cfg.agents) {
-      const want: AgentBody = { id: a.id, name: a.name, handle: a.handle, runtime: a.runtime, model: a.model, replyIn: a.replyIn, removed: w.agents.includes(a.id) ? undefined : true };
+      // replyIn stays for peers that predate respondTo/postIn (they drop agent events without it).
+      const want: AgentBody = { id: a.id, name: a.name, handle: a.handle, runtime: a.runtime, model: a.model, replyIn: a.postIn.thread ? 'thread' : 'channel',
+        respondTo: a.respondTo, postIn: a.postIn, discoverable: a.discoverable, removed: w.agents.includes(a.id) ? undefined : true };
       const have = p.state.agents.get(agentKey(me, a.id));
       if (!have && want.removed) continue;
-      const same = have && have.name === want.name && have.handle === want.handle && have.runtime === want.runtime && (have.model || undefined) === want.model && have.replyIn === want.replyIn && !!have.removed === !!want.removed;
+      const same = have && have.name === want.name && have.handle === want.handle && have.runtime === want.runtime && (have.model || undefined) === want.model && have.replyIn === want.replyIn && !!have.removed === !!want.removed
+        && JSON.stringify(agentPrefs(have)) === JSON.stringify(agentPrefs(want));
       if (!same) p.publish({ t: 'agent', b: want });
     }
     for (const have of p.state.agents.values()) {

@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import type { AgentConfig, BridgeWorkspace, WsTransport } from '@yurt/protocol';
+import { agentPrefs, type AgentConfig, type BridgeWorkspace, type WsTransport } from '@yurt/protocol';
 
 export const HOME = process.env.YURT_HOME || path.join(os.homedir(), '.yurt');
 export const WS_DIR = path.join(HOME, 'workspaces');
@@ -49,7 +49,8 @@ export function loadConfig(): Config {
     tokens: c.tokens || [],
     startOnLogin: !!c.startOnLogin,
     allowedOrigins: c.allowedOrigins ?? DEFAULT_ORIGINS, // [] is a deliberate "no web apps"
-    agents: c.agents || [],
+    // Agents saved before triggers/placement existed only had `replyIn`; fill the new fields from it.
+    agents: (c.agents || []).map((a) => ({ ...withoutReplyIn(a), ...agentRoomPrefs(a as unknown as Record<string, unknown>) })),
     workspaces: c.workspaces || [],
   };
   writeJson(CONFIG, cfg);
@@ -59,3 +60,24 @@ export function loadConfig(): Config {
 export const saveConfig = (c: Config) => writeJson(CONFIG, c);
 export const loadIdentity = () => readJson<StoredIdentity>(IDENTITY);
 export const saveIdentity = (i: StoredIdentity) => writeJson(IDENTITY, i);
+
+const bools = <K extends string>(x: unknown, keys: readonly K[]): Record<K, boolean> | undefined => {
+  if (typeof x !== 'object' || x === null) return undefined;
+  const o = x as Record<string, unknown>;
+  return keys.every((k) => typeof o[k] === 'boolean') ? (Object.fromEntries(keys.map((k) => [k, o[k] as boolean])) as Record<K, boolean>) : undefined;
+};
+
+/** An agent's room settings from untrusted or older input: older configs only had `replyIn`. */
+export function agentRoomPrefs(a: Record<string, unknown>): Pick<AgentConfig, 'respondTo' | 'postIn' | 'discoverable'> {
+  return agentPrefs({
+    replyIn: a.replyIn === 'channel' ? 'channel' : 'thread',
+    respondTo: bools(a.respondTo, ['mentions', 'replies'] as const),
+    postIn: bools(a.postIn, ['thread', 'channel'] as const),
+    discoverable: a.discoverable === true,
+  });
+}
+
+const withoutReplyIn = (a: AgentConfig): AgentConfig => {
+  const { replyIn: _old, ...rest } = a as AgentConfig & { replyIn?: unknown };
+  return rest;
+};

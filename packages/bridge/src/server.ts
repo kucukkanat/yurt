@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { slug, keyFromPhrase, isValidPhrase, TOOL_KINDS, type BridgeState, type ToBridge, type FromBridge, type AgentConfig } from '@yurt/protocol';
-import { saveConfig, saveIdentity, loadIdentity, type Config } from './config';
+import { saveConfig, saveIdentity, loadIdentity, agentRoomPrefs, type Config } from './config';
 import type { Workspaces } from './workspaces';
 import type { AgentHost } from './agents';
 import { RUNTIME_IDS, runtimeStatus, install, check, login, onRuntimeChange } from './runtimes';
@@ -256,13 +256,15 @@ export class BridgeServer {
   }
 }
 
-function sanitize(a: AgentConfig): AgentConfig {
+/** Validates an agent from the (paired, but still untrusted) UI and migrates older shapes. */
+export function sanitize(a: AgentConfig): AgentConfig {
   if (!RUNTIME_IDS.includes(a.runtime)) throw new Error('Unknown runtime');
   const name = String(a.name || '').trim().slice(0, 40);
   if (!name) throw new Error('Give the agent a name');
   const handle = slug(a.handle || name).slice(0, 24);
   if (!handle) throw new Error('Give the agent a handle');
   if (!a.workdir || !path.isAbsolute(a.workdir)) throw new Error('Pick a folder with a full path');
+  if (a.postIn && !a.postIn.thread && !a.postIn.channel) throw new Error('Pick where the agent posts: in a thread, in the channel, or both');
   return {
     id: a.id || handle + '-' + crypto.randomBytes(2).toString('hex'),
     name, handle, runtime: a.runtime,
@@ -271,6 +273,6 @@ function sanitize(a: AgentConfig): AgentConfig {
     instructions: String(a.instructions || '').slice(0, 8000),
     autoApprove: (a.autoApprove || []).filter((k) => TOOL_KINDS.includes(k)),
     contextSize: Math.max(1, Math.min(200, Math.round(Number(a.contextSize) || 20))),
-    replyIn: a.replyIn === 'channel' ? 'channel' : 'thread',
+    ...agentRoomPrefs(a as unknown as Record<string, unknown>),
   };
 }

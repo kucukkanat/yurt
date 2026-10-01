@@ -1,8 +1,8 @@
 import React, { useEffect, useReducer, useState } from 'react';
 import { Dialog, Button, Input, Switch, Checkbox, Radio, Icon, Avatar, IconButton } from '@yurt/ui';
-import { fingerprint, inviteHash, parseRelays, parseServers, signalingOf, formatCode, type SignalKind } from '@yurt/protocol';
+import { fingerprint, inviteHash, parseRelays, parseServers, signalingOf, formatCode, agentPrefs, type SignalKind } from '@yurt/protocol';
 import { useApp, type SettingsSection } from '../store';
-import { useCurrent, useMedia } from '../model';
+import { useCurrent, useMedia, prefsLine } from '../model';
 import { bridge } from '../lib/bridge';
 import type { NetSettings } from '../lib/net';
 import { Row, Section } from './Nav';
@@ -409,14 +409,14 @@ function WsAgentsSection() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <BridgeLine version={bs.version} agents={bs.agents.length} />
       {bs.agents.length ? <>
-        <span style={{ fontSize: 13.5, color: 'var(--text-body)' }}>Pick which of your agents join <b>{state?.name}</b>. They reply when someone @mentions them.</span>
+        <span style={{ fontSize: 13.5, color: 'var(--text-body)' }}>Pick which of your agents join <b>{state?.name}</b>. Each one answers as set up in the bridge.</span>
         {bs.agents.map((a) => (
           <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 14, border: '1px solid ' + (picked.includes(a.id) ? 'var(--agent-ink)' : 'var(--border-subtle)'), background: picked.includes(a.id) ? 'var(--agent-soft)' : 'var(--surface-card)', cursor: 'pointer' }}>
             <Checkbox checked={picked.includes(a.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, a.id] : picked.filter((x) => x !== a.id))} aria-label={a.name} />
             <Avatar name={a.name} kind="agent" presence="online" size={28} decorative />
             <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
               <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)' }}>{a.name} <span style={{ fontWeight: 400, color: 'var(--text-subtle)' }}>@{a.handle}</span></span>
-              <span style={{ font: '400 11.5px/1.3 var(--font-mono)', color: 'var(--text-subtle)' }}>{a.runtime}{a.model ? ' · ' + a.model : ''} · replies in {a.replyIn}</span>
+              <span style={{ font: '400 11.5px/1.3 var(--font-mono)', color: 'var(--text-subtle)' }}>{a.runtime}{a.model ? ' · ' + a.model : ''} · {prefsLine(agentPrefs({ replyIn: 'thread', ...a }))}</span>
             </span>
           </label>
         ))}

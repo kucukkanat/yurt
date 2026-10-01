@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { RTCPeerConnection } from 'werift';
 import {
-  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, newTrysteroTransport, signalingOf, dmChannel, sha256Buf, makeEvent,
+  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, newTrysteroTransport, signalingOf, dmChannel, guestDmChannel, sha256Buf, makeEvent,
   type Ev, type JoinRoom, type KeyPair, type PeerStore, type WsTransport, type HuddleState, type WsState,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
@@ -101,9 +101,12 @@ describe('trystero transport', () => {
     const { p: c } = await device(C);
     await until(() => a.peers.size === 2 && b.peers.size === 2 && c.peers.size === 2);
     const dm = a.publish({ t: 'msg', ch: dmChannel(A.pub, B.pub), to: B.pub, b: { text: 'psst' } });
+    // B talking to A's agent: only B and A (who runs it) get either side.
+    const guest = b.publish({ t: 'msg', ch: guestDmChannel(B.pub, A.pub, 'harvey'), to: A.pub, b: { text: 'hi harvey' } });
+    const reply = a.publish({ t: 'msg', ch: guestDmChannel(B.pub, A.pub, 'harvey'), to: B.pub, ag: 'harvey', b: { text: 'hello' } });
     const pub = a.publish({ t: 'msg', ch: 'general', b: { text: 'everyone' } });
-    await until(() => b.events.has(dm.id) && c.events.has(pub.id));
-    expect(c.events.has(dm.id)).toBe(false);
+    await until(() => b.events.has(dm.id) && a.events.has(guest.id) && b.events.has(reply.id) && c.events.has(pub.id));
+    expect(c.events.has(dm.id) || c.events.has(guest.id) || c.events.has(reply.id)).toBe(false);
     b.setPresence({ typing: 'general' });
     await until(() => [...a.presence.values()].some((p) => p.pub === B.pub && p.typing === 'general'));
     expect(a.peerIdsFor([B.pub])).toHaveLength(1);

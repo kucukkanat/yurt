@@ -48,6 +48,8 @@ export interface MsgBody {
   trace?: TraceStep[];
   meta?: string;          // "Read 6 files · 8.3s"
   approval?: ApprovalReq;
+  /** A thread reply that also shows in the channel (an agent posting "in a thread + in the channel"). */
+  alsoInChannel?: true;
 }
 
 export interface AgentBody {
@@ -56,9 +58,18 @@ export interface AgentBody {
   handle: string;
   runtime: string;
   model?: string;
+  /** Kept for peers that predate `postIn`/`respondTo`: 'thread' when postIn.thread, else 'channel'. */
   replyIn: 'thread' | 'channel';
+  /** What makes it answer: @mentions, and/or replies in threads it takes part in (no @ needed). */
+  respondTo?: AgentTriggers;
+  /** Where it answers: in a thread, in the channel, or both (a thread reply also shown in the channel). */
+  postIn?: AgentPlacement;
+  /** Other members may find it and message it directly (their chats are visible to its owner). */
+  discoverable?: boolean;
   removed?: boolean;
 }
+export interface AgentTriggers { mentions: boolean; replies: boolean }
+export interface AgentPlacement { thread: boolean; channel: boolean }
 
 export interface ProfileBody { name: string; handle: string }
 export interface ChannelBody { id: string; name: string; topic?: string }

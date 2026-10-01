@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 import {
-  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, dmChannel, makeEvent, workspaceKeys, uploadFile, sha256Buf, seal,
+  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, dmChannel, guestDmChannel, makeEvent, workspaceKeys, uploadFile, sha256Buf, seal,
   type Ev, type KeyPair, type PeerStore, type WsTransport, type KeyedTransport, type WorkspacePeerOpts,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
@@ -118,6 +118,20 @@ describe('nostr transport', () => {
     const marker = c.publish({ t: 'msg', ch: 'general', b: { text: 'marker' } });
     await until(() => b.events.has(marker.id));
     expect(c.events.has(dm.id)).toBe(false);
+  });
+
+  it('carries a guest DM with someone else\'s agent to the member and the owner only', async () => {
+    const a = await join(A);
+    const b = await join(B);
+    const c = await join(C);
+    const ch = guestDmChannel(B.pub, A.pub, 'harvey');
+    const ask = b.publish({ t: 'msg', ch, to: A.pub, b: { text: 'hi harvey' } });
+    await until(() => texts(a).includes('hi harvey'));
+    const answer = a.publish({ t: 'msg', ch, to: B.pub, ag: 'harvey', b: { text: 'hello from harvey' } });
+    await until(() => texts(b).includes('hello from harvey'));
+    const marker = c.publish({ t: 'msg', ch: 'general', b: { text: 'marker' } });
+    await until(() => a.events.has(marker.id) && b.events.has(marker.id));
+    expect(c.events.has(ask.id) || c.events.has(answer.id)).toBe(false);
   });
 
   it('syncs DMs to the author\'s other devices', async () => {

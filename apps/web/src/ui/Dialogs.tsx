@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Dialog, Button, Input, Tabs, Switch, Radio, Icon, Kbd, Avatar } from '@yurt/ui';
-import { formatCode, dmChannel, agentDmChannel, liveAgents, parseRelays, parseServers, DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, type WsTransport, type SignalKind } from '@yurt/protocol';
+import { formatCode, dmChannel, agentDmChannel, guestDmChannel, agentPrefs, liveAgents, parseRelays, parseServers, DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, type WsTransport, type SignalKind } from '@yurt/protocol';
 import { useApp } from '../store';
 import { useCurrent, roster } from '../model';
 import { defaultNewNet, netFromForm } from '../lib/newNet';
@@ -153,7 +153,12 @@ function JumpDialog({ onClose }: { onClose: () => void }) {
       for (const p of roster(state, peer, me)) {
         if (p.kind === 'human') out.push({ id: 'p' + p.id, label: p.name + (p.self ? ' (you)' : ''), sub: '@' + p.handle, icon: <Avatar name={p.name} self={p.self} presence={p.presence} size={20} decorative />, go: () => app.go({ code, ch: dmChannel(me, p.pub) }) });
       }
-      for (const a of liveAgents(state).filter((x) => x.owner === me)) out.push({ id: 'a' + a.id, label: a.name, sub: 'Your agent · private chat', icon: <Avatar name={a.name} kind="agent" size={20} decorative />, go: () => app.go({ code, ch: agentDmChannel(me, a.id) }) });
+      for (const a of liveAgents(state)) {
+        const icon = <Avatar name={a.name} kind="agent" size={20} decorative />;
+        if (a.owner === me) out.push({ id: 'a' + a.id, label: a.name, sub: 'Your agent · private chat', icon, go: () => app.go({ code, ch: agentDmChannel(me, a.id) }) });
+        // Someone else's agent only when its owner made it discoverable; the rest are reached by @mention.
+        else if (agentPrefs(a).discoverable) out.push({ id: 'g' + a.owner + a.id, label: a.name, sub: (state.profiles.get(a.owner)?.name || 'Someone') + '’s agent · discoverable', icon, go: () => app.go({ code, ch: guestDmChannel(me, a.owner, a.id) }) });
+      }
     }
     for (const w of workspaces) if (w.code !== route.code) out.push({ id: 'w' + w.code, label: w.name, sub: 'Workspace · ' + formatCode(w.code), icon: <Icon name="layers" size={16} />, go: () => app.go({ code: w.code }) });
     const s = q.trim().toLowerCase();

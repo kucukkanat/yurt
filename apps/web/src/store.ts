@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { privateTarget } from './lib/private';
 import {
   keyFromPhrase, newInviteCode, normalizeCode, formatCode, slug, mentions, sha256Buf, MAX_FILE_BYTES,
   parseInvite, newNostrTransport, newTrysteroTransport, LEGACY_TRYSTERO, uploadFile, DEFAULT_BLOSSOM,
@@ -119,11 +120,6 @@ let typingTimer: ReturnType<typeof setTimeout> | null = null;
 let readTimer: ReturnType<typeof setTimeout> | null = null;
 let toastId = 0;
 
-function privateTarget(ch: string, me: string): string | undefined {
-  if (ch.startsWith('dm:')) return ch.slice(3).split(':').find((k) => k !== me) || me;
-  if (ch.startsWith('adm:')) return me;
-  return undefined;
-}
 
 export const useApp = create<AppState>((set, get) => {
   const saveWs = (ws: WsRecord[]) => { set({ workspaces: ws }); kv.set('workspaces', ws); };
@@ -138,12 +134,13 @@ export const useApp = create<AppState>((set, get) => {
       if (e.t !== 'msg' || !e.ch || (e.a === identity.pub && !e.ag) || Date.now() - e.ts > 60_000) continue;
       if (rec?.muted.includes(e.ch)) continue;
       const text = String(e.b?.text || '');
-      const forMe = mentions(text).includes(identity.handle.toLowerCase()) || e.ch.startsWith('dm:') || e.ch.startsWith('adm:');
+      const direct = e.ch.startsWith('dm:') || e.ch.startsWith('adm:') || e.ch.startsWith('gdm:');
+      const forMe = mentions(text).includes(identity.handle.toLowerCase()) || direct;
       if (!forMe) continue;
       const here = !document.hidden && route.code === code && route.ch === e.ch;
       if (here || !settings.notifications) continue;
       const author = e.ag ? s.agents.get(e.a + '/' + e.ag)?.name || 'Agent' : s.profiles.get(e.a)?.name || 'Someone';
-      const where = e.ch.startsWith('dm:') || e.ch.startsWith('adm:') ? author : author + ' in #' + (s.channels.get(e.ch)?.name || '');
+      const where = direct ? author : author + ' in #' + (s.channels.get(e.ch)?.name || '');
       notify(e.b?.approval ? author + ' needs you' : where, e.b?.approval ? e.b.approval.title : text.slice(0, 140), () => get().go({ code, ch: e.ch }));
     }
   };

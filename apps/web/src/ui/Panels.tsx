@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { Icon, IconButton, Button, Avatar, Badge, MemberRow, Input, Kbd } from '@yurt/ui';
-import { fingerprint, dmChannel, agentDmChannel, type Msg } from '@yurt/protocol';
+import { fingerprint, dmChannel, agentDmChannel, guestDmChannel, type Msg } from '@yurt/protocol';
 import { useApp } from '../store';
-import { useCurrent, roster, personFor, authorKey, channelTitle, type Person } from '../model';
+import { useCurrent, roster, personFor, authorKey, channelTitle, prefsLine, type Person } from '../model';
 import { fmtTime, fmtDay } from '../lib/format';
 import { MessageItem, type MsgCtx } from './Message';
 import { Composer } from './Composer';
@@ -109,6 +109,7 @@ function Profile({ id }: { id: string }) {
           <Line k="Runtime" v={p.runtime || '—'} />
           <Line k="Runs on" v={(p.owner?.self ? 'Your' : p.owner?.name + '’s') + ' machine'} />
           <Line k="Owner key" v={fingerprint(p.pub)} mono />
+          {p.prefs && <Line k="Settings" v={<span data-testid="agent-prefs">{prefsLine(p.prefs)}</span>} />}
         </> : <Line k="Key" v={fingerprint(p.pub)} mono />}
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -117,6 +118,9 @@ function Profile({ id }: { id: string }) {
           <Button variant="agent" size="sm" iconLeft="lock" onClick={() => app.go({ code, ch: agentDmChannel(me, p.agentId!) })}>Message privately</Button>
           <Button variant="secondary" size="sm" iconLeft="external-link" onClick={() => window.open('http://127.0.0.1:7717/', '_blank')}>Configure</Button>
         </>}
+        {p.kind === 'agent' && !p.owner?.self && (p.prefs?.discoverable
+          ? <Button variant="agent" size="sm" iconLeft="message-square" data-testid="agent-message" onClick={() => app.go({ code, ch: guestDmChannel(me, p.pub, p.agentId ?? '') })}>Message</Button>
+          : <span data-testid="agent-not-discoverable" style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>Not discoverable: @mention {p.name} in a channel or reply to its messages.</span>)}
       </div>
       {p.kind === 'human' && !p.self && iAmAdmin && !p.creator && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12, borderTop: '1px solid var(--border-subtle)' }}>

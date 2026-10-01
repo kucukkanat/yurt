@@ -1,6 +1,6 @@
 import type { WorkspacePeer, Msg, TraceStep, AgentConfig } from '@yurt/protocol';
-import { agentDmChannel, mentions, agentKey } from '@yurt/protocol';
-import type { Ev } from '@yurt/protocol';
+import { agentDmChannel, mentions, agentKey, parseGuestDm } from '@yurt/protocol';
+import type { Ev, WsState } from '@yurt/protocol';
 import { AcpConnection, isAuthError, type AcpUpdate } from './acp';
 import { RUNTIMES, acpCommand } from './runtimes';
 import type { Config } from './config';
@@ -8,6 +8,8 @@ import { log } from './log';
 import { saveAttachment } from './files';
 
 type Status = 'idle' | 'working' | 'waiting' | 'error';
+/** What started a run: an @mention, a follow-up in its thread, its owner's private chat, or another member's DM. */
+type Kind = 'mention' | 'reply' | 'dm' | 'guest';
 interface Session { conn: AcpConnection; id: string; key: string; onUpdate?: (u: AcpUpdate) => void }
 interface Run { peer: WorkspacePeer; ch: string; trace: TraceStep[] }
 
@@ -24,6 +26,27 @@ export const mentionedAgents = (agents: readonly AgentConfig[], wsAgents: readon
   const handles = mentions(text);
   return wsAgents.filter((id) => id !== from && agents.some((a) => a.id === id && handles.includes(a.handle.toLowerCase())));
 };
+
+/**
+ * Agents in this workspace with replies turned on that already take part in the thread `m` belongs to
+ * (they started it or answered in it), never the agent `from` that wrote `m`.
+ */
+export const repliedAgents = (agents: readonly AgentConfig[], wsAgents: readonly string[], s: WsState, m: Msg, me: string, from?: string): string[] => {
+  const root = m.parent ? s.msgs.get(m.parent) : undefined;
+  if (!root) return [];
+  const thread = [root, ...root.replies.map((id) => s.msgs.get(id))].filter((x): x is Msg => !!x && x.id !== m.id);
+  return wsAgents.filter((id) => id !== from && agents.some((a) => a.id === id && a.respondTo.replies) && thread.some((x) => x.a === me && x.ag === id));
+};
+
+/**
+ * Where an answer goes. DMs stay flat. "Thread" answers in the trigger's thread (starting one); "channel" answers
+ * at the top, or inside the thread the trigger is already in; both = a thread reply also shown in the channel.
+ */
+export function placement(a: Pick<AgentConfig, 'postIn'>, trigger: Pick<Msg, 'id' | 'parent'>, kind: Kind): { parent?: string; alsoInChannel?: true } {
+  if (kind === 'dm' || kind === 'guest') return {};
+  if (!a.postIn.thread) return { parent: trigger.parent };
+  return { parent: trigger.parent || trigger.id, ...(a.postIn.channel ? { alsoInChannel: true as const } : {}) };
+}
 
 /** Runs the owner's agents: one ACP session per agent, prompts queued, replies posted back into the room. */
 export class AgentHost {
@@ -45,7 +68,10 @@ export class AgentHost {
     return w && w.code === code ? w.ch : null;
   }
 
-  drop(id: string) { this.sessions.get(id)?.conn.close(); this.sessions.delete(id); }
+  /** Closes every session of an agent: its main one and each member's guest session. */
+  drop(id: string) {
+    for (const [slot, s] of this.sessions) if (slot === id || slot.startsWith(id + '|')) { s.conn.close(); this.sessions.delete(slot); }
+  }
 
   onEvents(peer: WorkspacePeer, fresh: Ev[]) {
     const me = this.me();
@@ -62,11 +88,20 @@ export class AgentHost {
         if (owner === me && e.a === me && !e.ag && this.agent(id)) this.enqueue(id, peer, m, 'dm');
         continue;
       }
+      const g = parseGuestDm(e.ch);
+      if (g) {
+        // Another member messaging one of my agents: only while it's in this workspace and discoverable.
+        const a = this.agent(g.agentId);
+        if (g.owner === me && e.a === g.member && !e.ag && a?.discoverable && ws.agents.includes(a.id)) this.enqueue(a.id, peer, m, 'guest');
+        continue;
+      }
       if (e.ch.startsWith('dm:')) continue;
-      const targets = mentionedAgents(this.cfg.agents, ws.agents, m.text, e.ag);
+      const mentioned = mentionedAgents(this.cfg.agents, ws.agents, m.text, e.ag).filter((id) => this.agent(id)?.respondTo.mentions);
+      const replied = repliedAgents(this.cfg.agents, ws.agents, peer.state, m, me, e.ag).filter((id) => !mentioned.includes(id));
       // Only agent messages that actually hand off to another agent count toward the chain limit.
-      if (!targets.length || (e.ag && !this.allowAgentChain(e.ch))) continue;
-      for (const id of targets) this.enqueue(id, peer, m, 'mention');
+      if ((!mentioned.length && !replied.length) || (e.ag && !this.allowAgentChain(e.ch))) continue;
+      for (const id of mentioned) this.enqueue(id, peer, m, 'mention');
+      for (const id of replied) this.enqueue(id, peer, m, 'reply');
     }
   }
 
@@ -80,14 +115,16 @@ export class AgentHost {
     return true;
   }
 
-  private enqueue(id: string, peer: WorkspacePeer, m: Msg, kind: 'dm' | 'mention') {
+  private enqueue(id: string, peer: WorkspacePeer, m: Msg, kind: Kind) {
     const q = (this.queues.get(id) || Promise.resolve()).then(() => this.exec(id, peer, m, kind)).catch((e) => log('error', id, String(e?.message || e)));
     this.queues.set(id, q);
   }
 
-  private async session(a: AgentConfig): Promise<Session> {
+  // `slot` is the agent id, or `id|guest:<member>`: another member's DMs get their own session, so nothing the
+  // agent remembers from its owner's chats (or other members') can surface in that conversation.
+  private async session(a: AgentConfig, slot: string = a.id): Promise<Session> {
     const key = [a.runtime, a.workdir, a.model || ''].join('|');
-    const cur = this.sessions.get(a.id);
+    const cur = this.sessions.get(slot);
     if (cur && !cur.conn.closed && cur.key === key) return cur;
     cur?.conn.close();
     const conn = new AcpConnection(a.name, ...acpCommand(a.runtime), a.workdir);
@@ -95,7 +132,7 @@ export class AgentHost {
     conn.onUpdate = (_sid, u) => s.onUpdate?.(u);
     // By id, not `a`: saving the agent replaces its config object, and auto-approve changes must apply mid-session.
     conn.onPermission = (p) => this.permission(a.id, p);
-    conn.onExit = () => { if (this.sessions.get(a.id) === s) this.sessions.delete(a.id); };
+    conn.onExit = () => { if (this.sessions.get(slot) === s) this.sessions.delete(slot); };
     try {
       await conn.initialize();
       const res = await conn.request<{ sessionId: string }>('session/new', { cwd: a.workdir, mcpServers: [] }, 120_000);
@@ -105,7 +142,7 @@ export class AgentHost {
       throw e;
     }
     if (a.model) await conn.request('session/set_model', { sessionId: s.id, modelId: a.model }, 20_000).catch((e) => log('warn', a.name, 'model not set: ' + e.message));
-    this.sessions.set(a.id, s);
+    this.sessions.set(slot, s);
     log('info', a.name, `session ${s.id} on ${RUNTIMES[a.runtime].name} in ${a.workdir}`);
     return s;
   }
@@ -126,14 +163,17 @@ export class AgentHost {
     return saved;
   }
 
-  private prompt(a: AgentConfig, peer: WorkspacePeer, trigger: Msg, kind: 'dm' | 'mention', saved: ReadonlyMap<string, string> = new Map()): string {
+  private prompt(a: AgentConfig, peer: WorkspacePeer, trigger: Msg, kind: Kind, saved: ReadonlyMap<string, string> = new Map()): string {
     const s = peer.state;
     const me = this.me()!;
     const nameOf = (m: Msg) => (m.ag ? (s.agents.get(agentKey(m.a, m.ag))?.name || m.ag) + ' (agent)' : (s.profiles.get(m.a)?.name || 'Someone') + ' (@' + (s.profiles.get(m.a)?.handle || '?') + ')');
     let ids: string[];
     let where: string;
     const chName = s.channels.get(trigger.ch)?.name || trigger.ch;
+    const owner = s.profiles.get(me)?.name || 'your owner';
+    const guest = s.profiles.get(trigger.a);
     if (kind === 'dm') { ids = s.channelMsgs.get(trigger.ch) || []; where = 'a private chat with your owner'; }
+    else if (kind === 'guest') { ids = s.channelMsgs.get(trigger.ch) || []; where = `a private chat with ${guest?.name || 'a member'} (@${guest?.handle || '?'}), a member of the workspace. ${owner} can read this chat too`; }
     else if (trigger.parent) { const p = s.msgs.get(trigger.parent); ids = p ? [p.id, ...p.replies] : [trigger.id]; where = 'a thread in #' + chName; }
     else { ids = s.channelMsgs.get(trigger.ch) || []; where = '#' + chName; }
     const cut = ids.indexOf(trigger.id);
@@ -142,16 +182,16 @@ export class AgentHost {
     const fileLine = (m: Msg, f: Msg['files'][number]) => (m.id !== trigger.id ? f.name : saved.has(f.id) ? `${f.name} → ${saved.get(f.id)}` : `${f.name} (couldn't download)`);
     const lines = recent.map((id) => s.msgs.get(id)).filter((m): m is Msg => !!m && !m.deleted)
       .map((m) => `[${new Date(m.ts).toISOString().slice(11, 16)}] ${nameOf(m)}: ${m.text}${m.files.length ? ' [attached: ' + m.files.map((f) => fileLine(m, f)).join(', ') + ']' : ''}`);
-    const owner = s.profiles.get(me)?.name || 'your owner';
+    const ask = kind === 'dm' ? ' from your owner' : kind === 'guest' ? ' from ' + (guest?.name || 'them') : kind === 'reply' ? ', a follow-up in a thread you take part in' : ', which mentions you';
     return [
       `You are ${a.name} (@${a.handle}), an AI agent in the Yurt workspace "${s.name}", speaking in ${where}. ${owner} owns you and runs you on their machine.`,
       a.instructions ? `\nYour instructions from ${owner}:\n${a.instructions}` : '',
       `\nRecent messages, oldest first:\n${lines.join('\n')}`,
-      `\nReply to the last message${kind === 'dm' ? ' from your owner' : ', which mentions you'}. Your reply is posted to the room exactly as you write it, so write the message itself: concise, plain text or light Markdown, no preamble.`,
+      `\nReply to the last message${ask}. Your reply is posted to the room exactly as you write it, so write the message itself: concise, plain text or light Markdown, no preamble.`,
     ].join('\n');
   }
 
-  private async exec(id: string, peer: WorkspacePeer, trigger: Msg, kind: 'dm' | 'mention') {
+  private async exec(id: string, peer: WorkspacePeer, trigger: Msg, kind: Kind) {
     const a = this.agent(id);
     const me = this.me();
     if (!a || !me) return;
@@ -164,7 +204,7 @@ export class AgentHost {
     this.setStatus(id, 'working');
     this.runs.set(id, { peer, ch: trigger.ch, trace });
     try {
-      const s = await this.session(a);
+      const s = await this.session(a, kind === 'guest' ? a.id + '|guest:' + trigger.a : a.id);
       s.onUpdate = (u) => {
         if (u.sessionUpdate === 'agent_message_chunk' && u.content?.type === 'text') text += u.content.text || '';
         else if (u.sessionUpdate === 'tool_call' && u.toolCallId) {
@@ -196,10 +236,9 @@ export class AgentHost {
     }
     const secs = ((Date.now() - t0) / 1000).toFixed(1) + 's';
     const nTools = tools.size;
-    const parent = kind === 'dm' ? undefined : a.replyIn === 'thread' ? trigger.parent || trigger.id : trigger.parent;
     peer.publish({
-      t: 'msg', ch: trigger.ch, ag: a.id, to: kind === 'dm' ? me : undefined,
-      b: { text: text.trim(), parent, trace: trace.length ? trace : undefined, meta: (nTools ? nTools + (nTools === 1 ? ' tool · ' : ' tools · ') : '') + secs },
+      t: 'msg', ch: trigger.ch, ag: a.id, to: kind === 'dm' ? me : kind === 'guest' ? trigger.a : undefined,
+      b: { text: text.trim(), ...placement(a, trigger, kind), trace: trace.length ? trace : undefined, meta: (nTools ? nTools + (nTools === 1 ? ' tool · ' : ' tools · ') : '') + secs },
     });
   }
 

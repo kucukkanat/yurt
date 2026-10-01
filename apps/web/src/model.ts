@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { agentKey, fingerprint, liveAgents, members, mentions, type WsState, type WorkspacePeer, type Msg } from '@yurt/protocol';
+import { agentKey, agentPrefs, fingerprint, liveAgents, members, mentions, type WsState, type WorkspacePeer, type Msg } from '@yurt/protocol';
+import { isDirect, guestDmTitle, type AgentPrefs } from './lib/private';
+export { prefsLine } from './lib/private';
 import { useApp, type WsRecord, type AppState } from './store';
 import { CALM, type FaviconState } from './lib/favicon';
 import { getPeer } from './lib/net';
@@ -10,6 +12,8 @@ export interface Person {
   self?: boolean; owner?: { name: string; self?: boolean };
   presence?: 'online' | 'away' | 'offline'; working?: boolean;
   admin?: boolean; creator?: boolean; runtime?: string; banned?: boolean;
+  /** Agents only: when it answers, where it posts, and whether other members can DM it. */
+  prefs?: AgentPrefs;
 }
 
 export function useCurrent() {
@@ -58,7 +62,7 @@ export function personFor(state: WsState | undefined, peer: WorkspacePeer | unde
     const a = state?.agents.get(key);
     const owner = state?.profiles.get(pub);
     const pr = agentPresence(peer, pub, agentId);
-    return { id: key, pub, agentId, name: a?.name || agentId, handle: a?.handle || agentId, kind: 'agent', runtime: a?.runtime,
+    return { id: key, pub, agentId, name: a?.name || agentId, handle: a?.handle || agentId, kind: 'agent', runtime: a?.runtime, prefs: a ? agentPrefs(a) : undefined,
       owner: { name: pub === me ? 'You' : owner?.name || 'Someone', self: pub === me }, presence: pr.online ? 'online' : 'offline', working: !!pr.working };
   }
   const p = state?.profiles.get(pub);
@@ -86,7 +90,7 @@ export function unread(state: WsState, rec: WsRecord | undefined, ch: string, me
     if (x.ts <= last) break;
     if ((x.a === me && !x.ag) || x.deleted) continue;
     n++;
-    if (mentions(x.text).includes(handle) || ch.startsWith('dm:') || (ch.startsWith('adm:') && x.approval)) m++;
+    if (mentions(x.text).includes(handle) || isDirect(ch) || (ch.startsWith('adm:') && x.approval)) m++;
   }
   return { n, m };
 }
@@ -94,6 +98,8 @@ export function unread(state: WsState, rec: WsRecord | undefined, ch: string, me
 export function channelTitle(state: WsState | undefined, ch: string, me: string): string {
   if (ch.startsWith('dm:')) { const other = ch.slice(3).split(':').find((k) => k !== me) || me; return state?.profiles.get(other)?.name || fingerprint(other); }
   if (ch.startsWith('adm:')) { const [, owner, id] = ch.split(':'); return state?.agents.get(owner + '/' + id)?.name || id; }
+  const guest = guestDmTitle(state, ch, me);
+  if (guest) return guest;
   return state?.channels.get(ch)?.name || ch;
 }
 

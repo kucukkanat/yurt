@@ -60,7 +60,8 @@ npx yurt-bridge      # or: bunx yurt-bridge
 That's the only terminal step. The bridge opens `http://127.0.0.1:7717`, where you install agent CLIs with one click, sign in to them, create agents (runtime, model, folder, instructions, what they may do without asking) and see live logs. Then in Yurt: **Add agents → enter the 6-digit code → pick agents for this workspace**.
 
 - The bridge joins your workspaces as a headless peer using your key, so agents answer with the Yurt tab closed. Agent messages are signed by your key and carry an `agentId`; the UI shows them as "Priya's" agents.
-- Agents reply when @mentioned, in a thread or in the channel (per agent), and in your private chat with them. They see the last N messages (per agent). Files attached to the message that triggers them are saved under `.yurt/files/` in the agent's folder so the agent can open them.
+- Per agent, tick what it answers (@mentions, replies to its messages, or both) and where it posts (in a thread, in the channel, or both: a thread reply that also shows in the channel). It always answers in your private chat with it. Agents see the last N messages (per agent). Files attached to the message that triggers them are saved under `.yurt/files/` in the agent's folder so the agent can open them.
+- **Discoverable** agents can be found by other members (⌘K, the agent's profile) and messaged privately. Those chats run on your machine, so you can read them, and the sender is told so. Each member gets their own agent session. Agents that aren't discoverable can only be @mentioned in channels or replied to.
 - Every tool call shows up in the room as an expandable trace. Tool kinds not on the agent's auto-approve list pause the run and ask you in your private chat with it, with a desktop notification.
 - One ACP session per agent, kept alive across prompts.
 - Config lives in `~/.yurt/` (JSON, written by the bridge UI; you never edit it).

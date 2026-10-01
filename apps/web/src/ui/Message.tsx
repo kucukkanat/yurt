@@ -3,6 +3,7 @@ import { ChatMessage, MentionText, ApprovalCard, Button, Kbd, Icon, IconButton }
 import { EDIT_WINDOW_MS, mentions, type Msg, type WsState, type WorkspacePeer, type FileRef } from '@yurt/protocol';
 import { editLeft, editLeftLabel, EDIT_CLOSED } from '../lib/editWindow';
 import { useApp } from '../store';
+import { privateTarget } from '../lib/private';
 import { personFor, authorKey, type Person } from '../model';
 import { blobsDb } from '../lib/db';
 import { fmtTime, fmtBytes } from '../lib/format';
@@ -117,25 +118,33 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
     ctx.forceRender();
     app.toast({ title: 'Message deleted', actionLabel: 'Undo', duration: 5000,
       onAction: () => { undone = true; pendingDeletes.delete(m.id); ctx.forceRender(); },
-      onDismiss: () => { if (undone) return; pendingDeletes.delete(m.id); app.publish(code, { t: 'del', b: { target: m.id }, ch: m.ch, to: m.to }); } });
+      onDismiss: () => { if (undone) return; pendingDeletes.delete(m.id); app.publish(code, { t: 'del', b: { target: m.id }, ch: m.ch, to: privateTarget(m.ch, me) }); } });
   };
   const explainClosed = () => app.toast({ ...EDIT_CLOSED, duration: 8000, ...(ctx.inThread ? {} : { actionLabel: 'Reply in thread', onAction: openThread }) });
   const saveEdit = (t: string) => {
     useApp.setState({ editing: null });
     // The window can close while the editor is open; say so instead of publishing an edit nobody will apply.
     if (editLeft(m.ts, Date.now()) === 0) { explainClosed(); return; }
-    app.publish(code, { t: 'edit', ch: m.ch, to: m.to, b: { target: m.id, text: t } });
+    app.publish(code, { t: 'edit', ch: m.ch, to: privateTarget(m.ch, me), b: { target: m.id, text: t } });
   };
   const approval = m.approval;
   const decided = approval ? state.approvals.get(approval.req) : undefined;
   const decidedKind = approval && decided ? approval.options.find((o) => o.id === decided)?.kind || '' : '';
   return (
     <div data-mid={m.id}>
+      {/* A thread reply also shown in the channel: point back to the conversation it answers. */}
+      {!ctx.inThread && m.alsoInChannel && m.parent && (
+        <button type="button" data-testid="also-in-channel" onClick={() => app.go({ code, ch: m.ch, thread: m.parent })}
+          style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', maxWidth: '100%', padding: '4px 16px 0 58px', border: 0, background: 'none', cursor: 'pointer', font: '400 12px/1.3 var(--font-body)', color: 'var(--text-subtle)', textAlign: 'left' }}>
+          <Icon name="reply" size={12} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>replied in a thread: {state.msgs.get(m.parent)?.text.slice(0, 80) || 'view thread'}</span>
+        </button>
+      )}
       <ChatMessage
         author={author as any} time={fmtTime(m.ts)} members={ctx.roster.map((p) => ({ id: p.id, handle: p.handle, kind: p.kind }))} meId={me}
         tone={mentionsMe ? 'mention' : agentTalk ? 'agent' : 'default'} continued={continued} edited={m.edited} pinned={pinned}
         status={peer?.queued.has(m.id) ? 'queued' : 'sent'} reactions={reactions}
-        onReact={(icon) => app.publish(code, { t: 'react', ch: m.ch, to: m.to, b: { target: m.id, icon, on: !m.reactions[icon]?.includes(me) } })}
+        onReact={(icon) => app.publish(code, { t: 'react', ch: m.ch, to: privateTarget(m.ch, me), b: { target: m.id, icon, on: !m.reactions[icon]?.includes(me) } })}
         onPin={m.ch.includes(':') ? undefined : () => app.publish(code, { t: 'pin', b: { target: m.id, on: !pinned } })}
         replies={!ctx.inThread && m.replies.length ? { count: m.replies.length, last: lastReply ? 'Last reply ' + fmtTime(lastReply.ts) : undefined, people: replyPeople as any } : undefined}
         onReplies={openThread} onReply={ctx.inThread ? undefined : openThread}

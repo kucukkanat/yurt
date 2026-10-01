@@ -36,8 +36,21 @@ export function agentDmChannel(owner: string, agentId: string): string {
   return 'adm:' + owner + ':' + agentId;
 }
 
+/** A member's private chat with someone else's discoverable agent. Its owner is a party too: the agent runs with their key. */
+export function guestDmChannel(member: string, owner: string, agentId: string): string {
+  return 'gdm:' + member + ':' + owner + ':' + agentId;
+}
+
+/** The parts of a gdm: channel id, or null if it isn't one. */
+export function parseGuestDm(ch: string): { member: string; owner: string; agentId: string } | null {
+  if (!ch.startsWith('gdm:')) return null;
+  const [member, owner, ...rest] = ch.slice(4).split(':');
+  const agentId = rest.join(':');
+  return member && owner && agentId ? { member, owner, agentId } : null;
+}
+
 export function isPrivateChannel(ch: string): boolean {
-  return ch.startsWith('dm:') || ch.startsWith('adm:');
+  return ch.startsWith('dm:') || ch.startsWith('adm:') || ch.startsWith('gdm:');
 }
 
 export function slug(s: string): string {

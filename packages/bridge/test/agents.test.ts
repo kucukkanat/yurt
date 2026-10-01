@@ -13,7 +13,7 @@ afterAll(() => restorePath());
 
 const agent = (workdir: string, p: Partial<AgentConfig> = {}): AgentConfig => ({
   id: 'scout-1', name: 'Scout', handle: 'scout', runtime: 'copilot', workdir, instructions: '',
-  autoApprove: ['edit'], contextSize: 20, replyIn: 'thread', ...p,
+  autoApprove: ['edit'], contextSize: 20, respondTo: { mentions: true, replies: false }, postIn: { thread: true, channel: false }, discoverable: false, ...p,
 });
 const config = (agents: AgentConfig[]): Config => ({ adminToken: 't', tokens: [], startOnLogin: false, allowedOrigins: [], agents, workspaces: [] });
 const workdir = (mode?: string) => {

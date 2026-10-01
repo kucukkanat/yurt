@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Icon, IconButton, Tooltip, Kbd, Badge, Avatar, DaemonStatus } from '@yurt/ui';
-import { liveAgents, fingerprint, formatCode, agentDmChannel } from '@yurt/protocol';
+import { liveAgents, fingerprint, formatCode, agentDmChannel, agentKey, parseGuestDm } from '@yurt/protocol';
 import { useApp } from '../store';
 import { useCurrent, unread, personFor, channelTitle, othersOnline } from '../model';
 import { HuddleDock } from './Huddle';
@@ -52,7 +52,9 @@ export function Sidebar() {
   const [menu, setMenu] = useState(false);
   const me = identity.pub;
   const channels = useMemo(() => (state ? [...state.channels.values()].sort((a, b) => a.name.localeCompare(b.name)) : []), [state]);
-  const dms = useMemo(() => (state ? [...state.channelMsgs.keys()].filter((k) => k.startsWith('dm:') && k.includes(me)) : []), [state, me]);
+  const dms = useMemo(() => (state ? [...state.channelMsgs.keys()].filter((k) => (k.startsWith('dm:') && k.includes(me)) || parseGuestDm(k)?.member === me) : []), [state, me]);
+  // Other members' conversations with my discoverable agents, listed under each agent.
+  const guestChats = useMemo(() => (state ? [...state.channelMsgs.keys()].flatMap((k) => { const g = parseGuestDm(k); return g && g.owner === me && g.member !== me ? [{ ch: k, ...g }] : []; }) : []), [state, me]);
   const myAgents = state ? liveAgents(state).filter((a) => a.owner === me) : [];
   const huddleChs = new Set<string>();
   if (peer) for (const h of peer.huddles.values()) if (h.ch) huddleChs.add(h.ch);
@@ -110,6 +112,11 @@ export function Sidebar() {
         </Section>
         <Section title="Direct messages" onAdd={() => setDialog('jump')} addLabel="New direct message">
           {dms.map((ch) => {
+            const g = parseGuestDm(ch);
+            if (g) {
+              const p = personFor(state, peer, agentKey(g.owner, g.agentId), me);
+              return chRow(ch, channelTitle(state, ch, me), <Avatar name={p.name} kind="agent" presence={p.presence} working={p.working} size={20} decorative cutout="var(--surface-sunken)" />);
+            }
             const other = ch.slice(3).split(':').find((k) => k !== me) || me;
             const p = personFor(state, peer, other, me);
             return chRow(ch, channelTitle(state, ch, me) + (other === me ? ' (you)' : ''), <Avatar name={p.name} self={p.self} presence={p.presence} size={20} decorative cutout="var(--surface-sunken)" />);
@@ -119,7 +126,13 @@ export function Sidebar() {
         <Section title="Your agents" onAdd={() => openSettings('ws-agents')} addLabel="Add agent">
           {myAgents.map((a) => {
             const p = personFor(state, peer, a.owner + '/' + a.id, me);
-            return chRow(agentDmChannel(me, a.id), a.name, <Avatar name={a.name} kind="agent" presence={p.presence} working={p.working} size={20} decorative cutout="var(--surface-sunken)" />);
+            return [
+              chRow(agentDmChannel(me, a.id), a.name, <Avatar name={a.name} kind="agent" presence={p.presence} working={p.working} size={20} decorative cutout="var(--surface-sunken)" />),
+              ...guestChats.filter((g) => g.agentId === a.id).map((g) => {
+                const who = personFor(state, peer, g.member, me);
+                return chRow(g.ch, <span data-testid="guest-chat-row" style={{ paddingLeft: 'var(--space-4)' }}>{who.name}</span>, <Avatar name={who.name} presence={who.presence} size={16} decorative cutout="var(--surface-sunken)" />);
+              }),
+            ];
           })}
           {!myAgents.length && <div style={{ padding: '4px 10px', fontSize: 13, color: 'var(--text-subtle)' }}>Optional. Runs on your machine.</div>}
         </Section>

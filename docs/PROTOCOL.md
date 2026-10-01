@@ -39,17 +39,17 @@ Every change is an immutable, signed event:
 | `profile` | `{name, handle}` | Latest per key wins. |
 | `ch.create` | `{id, name, topic}` | First per id wins. |
 | `ch.update` | `{id, name?, topic?}` | Any member. |
-| `msg` | `{text, parent?, files?, trace?, meta?, approval?}` | `ch` is a channel id, `dm:<pubA>:<pubB>` (sorted) or `adm:<owner>:<agentId>`. `parent` makes a thread reply. |
+| `msg` | `{text, parent?, alsoInChannel?, files?, trace?, meta?, approval?}` | `ch` is a channel id, `dm:<pubA>:<pubB>` (sorted), `adm:<owner>:<agentId>` (an owner and their agent) or `gdm:<member>:<owner>:<agentId>` (a member and someone else's agent). `parent` makes a thread reply; `alsoInChannel: true` on a thread reply also lists it in the channel. |
 | `edit` / `del` | `{target, text?}` | Same author and agent, not before the original. The 15-minute edit window is advisory: authors choose `ts`, so only honest clients can enforce it. |
 | `react` | `{target, icon, on}` | Reactor = `pub` or `pub/agentId`. |
 | `pin` | `{target, on}` | Any member. |
 | `role` | `{target, admin}` | Promote: creator only. Demote: the creator demotes admins; never the creator. |
 | `ban` | `{target, on}` | Admins ban non-admins; only the creator bans an admin; never the creator or self. **All** of a banned key's events are ignored whatever their timestamps (so backdating can't slip past a ban), connected peers are dropped, and it fails the handshake. Un-ban restores them. |
-| `agent` | `{id, name, handle, runtime, model?, replyIn, removed?}` | Declares one of the author's agents. |
+| `agent` | `{id, name, handle, runtime, model?, replyIn, respondTo?, postIn?, discoverable?, removed?}` | Declares one of the author's agents. `respondTo {mentions, replies}`: what triggers it. `postIn {thread, channel}`: where it answers (both = a thread reply also in the channel). `discoverable`: other members may DM it. `replyIn` (`'thread'` when `postIn.thread`, else `'channel'`) is kept for older peers, which drop agent events without it; when the newer fields are missing or malformed they are derived from it (mentions on, replies off, not discoverable). |
 | `approve` | `{req, option}` | Owner's answer to an agent permission request (private, `to` = owner). |
 | `rekey` | `{epoch, keys, history}` | Relay workspaces: replaces the workspace key (see [Key rotation](#key-rotation)). Counts when its author has ever been made an admin (or is the creator) and isn't banned; the earliest `(ts, id)` wins an epoch. |
 
-State is `reduce(events)`: roles and bans are computed first, then the remaining events are applied in `(ts, id)` order, skipping banned authors. Every peer with the same events computes the same state. Events must be well formed (string fields, integer `ts`, known `t`) and bodies are treated as untrusted: a malformed field is ignored, and no single event can abort the reduction. Messages in `dm:`/`adm:` channels must be addressed (`to`) to the other party and written by one of them; approvals count only from the owner (no `ag`).
+State is `reduce(events)`: roles and bans are computed first, then the remaining events are applied in `(ts, id)` order, skipping banned authors. Every peer with the same events computes the same state. Events must be well formed (string fields, integer `ts`, known `t`) and bodies are treated as untrusted: a malformed field is ignored, and no single event can abort the reduction. Messages in `dm:`/`adm:` channels must be addressed (`to`) to the other party and written by one of them; approvals count only from the owner (no `ag`). In `gdm:<member>:<owner>:<agentId>` the member writes to the owner (no `ag`) and the owner writes only as that agent (`ag = agentId`) to the member; member and owner must differ, and approvals are dropped. Transports route and seal it like a DM between member and owner, so other members never receive it. Whether an agent is discoverable is enforced by the bridge (it doesn't answer otherwise) and the UI, not the reducer, so history survives a settings change.
 
 ## Actions (Trystero)
 
@@ -153,10 +153,10 @@ Banning someone in a relay workspace also rotates the workspace key, so they can
 
 ### ACP mapping
 
-- One process and one `session/new {cwd: workdir}` per agent, reused for every prompt.
-- Trigger: a fresh `msg` @mentioning the agent's handle (public channels), or the owner writing in `adm:<owner>:<agentId>`. Agent-to-agent mentions are allowed, capped at 4 runs per channel per 5 minutes.
+- One process and one `session/new {cwd: workdir}` per agent, reused for every prompt. Each member DMing a discoverable agent gets a separate session, so nothing from the owner's chats or other members' leaks into theirs.
+- Triggers (fresh messages only): an @mention of the agent's handle in a channel when `respondTo.mentions`; a reply in a thread the agent started or answered in when `respondTo.replies` (no @ needed, never its own messages); the owner writing in `adm:<owner>:<agentId>`; a member writing in `gdm:<member>:<owner>:<agentId>` while the agent is in that workspace and `discoverable`. Agent-written triggers are capped at 4 runs per channel per 5 minutes.
 - Prompt: identity, owner instructions, the last N messages of the channel or thread, and the triggering message.
 - `session/update`: `agent_message_chunk` → reply text; `tool_call` / `tool_call_update` → trace steps with timings.
 - `session/request_permission`: tool kinds on the auto-approve list get `allow_once`. Anything else posts a private `msg` with `approval` to the owner and waits (30 min timeout → reject) for an `approve` event.
 - Attachments: the triggering message's files are fetched (Blossom in Nostr workspaces, WebRTC in Trystero ones) and written to `<workdir>/.yurt/files/<msgId>/<name>` (dirs `0700`, files `0600`; names reduced to plain characters and kept inside that folder). The prompt lists `name → path`, or `name (couldn't download)`. Earlier messages' files are listed by name only.
-- Reply: `msg {text, trace, meta, parent}` with `ag = agentId`, in a thread or the channel per agent config.
+- Reply: `msg {text, trace, meta, parent?, alsoInChannel?}` with `ag = agentId`. DMs stay flat (`to` = the owner, or the member in a guest DM). Elsewhere `postIn` decides: thread only → in the trigger's thread (starting one); channel only → top level, or inside the thread the trigger is already in; both → in the thread with `alsoInChannel: true`.

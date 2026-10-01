@@ -1,9 +1,11 @@
-import type { Ev, AgentBody, ProfileBody, FileRef, TraceStep, ApprovalReq } from './types';
+import type { Ev, AgentBody, AgentTriggers, AgentPlacement, ProfileBody, FileRef, TraceStep, ApprovalReq } from './types';
 import { EDIT_WINDOW_MS, sortEvents, isEventShape } from './events';
-import { isPrivateChannel, dmChannel } from './codes';
+import { isPrivateChannel, dmChannel, parseGuestDm } from './codes';
 
 export interface Msg {
   id: string; ch: string; a: string; ag?: string; ts: number; to?: string;
+  /** A thread reply that is also listed in the channel. */
+  alsoInChannel?: boolean;
   text: string; parent?: string; files: FileRef[]; trace?: TraceStep[]; meta?: string; approval?: ApprovalReq;
   edited: boolean; deleted: boolean;
   reactions: Record<string, string[]>; // icon → reactor keys ("pub" or "pub/agentId"); null-prototype, so any icon is a safe key
@@ -79,8 +81,14 @@ const list = <T>(x: unknown, f: (y: unknown) => T | undefined): T[] => (Array.is
  * one of them and it's addressed to the other; otherwise a public message could pose as a DM.
  * dm:<x>:<y> (sorted): author is x or y, `to` is the other (a self-DM addresses itself).
  * adm:<owner>:<agentId>: author is the owner, speaking as itself or as that agent, and `to` is the owner.
+ * gdm:<member>:<owner>:<agentId>: the member writes to the owner, or the owner as that agent writes to the member.
  */
 function privateOk(e: Ev, ch: string): boolean {
+  const g = parseGuestDm(ch);
+  if (ch.startsWith('gdm:')) {
+    if (!g || g.member === g.owner) return false;
+    return (e.a === g.member && e.to === g.owner && !e.ag) || (e.a === g.owner && e.ag === g.agentId && e.to === g.member);
+  }
   if (ch.startsWith('dm:')) {
     const [x, y, ...rest] = ch.slice(3).split(':');
     if (rest.length || !x || !y || dmChannel(x, y) !== ch) return false;
@@ -195,10 +203,12 @@ function apply(s: WsState, e: Ev) {
       const m: Msg = {
         id: e.id, ch, a: e.a, ag: e.ag, ts: e.ts, to: e.to, text: str(b.text) ?? '', parent: parent?.id, files: list(b.files, fileRef),
         trace, meta: str(b.meta), approval, edited: false, deleted: false, reactions: Object.create(null) as Record<string, string[]>, replies: [],
+        ...(parent && b.alsoInChannel === true ? { alsoInChannel: true } : {}),
       };
       s.msgs.set(e.id, m);
       if (parent) parent.replies.push(e.id);
-      else s.channelMsgs.set(ch, [...(s.channelMsgs.get(ch) ?? []), e.id]);
+      // A top-level message, or a thread reply that was also sent to the channel.
+      if (!parent || m.alsoInChannel) s.channelMsgs.set(ch, [...(s.channelMsgs.get(ch) ?? []), e.id]);
       break;
     }
     case 'edit': case 'del': {
@@ -233,7 +243,14 @@ function apply(s: WsState, e: Ev) {
       const { id, name, handle, runtime } = b;
       if (typeof id !== 'string' || !id || typeof handle !== 'string' || !handle || typeof name !== 'string' || typeof runtime !== 'string') return;
       if (!optStr(b.model) || (b.replyIn !== 'thread' && b.replyIn !== 'channel') || !(b.removed === undefined || typeof b.removed === 'boolean')) return;
-      s.agents.set(agentKey(e.a, id), { id, name, handle, runtime, model: str(b.model), replyIn: b.replyIn, removed: b.removed === true || undefined, owner: e.a, ts: e.ts });
+      // Newer fields are optional (older bridges don't send them); wrong types are ignored, never coerced.
+      const flags = <K extends string>(x: unknown, keys: readonly K[]) => { const o = obj(x); return o && keys.every((k) => typeof o[k] === 'boolean') ? (Object.fromEntries(keys.map((k) => [k, o[k] as boolean])) as Record<K, boolean>) : undefined; };
+      const respondTo = flags(b.respondTo, ['mentions', 'replies'] as const);
+      const postIn = flags(b.postIn, ['thread', 'channel'] as const);
+      s.agents.set(agentKey(e.a, id), {
+        id, name, handle, runtime, model: str(b.model), replyIn: b.replyIn, removed: b.removed === true || undefined, owner: e.a, ts: e.ts,
+        ...(respondTo ? { respondTo } : {}), ...(postIn ? { postIn } : {}), ...(b.discoverable === true ? { discoverable: true } : {}),
+      });
       break;
     }
   }
@@ -250,4 +267,13 @@ export function liveAgents(s: WsState): Agent[] {
 
 export function mentions(text: string): string[] {
   return [...text.matchAll(/(^|[^\w])@([a-z0-9][\w-]{0,31})/gi)].map((m) => m[2].toLowerCase());
+}
+
+/** An agent's triggers and placement, with older agents (only `replyIn`) filled in the way they behaved. */
+export function agentPrefs(a: Pick<AgentBody, 'replyIn' | 'respondTo' | 'postIn' | 'discoverable'>): { respondTo: AgentTriggers; postIn: AgentPlacement; discoverable: boolean } {
+  return {
+    respondTo: a.respondTo ?? { mentions: true, replies: false },
+    postIn: a.postIn && (a.postIn.thread || a.postIn.channel) ? a.postIn : { thread: a.replyIn === 'thread', channel: a.replyIn === 'channel' },
+    discoverable: a.discoverable === true,
+  };
 }

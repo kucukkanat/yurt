@@ -1,5 +1,6 @@
 // A real (tiny) ACP agent for tests, run as a child process in place of an agent CLI.
-// Behaviour comes from `.fake-mode` in its working folder: ok (default) | auth-fail | hang.
+// Behaviour comes from `.fake-mode` in its working folder: ok (default) | auth-fail | hang | echo.
+// echo answers with its pid and the prompt's "Reply to …" line, so tests can see which run and session it was.
 import fs from 'node:fs';
 import readline from 'node:readline';
 
@@ -17,6 +18,13 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     else send({ id: m.id, result: { sessionId: 'fake-session' } });
   } else if (m.method === 'session/prompt') {
     if (mode === 'hang') return;
+    if (mode === 'echo') {
+      const text = m.params.prompt.map((p) => p.text).join('\n');
+      const ask = text.split('\n').find((l) => l.startsWith('Reply to the last message')) ?? '';
+      send({ method: 'session/update', params: { sessionId: 'fake-session', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `pid=${process.pid} ${ask}` } } } });
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+      return;
+    }
     promptId = m.id;
     send({ id: 'perm-1', method: 'session/request_permission', params: {
       sessionId: 'fake-session', toolCall: { kind: 'edit', title: 'edit notes.md' },
