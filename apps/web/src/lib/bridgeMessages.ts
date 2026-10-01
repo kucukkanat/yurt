@@ -39,6 +39,7 @@ const AgentSchema: v.GenericSchema<unknown, BridgeAgent> = v.pipe(
     respondTo: optional(v.object({ mentions: v.boolean(), replies: v.boolean() })),
     postIn: optional(v.object({ thread: v.boolean(), channel: v.boolean() })),
     discoverable: flag(false),
+    online: flag(true),
     status: v.fallback(v.picklist(['idle', 'working', 'waiting', 'error']), 'idle'),
   }),
   v.transform(

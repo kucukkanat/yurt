@@ -29,4 +29,5 @@ export const isSaved = (a: AgentConfig, x: AgentConfig, before: readonly string[
   x.postIn.thread === a.postIn.thread &&
   x.postIn.channel === a.postIn.channel &&
   x.discoverable === a.discoverable &&
+  x.online === a.online &&
   [...x.autoApprove].sort().join() === [...a.autoApprove].sort().join();

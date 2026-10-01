@@ -185,6 +185,7 @@ const CardBox = ({ children, style, testId }: { children: React.ReactNode; style
 
 function Overview({ s, send, go }: P & { go: (x: Section) => void }) {
   const code = s.pairingCode;
+  const [copied, setCopied] = useState('');
   const installed = s.runtimes.filter((r) => r.installed).length;
   return (
     <>
@@ -204,6 +205,15 @@ function Overview({ s, send, go }: P & { go: (x: Section) => void }) {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button variant="primary" iconLeft="external-link" onClick={() => window.open(WEB_APP, '_blank')}>
             Open Yurt
+          </Button>
+          <Button
+            variant="ghost"
+            iconLeft={copied === code ? 'check' : 'copy'}
+            data-testid="pairing-copy"
+            // A rejection (e.g. clipboard blocked) is left unhandled on purpose: it surfaces in the console.
+            onClick={() => void navigator.clipboard.writeText(code).then(() => setCopied(code))}
+          >
+            {copied === code ? 'Copied' : 'Copy'}
           </Button>
           <Button variant="ghost" iconLeft="refresh-cw" onClick={() => send({ t: 'pair.rotate' })}>
             New code
@@ -353,6 +363,7 @@ const blank = (s: PageState): AgentConfig => {
     respondTo: { mentions: true, replies: false },
     postIn: { thread: true, channel: false },
     discoverable: false,
+    online: true,
   };
 };
 
@@ -380,11 +391,8 @@ function Agents({ s, send, error, clearError }: P & SaveAck) {
         {s.agents.map((a) => {
           const rooms = s.workspaces.filter((w) => w.agents.includes(a.id));
           return (
-            <button
+            <div
               key={a.id}
-              type="button"
-              data-testid={'agent-' + a.id}
-              onClick={() => setEdit(a)}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -394,42 +402,66 @@ function Agents({ s, send, error, clearError }: P & SaveAck) {
                 background: 'var(--surface-card)',
                 border: '1px solid var(--border-subtle)',
                 boxShadow: 'var(--shadow-sm)',
-                cursor: 'pointer',
-                textAlign: 'left',
-                color: 'inherit',
-                flexWrap: 'wrap',
               }}
             >
-              <Avatar name={a.name} kind="agent" presence="online" working={a.status === 'working'} size={36} decorative />
-              <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-strong)' }}>
-                  {a.name} <span style={{ fontWeight: 400, color: 'var(--text-subtle)' }}>@{a.handle}</span>
+              <button
+                type="button"
+                data-testid={'agent-' + a.id}
+                onClick={() => setEdit(a)}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  padding: 0,
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  color: 'inherit',
+                  font: 'inherit',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <Avatar name={a.name} kind="agent" presence={a.online ? 'online' : 'offline'} working={a.status === 'working'} size={36} decorative />
+                <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-strong)' }}>
+                    {a.name} <span style={{ fontWeight: 400, color: 'var(--text-subtle)' }}>@{a.handle}</span>
+                  </span>
+                  <span style={{ font: '400 12px var(--font-mono)', color: 'var(--text-subtle)', overflowWrap: 'anywhere' }}>
+                    {s.runtimes.find((r) => r.id === a.runtime)?.name}
+                    {a.model ? ' · ' + a.model : ''} · {a.workdir}
+                  </span>
+                </div>
+                {a.status === 'working' && (
+                  <Badge tone="agent" size="sm" live>
+                    Working
+                  </Badge>
+                )}
+                {a.status === 'waiting' && (
+                  <Badge tone="human" size="sm" icon="hand">
+                    Needs you
+                  </Badge>
+                )}
+                {a.status === 'error' && (
+                  <Badge tone="danger" size="sm">
+                    Error
+                  </Badge>
+                )}
+                <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>
+                  {rooms.length ? rooms.length + (rooms.length === 1 ? ' workspace' : ' workspaces') : 'Not in a workspace'}
                 </span>
-                <span style={{ font: '400 12px var(--font-mono)', color: 'var(--text-subtle)', overflowWrap: 'anywhere' }}>
-                  {s.runtimes.find((r) => r.id === a.runtime)?.name}
-                  {a.model ? ' · ' + a.model : ''} · {a.workdir}
-                </span>
-              </div>
-              {a.status === 'working' && (
-                <Badge tone="agent" size="sm" live>
-                  Working
-                </Badge>
-              )}
-              {a.status === 'waiting' && (
-                <Badge tone="human" size="sm" icon="hand">
-                  Needs you
-                </Badge>
-              )}
-              {a.status === 'error' && (
-                <Badge tone="danger" size="sm">
-                  Error
-                </Badge>
-              )}
-              <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>
-                {rooms.length ? rooms.length + (rooms.length === 1 ? ' workspace' : ' workspaces') : 'Not in a workspace'}
-              </span>
-              <Icon name="chevron-right" size={16} style={{ color: 'var(--text-subtle)' }} />
-            </button>
+                <Icon name="chevron-right" size={16} style={{ color: 'var(--text-subtle)' }} />
+              </button>
+              <Switch
+                tone="agent"
+                size="sm"
+                label={a.online ? 'Online' : 'Offline'}
+                data-testid={'agent-online-' + a.id}
+                checked={a.online}
+                onChange={(online) => send({ t: 'agent.save', agent: { ...a, online } })}
+              />
+            </div>
           );
         })}
       </div>
@@ -590,6 +622,14 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
           <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-strong)' }}>Allowed without asking</span>
           <span style={{ fontSize: 13.5, color: 'var(--text-muted)' }}>Anything unchecked pauses the agent and asks you in your private chat with it, with a notification.</span>
         </div>
+        <Checkbox
+          label="Allow everything"
+          description="The agent never stops to ask."
+          data-testid="auto-approve-all"
+          checked={TOOL_KINDS.every((k) => a.autoApprove.includes(k))}
+          indeterminate={a.autoApprove.length > 0 && !TOOL_KINDS.every((k) => a.autoApprove.includes(k))}
+          onChange={(e) => up({ autoApprove: e.target.checked ? [...TOOL_KINDS] : [] })}
+        />
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
           {TOOL_KINDS.map((k) => (
             <Checkbox

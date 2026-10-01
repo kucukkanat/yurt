@@ -382,6 +382,7 @@ describe('what the bridge page may do', () => {
     respondTo: { mentions: true, replies: false },
     postIn: { thread: true, channel: false },
     discoverable: false,
+    online: true,
     ...p,
   });
   beforeAll(async () => {

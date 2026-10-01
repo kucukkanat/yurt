@@ -42,7 +42,8 @@ export default defineConfig({
           browser: {
             enabled: true,
             headless: true,
-            provider: playwright(),
+            // The pairing code's copy button is checked by reading the real clipboard back.
+            provider: playwright({ contextOptions: { permissions: ['clipboard-read', 'clipboard-write'] } }),
             instances: [{ browser: 'chromium' }],
             screenshotFailures: false,
             commands: {

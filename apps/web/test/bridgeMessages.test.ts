@@ -17,6 +17,7 @@ const agent: BridgeState['agents'][number] = {
   respondTo: { mentions: true, replies: true },
   postIn: { thread: true, channel: false },
   discoverable: true,
+  online: false,
   status: 'working',
 };
 const state: BridgeState = {
@@ -57,13 +58,13 @@ describe('bridge messages', () => {
   });
 
   it('read agents from bridges that predate triggers and placement', () => {
-    const { respondTo: _r, postIn: _p, discoverable: _d, model: _m, ...old } = agent;
+    const { respondTo: _r, postIn: _p, discoverable: _d, online: _o, model: _m, ...old } = agent;
     const parse = (a: unknown) => {
       const m = parseBridgeMessage(json({ t: 'state', state: { agents: [a] } }));
       return m?.t === 'state' ? m.state.agents : null;
     };
     expect(parse({ ...old, replyIn: 'channel' })).toEqual([
-      { ...old, respondTo: { mentions: true, replies: false }, postIn: { thread: false, channel: true }, discoverable: false },
+      { ...old, respondTo: { mentions: true, replies: false }, postIn: { thread: false, channel: true }, discoverable: false, online: true },
     ]);
     expect(parse({ ...old, postIn: { thread: false, channel: false } })?.[0]?.postIn).toEqual({ thread: true, channel: false });
     expect(parse({ id: 'x', name: 'X', handle: 'x', runtime: 'copilot' })).toEqual([
@@ -79,6 +80,7 @@ describe('bridge messages', () => {
         respondTo: { mentions: true, replies: false },
         postIn: { thread: true, channel: false },
         discoverable: false,
+        online: true,
         status: 'idle',
       },
     ]);

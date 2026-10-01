@@ -210,6 +210,7 @@ export class AgentHost {
   }
 
   private enqueue(id: string, peer: WorkspacePeer, m: Msg, kind: Kind, me: string) {
+    if (!this.agent(id)?.online) return;
     const q = (this.queues.get(id) ?? Promise.resolve()).then(() => this.exec(id, peer, m, kind, me)).catch((e: unknown) => log('error', id, errorMessage(e)));
     this.queues.set(id, q);
   }

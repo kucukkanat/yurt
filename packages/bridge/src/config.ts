@@ -107,5 +107,6 @@ export function sanitize(raw: unknown): AgentConfig {
     autoApprove: a.autoApprove,
     contextSize: Math.max(1, Math.min(200, Math.round(Number(a.contextSize) || 20))),
     ...agentRoomPrefs(a),
+    online: a.online !== false, // configs from before the switch had no field: they were online
   };
 }

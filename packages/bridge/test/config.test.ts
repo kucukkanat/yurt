@@ -88,16 +88,20 @@ describe('agent room settings', () => {
     const [first, second] = config.loadConfig().agents;
     const a = must(first, 'first agent');
     const b = must(second, 'second agent');
-    expect(a).toEqual({ ...old, respondTo: { mentions: true, replies: false }, postIn: { thread: false, channel: true }, discoverable: false });
+    expect(a).toEqual({ ...old, respondTo: { mentions: true, replies: false }, postIn: { thread: false, channel: true }, discoverable: false, online: true });
     expect(b.postIn).toEqual({ thread: true, channel: false });
     expect('replyIn' in a).toBe(false);
   });
 
   // Deliberately malformed input, the way an outdated or hostile page could send it.
   it('keeps valid new settings and drops malformed ones on save', () => {
-    const prefs = { respondTo: { mentions: false, replies: true }, postIn: { thread: true, channel: true }, discoverable: true };
+    const prefs = { respondTo: { mentions: false, replies: true }, postIn: { thread: true, channel: true }, discoverable: true, online: false };
     expect(config.sanitize({ ...old, ...prefs })).toMatchObject(prefs);
-    expect(config.sanitize({ ...old, respondTo: 'all', discoverable: 'yes' })).toMatchObject({ respondTo: { mentions: true, replies: false }, discoverable: false });
+    expect(config.sanitize({ ...old, respondTo: 'all', discoverable: 'yes', online: 'no' })).toMatchObject({
+      respondTo: { mentions: true, replies: false },
+      discoverable: false,
+      online: true,
+    });
   });
 
   it('refuses an agent with nowhere to post', () => {

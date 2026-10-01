@@ -52,6 +52,7 @@ const agentCfg = (id: string, mode: string, p: Partial<AgentConfig> = {}): Agent
     respondTo: { mentions: true, replies: false },
     postIn: { thread: false, channel: true },
     discoverable: false,
+    online: true,
     ...p,
   };
 };

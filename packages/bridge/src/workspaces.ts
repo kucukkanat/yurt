@@ -189,7 +189,11 @@ export class Workspaces {
     const p = this.peers.get(code);
     const w = this.cfg.workspaces.find((x) => x.code === code);
     if (!p || !w) return;
-    p.setPresence({ st: 'online', bridge: true, agents: Object.fromEntries(w.agents.map((id) => [id, { working: this.host.workingIn(id, code) }])) });
+    p.setPresence({
+      st: 'online',
+      bridge: true,
+      agents: Object.fromEntries(w.agents.filter((id) => this.cfg.agents.some((a) => a.id === id && a.online)).map((id) => [id, { working: this.host.workingIn(id, code) }])),
+    });
   }
 
   /** `transport` absent: an older web app, whose workspaces are legacy Trystero ones. */

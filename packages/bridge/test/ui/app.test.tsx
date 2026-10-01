@@ -103,8 +103,13 @@ describe('a busy bridge', () => {
     const code = screen.getByTestId('pairing-code');
     await matches(code, /^\d{3} \d{3}$/);
     const before = code.element().textContent;
+    const copy = screen.getByTestId('pairing-copy');
+    await copy.click();
+    await matches(copy, /Copied/);
+    expect(await navigator.clipboard.readText()).toBe(before?.replace(' ', ''));
     await screen.getByRole('button', { name: 'New code' }).click();
     await expect.poll(() => code.element().textContent).not.toBe(before);
+    await matches(copy, /Copy$/); // a new code hasn't been copied yet
     await screen.getByRole('button', { name: 'Open Yurt' }).click();
     await expect.element(screen.getByRole('button', { name: /3\/5\s*agent CLIs installed/ })).toBeVisible();
     await matches(screen.getByTestId('nav-runtimes'), /Agent CLIs3/);
@@ -144,6 +149,13 @@ describe('a busy bridge', () => {
     await matches(screen.getByTestId('agent-locksmith'), /Error/);
     await matches(screen.getByTestId('agent-idler'), /GitHub Copilot CLI · gpt-x · .*2 workspaces/);
     await matches(screen.getByTestId('agent-lonely'), /Not in a workspace/);
+    const online = screen.getByTestId('agent-online-lonely');
+    await expect.element(online).toBeChecked();
+    await online.click();
+    await expect.element(online).not.toBeChecked();
+    await expect.element(screen.getByText('Offline')).toBeVisible();
+    await online.click();
+    await expect.element(online).toBeChecked();
     await screen.unmount();
   });
 
@@ -207,8 +219,15 @@ describe('a busy bridge', () => {
     await expect.element(screen.getByText('Answers in a thread under the message.')).toBeVisible();
     await screen.getByTestId('agent-discoverable').click();
     await screen.getByLabelText('Context').fill('5');
+    const all = screen.getByTestId('auto-approve-all');
+    await all.click();
+    await expect.element(screen.getByRole('checkbox', { name: /Run commands/ })).toBeChecked();
+    await all.click();
+    await expect.element(screen.getByRole('checkbox', { name: /Read files/ })).not.toBeChecked();
     await screen.getByRole('checkbox', { name: /Run commands/ }).click();
     await screen.getByRole('checkbox', { name: /Read files/ }).click();
+    await screen.getByRole('checkbox', { name: /Read files/ }).click();
+    await expect.element(all).not.toBeChecked();
 
     await save.click();
     await matches(screen.getByTestId('error-toast'), /Another agent already uses @idler/);

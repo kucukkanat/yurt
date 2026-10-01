@@ -31,6 +31,7 @@ const agent = (id: string, name: string, mode: string, p: Partial<AgentConfig> =
     respondTo: { mentions: true, replies: false },
     postIn: { thread: true, channel: false },
     discoverable: false,
+    online: true,
     ...p,
   };
 };

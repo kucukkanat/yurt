@@ -25,6 +25,7 @@ const agent = (workdir: string, p: Partial<AgentConfig> = {}): AgentConfig => ({
   respondTo: { mentions: true, replies: false },
   postIn: { thread: true, channel: false },
   discoverable: false,
+  online: true,
   ...p,
 });
 const config = (agents: AgentConfig[]): Config => ({ adminToken: 't', tokens: [], startOnLogin: false, allowedOrigins: [], agents, workspaces: [] });

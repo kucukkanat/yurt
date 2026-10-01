@@ -35,6 +35,8 @@ export interface AgentConfig {
   postIn: AgentPlacement;
   /** Others in the workspace may find it and message it directly; its owner can read those chats. */
   discoverable: boolean;
+  /** Off: the agent is hidden from workspace presence and answers nothing until switched back on. */
+  online: boolean;
 }
 
 export interface BridgeWorkspace {

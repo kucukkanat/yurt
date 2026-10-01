@@ -35,6 +35,7 @@ const agentCfg = (p: Partial<AgentConfig> = {}): AgentConfig => ({
   respondTo: { mentions: true, replies: false },
   postIn: { thread: true, channel: false },
   discoverable: false,
+  online: true,
   ...p,
 });
 
@@ -184,6 +185,21 @@ describe('agent triggers, end to end', () => {
     expect(must(got[0]).text).toContain('a follow-up in a thread you take part in');
     expect(answers(b, 'general').some((m) => m.parent === ignored.id)).toBe(false);
     set({ respondTo: { mentions: true, replies: false } });
+  }, 40_000);
+
+  it('answers nothing and leaves presence while offline', async () => {
+    const listed = () => !![...b.presence.values()].some((p) => p.bridge && p.agents && 'scout-1' in p.agents);
+    await until(listed);
+    set({ online: false });
+    ws.refreshAll(); // what saving the agent does
+    await until(() => !listed());
+    const ignored = b.publish({ t: 'msg', ch: 'general', b: { text: '@scout are you offline?' } });
+    await until(() => !!ws.peers.get(CODE)?.state.msgs.has(ignored.id));
+    set({ online: true });
+    ws.refreshAll();
+    await until(listed);
+    await ask(b, 'general', '@scout back?');
+    expect(answers(b, 'general').some((m) => m.parent === ignored.id)).toBe(false);
   }, 40_000);
 
   it('answers DMs from other members only while discoverable, each member in their own session', async () => {

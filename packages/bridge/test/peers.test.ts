@@ -40,6 +40,7 @@ const agent: AgentConfig = {
   respondTo: { mentions: true, replies: false },
   postIn: { thread: true, channel: false },
   discoverable: false,
+  online: true,
 };
 
 let relay: TestRelay;

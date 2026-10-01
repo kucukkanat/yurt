@@ -115,12 +115,18 @@ describe('parsers', () => {
     fc.assert(
       fc.property(fc.record({ toolCall: fc.oneof(hostile, fc.record({ kind: hostile, title: hostile })), options: fc.oneof(hostile, fc.array(option)) }), (p) => {
         const r = v.parse(PermissionRequestSchema, p);
-        expect(r.kind.length && r.title.length).toBeGreaterThan(0);
+        expect(TOOL_KINDS).toContain(r.kind);
+        expect(r.title.length).toBeGreaterThan(0);
         for (const o of r.options) expect([typeof o.optionId, typeof o.name, typeof o.kind]).toEqual(['string', 'string', 'string']);
         const raw = Array.isArray(p.options) ? p.options : [];
         expect(r.options.length).toBe(raw.filter((o: unknown) => typeof o === 'object' && o !== null && typeof (o as { optionId?: unknown }).optionId === 'string').length);
       }),
     );
+  });
+
+  it('count tool kinds outside the known list as other, so auto-approving other covers them', () => {
+    const kind = (k: unknown) => v.parse(PermissionRequestSchema, { toolCall: { kind: k, title: 't' }, options: [] }).kind;
+    expect([kind('switch_mode'), kind('execute')]).toEqual(['other', 'execute']);
   });
 
   it('keep stored workspace logs to well-formed events', () => {
@@ -148,7 +154,7 @@ function expectRunnable(a: AgentConfig) {
   expect(a.autoApprove.every((k) => TOOL_KINDS.includes(k))).toBe(true);
   expect(a.instructions.length).toBeLessThanOrEqual(8000);
   expect(a.postIn.thread || a.postIn.channel).toBe(true);
-  expect([typeof a.respondTo.mentions, typeof a.respondTo.replies, typeof a.discoverable]).toEqual(['boolean', 'boolean', 'boolean']);
+  expect([typeof a.respondTo.mentions, typeof a.respondTo.replies, typeof a.discoverable, typeof a.online]).toEqual(['boolean', 'boolean', 'boolean', 'boolean']);
   expect(a.model === undefined || a.model.length > 0).toBe(true);
 }
 
@@ -167,6 +173,7 @@ const draft = fc.record(
     respondTo: fc.oneof(fc.record({ mentions: fc.boolean(), replies: fc.boolean() }), hostile),
     postIn: fc.oneof(fc.record({ thread: fc.boolean(), channel: fc.boolean() }), hostile),
     discoverable: fc.oneof(fc.boolean(), hostile),
+    online: fc.oneof(fc.boolean(), hostile),
   },
   { requiredKeys: [] },
 );
@@ -232,6 +239,7 @@ describe('the bridge page editor and the bridge agree', () => {
     respondTo: fc.record({ mentions: fc.boolean(), replies: fc.boolean() }),
     postIn: fc.record({ thread: fc.boolean(), channel: fc.boolean() }),
     discoverable: fc.boolean(),
+    online: fc.boolean(),
   });
 
   it('every agent the editor submits is accepted and recognized as saved', () => {
@@ -293,6 +301,7 @@ describe('who answers, and where', () => {
     respondTo: { mentions: true, replies },
     postIn: { thread: true, channel: false },
     discoverable: false,
+    online: true,
   });
   const team = fc.array(fc.boolean(), { minLength: 1, maxLength: 5 }).map((rs) => rs.map((r, i) => agent(i, r)));
 

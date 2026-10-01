@@ -70,7 +70,12 @@ const PermissionOptionSchema = v.pipe(
   v.transform((o) => ({ optionId: o.optionId, name: o.name ?? o.optionId, kind: o.kind })),
 );
 const nonEmptyOr = (fallback: string) => v.fallback(v.pipe(v.string(), v.nonEmpty()), fallback);
-const ToolCallSchema = v.fallback(obj({ kind: nonEmptyOr('other'), title: nonEmptyOr('use a tool') }), { kind: 'other', title: 'use a tool' });
+// A kind outside TOOL_KINDS (ACP's `switch_mode`, or anything a CLI invents) counts as 'other', so the owner can still
+// auto-approve it: with every box checked, nothing asks.
+const ToolCallSchema = v.fallback(obj({ kind: v.fallback(v.picklist(TOOL_KINDS), 'other'), title: nonEmptyOr('use a tool') }), {
+  kind: 'other',
+  title: 'use a tool',
+});
 
 /** `session/request_permission` params: the tool the agent wants to use and the answers it offers. */
 export const PermissionRequestSchema = v.fallback(
@@ -107,6 +112,7 @@ export const AgentDraftSchema = obj({
   respondTo: lenient(flags('mentions', 'replies')),
   postIn: lenient(flags('thread', 'channel')),
   discoverable: lenient(v.boolean()),
+  online: lenient(v.boolean()),
 });
 export type AgentDraft = v.InferOutput<typeof AgentDraftSchema>;
 
@@ -177,6 +183,7 @@ const AgentConfigSchema = v.object({
   respondTo: v.object({ mentions: v.boolean(), replies: v.boolean() }),
   postIn: v.object({ thread: v.boolean(), channel: v.boolean() }),
   discoverable: v.boolean(),
+  online: v.boolean(),
   status: AgentStatusSchema,
 });
 /** The bridge's state as its own page uses it: the page always gets its pairing code and home folder. */
