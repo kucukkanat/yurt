@@ -26,6 +26,8 @@ export interface RelayOpts {
 }
 
 const isEphemeral = (k: number) => k >= 20000 && k < 30000;
+// strfry (nos.lol and most public relays) refuses ephemeral events this much older than now.
+const EPHEMERAL_MAX_AGE_S = 60;
 
 export function startRelay(port = 0, opts: RelayOpts = {}): Promise<TestRelay> {
   const stored: Event[] = [];
@@ -33,9 +35,15 @@ export function startRelay(port = 0, opts: RelayOpts = {}): Promise<TestRelay> {
   const wss = new WebSocketServer({ port, host: '127.0.0.1' });
   const send = (ws: WebSocket, msg: unknown[]) => ws.send(JSON.stringify(msg));
 
+  /** Why the relay refuses an event (a NIP-01 OK reason), or null to take it. */
+  const refusal = (e: Event): string | null => {
+    if (!verifyEvent(e)) return 'invalid: bad signature';
+    if (isEphemeral(e.kind) && Date.now() / 1000 - e.created_at > EPHEMERAL_MAX_AGE_S) return 'invalid: ephemeral event expired';
+    return opts.refuse?.(e) ?? null;
+  };
+
   const publish = (ws: WebSocket, e: Event) => {
-    if (!verifyEvent(e)) return send(ws, ['OK', e.id, false, 'invalid: bad signature']);
-    const refused = opts.refuse?.(e);
+    const refused = refusal(e);
     if (refused) return send(ws, ['OK', e.id, false, refused]);
     const dup = stored.some((x) => x.id === e.id);
     if (!dup && !isEphemeral(e.kind)) stored.push(e);

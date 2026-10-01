@@ -274,6 +274,25 @@ describe('nostr transport', () => {
     errors = [];
   });
 
+  it('reports presence the relays refuse, once, so a member who can’t be seen online knows why', async () => {
+    await useRelay({ refuse: (e) => (e.kind === 24344 ? 'blocked: no ephemeral events' : null) });
+    await join(A, transport, memStore().store, { timing: { beatMs: 100 } });
+    await until(() => errors.length > 0, 4_000);
+    await new Promise((r) => setTimeout(r, 500)); // several refused heartbeats: still one report
+    expect(errors).toEqual(['Relays refused presence: blocked: no ephemeral events']);
+    errors = [];
+  });
+
+  it('sends presence at its real time, which relays accept, unlike backdated ephemeral events', async () => {
+    const b = await join(B, transport);
+    await join(A, transport);
+    await until(() => [...b.presence.values()].some((p) => p.pub === A.pub));
+    const r = await Relay.connect(relay.url);
+    const stale = finalizeEvent({ kind: 24344, created_at: Math.floor(Date.now() / 1000) - 600, tags: [], content: '' }, generateSecretKey());
+    await expect(r.publish(stale)).rejects.toThrow('ephemeral event expired');
+    r.close();
+  });
+
   it('does not re-send own events whose fuzzed relay copy predates the sync window', async () => {
     const k = workspaceKeys(transport.key);
     const since = Math.floor(Date.now() / 1000) - 30 * 3600; // where the next backfill starts (mark − 1 day)

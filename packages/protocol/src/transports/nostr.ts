@@ -105,6 +105,8 @@ export class NostrData implements DataLink {
   private needSync = true;
   private syncing = false;
   private closed = false;
+  // A refused heartbeat is reported once, not every minute.
+  private presenceRefused = false;
 
   constructor(
     private host: LinkHost,
@@ -216,8 +218,8 @@ export class NostrData implements DataLink {
     return [...new Map([this.k, ...ks].map((k) => [k.tag, k])).values()];
   }
 
-  private wrap(kind: number, tag: string, content: string, sk = this.sk): NostrEvent {
-    return finalizeEvent({ kind, created_at: fuzzed(), tags: [['y', tag]], content }, sk);
+  private wrap(kind: number, tag: string, content: string, sk = this.sk, createdAt = fuzzed()): NostrEvent {
+    return finalizeEvent({ kind, created_at: createdAt, tags: [['y', tag]], content }, sk);
   }
 
   // Inner layer: only author and recipient hold the pair key. Outer layer: `a`/`to` tell a
@@ -268,8 +270,22 @@ export class NostrData implements DataLink {
     const t = Date.now();
     const j = JSON.stringify(this.me);
     const body = JSON.stringify({ j, t, s: sign(this.host.kp.sec, presMsg(this.host.code, t, j)) });
-    // Presence is best effort: a missed heartbeat is covered by the next one.
-    Promise.any(this.pool.publish(this.relays, this.wrap(KIND_PRESENCE, this.k.tag, seal(this.k.enc, this.k.tag, body)))).catch(() => {});
+    // Not backdated: relays refuse ephemeral events more than about a minute old ("ephemeral event expired"), and
+    // they don't store them, so arrival time is all an operator learns either way.
+    const ne = this.wrap(KIND_PRESENCE, this.k.tag, seal(this.k.enc, this.k.tag, body), this.sk, now());
+    // Best effort: a missed heartbeat is covered by the next one. Being offline is quiet; every relay refusing is
+    // reported once, since then nobody can see this member online.
+    void Promise.allSettled(this.pool.publish(this.relays, ne)).then((rs) => {
+      if (rs.some((r) => r.status === 'fulfilled') || this.presenceRefused) return;
+      const why = rs
+        .filter(rejected)
+        .map((r) => r.reason)
+        .filter(isRefusal)
+        .map((e) => e.message);
+      if (!why.length) return;
+      this.presenceRefused = true;
+      this.host.error(`Relays refused presence: ${[...new Set(why)].join('; ')}`);
+    });
   }
 
   /** Page backwards from now to the last mark. Runs at start and again whenever relays come back. */
