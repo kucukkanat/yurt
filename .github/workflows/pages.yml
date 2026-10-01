@@ -39,21 +39,49 @@ jobs:
         with:
           path: apps/web/dist
 
-  # One job per package, side by side: the run takes as long as the slowest suite, not their sum.
+  # Side by side: the run takes as long as the slowest job, not the sum. The web suite (one file at a time: its files
+  # share a browser origin) is split across three machines, each with its own browser.
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        package: ['@yurt/protocol', yurt-bridge, '@yurt/web']
+        include:
+          - { name: protocol, run: bun run --filter @yurt/protocol test, chromium: false }
+          - { name: bridge, run: bun run --filter yurt-bridge test, chromium: true }
+          - { name: web 1/3, run: cd apps/web && bun run test:shard 1/3, chromium: true, blob: true }
+          - { name: web 2/3, run: cd apps/web && bun run test:shard 2/3, chromium: true, blob: true }
+          - { name: web 3/3, run: cd apps/web && bun run test:shard 3/3, chromium: true, blob: true }
+    name: test (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
       # Component and app tests run in real Chromium (Vitest browser mode); the protocol suite is Node only.
       - uses: ./.github/actions/setup
         with:
-          chromium: ${{ matrix.package != '@yurt/protocol' }}
+          chromium: ${{ matrix.chromium }}
       # Unit + integration tests with coverage thresholds (the bridge suite also builds and starts dist/cli.js).
-      - run: bun run --filter '${{ matrix.package }}' test
+      - run: ${{ matrix.run }}
+      - if: matrix.blob
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-blob-${{ strategy.job-index }}
+          path: apps/web/.vitest/blob
+          include-hidden-files: true
+          retention-days: 1
+
+  # The web shards' results and coverage in one report: the coverage thresholds apply here.
+  web-coverage:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: web-blob-*
+          path: apps/web/.vitest/blob
+          merge-multiple: true
+      - run: cd apps/web && bun run test:merge
 
   # Not gated on build: it builds the app itself, so it starts right away.
   e2e:
@@ -68,7 +96,7 @@ jobs:
 
   deploy:
     if: github.ref == 'refs/heads/main'
-    needs: [build, test]
+    needs: [build, test, web-coverage]
     runs-on: ubuntu-latest
     environment:
       name: github-pages

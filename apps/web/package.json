@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --coverage"
+    "test": "vitest run --coverage",
+    "test:shard": "vitest run --coverage --reporter=blob --shard",
+    "test:merge": "vitest run --merge-reports --coverage"
   },
   "dependencies": {
     "@trystero-p2p/torrent": "0.25.4",

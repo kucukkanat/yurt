@@ -1,9 +1,13 @@
 import react from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
+import { SizeSequencer } from './test/sequencer.ts';
 import { bridgeAllowOrigin, bridgePairingCode, bridgeRevokeOrigin, reduceMotion, setPermissions } from './test/browser/core/commands.ts';
 
 /** An iPhone's Safari, for the phone project (the app tells iOS apart by it: Add to Home Screen instead of Install). */
+/** A shard (CI splits the suite across machines) sees part of the coverage: thresholds apply to the merged report. */
+const sharded = process.argv.some((a) => a.startsWith('--shard'));
+
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
 
 // Three projects, one coverage report:
@@ -16,6 +20,7 @@ export default defineConfig({
   plugins: [react({ include: /\.(jsx|tsx)$/ })],
   resolve: { dedupe: ['react', 'react-dom'] },
   test: {
+    sequence: { sequencer: SizeSequencer },
     projects: [
       { extends: true, test: { name: 'unit', include: ['test/**/*.test.ts'], exclude: ['test/browser/**'], environment: 'node' } },
       {
@@ -74,7 +79,7 @@ export default defineConfig({
       // Below 100% mostly because the huddle (call) UI is deliberately not browser/E2E-tested with camera, mic, video
       // or screen sharing (see AGENTS.md), plus a few Home/Settings branches. ~97.3–97.7% is reached; the floor keeps
       // a small margin because a few timing-dependent paths run on some machines and not others (CI vs local).
-      thresholds: { lines: 97, branches: 97, functions: 97, statements: 97 },
+      ...(sharded ? {} : { thresholds: { lines: 97, branches: 97, functions: 97, statements: 97 } }),
     },
   },
 });

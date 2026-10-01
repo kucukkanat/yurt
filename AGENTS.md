@@ -31,7 +31,8 @@ bun run build && bun run bridge:build
 
 Per package: `cd <pkg> && bunx vitest run [file]`; web projects: `bunx vitest run --project unit|browser`.
 CI (`.github/workflows/pages.yml`) runs, in parallel jobs: `quality` + both builds + a bridge smoke start; each
-package's tests (one job per package); and E2E against the production build (`vite preview`). It deploys `main` to
+package's tests (the web suite split across three machines by `test/sequencer.ts`, then merged with its coverage
+gate); and E2E against the production build (`vite preview`). It deploys `main` to
 Pages once the build and tests pass. Shared setup (Bun, Node, cached Chromium) is `.github/actions/setup`.
 
 ## Rules
