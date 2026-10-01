@@ -66,7 +66,7 @@ That's the only terminal step. The bridge opens `http://127.0.0.1:7717`, where y
 - One ACP session per agent, kept alive across prompts.
 - Config lives in `~/.yurt/` (JSON, written by the bridge UI; you never edit it).
 
-Until `yurt-bridge` is published to npm, run it from the repo: `bun run bridge`. Publish with `npm publish -w packages/bridge` (the `prepublishOnly` script builds the UI and CLI).
+From the repo: `bun run bridge`. Releases are published locally (not from CI) with `npm publish -w packages/bridge` (the `prepublishOnly` script builds the UI and CLI).
 
 ### Runtime commands
 
