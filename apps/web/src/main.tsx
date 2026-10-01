@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import '@yurt/ui/styles.css';
 import { App } from './App';
+import { Crash } from './ui/Crash';
 import { useApp } from './store';
 import { installFavicon } from './lib/favicon';
 import { faviconStateOf } from './model';
@@ -28,6 +29,8 @@ const root = document.getElementById('root');
 if (!root) throw new Error('index.html has no #root element');
 createRoot(root).render(
   <React.StrictMode>
-    <App />
+    <Crash>
+      <App />
+    </Crash>
   </React.StrictMode>,
 );
