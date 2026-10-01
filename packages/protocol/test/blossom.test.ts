@@ -45,7 +45,9 @@ describe('file sealing', () => {
 
 describe('blossom', () => {
   let server: TestBlossom;
-  beforeEach(async () => { server = await startBlossom(); });
+  beforeEach(async () => {
+    server = await startBlossom();
+  });
   afterEach(() => server.close());
 
   it('uploads sealed files and downloads them back', async () => {
@@ -81,7 +83,16 @@ describe('blossom', () => {
 
   it('returns null for malformed refs from other members instead of throwing', async () => {
     const ref = await uploadFile([server.url], text('x'));
-    const bad: unknown[] = [null, 'ref', { ...ref, servers: server.url }, { ...ref, servers: [42] }, { ...ref, hash: 'ZZ'.repeat(32) }, { ...ref, hash: ref.hash.slice(2) }, { ...ref, key: 'not a key' }, { ...ref, key: 7 }];
+    const bad: unknown[] = [
+      null,
+      'ref',
+      { ...ref, servers: server.url },
+      { ...ref, servers: [42] },
+      { ...ref, hash: 'ZZ'.repeat(32) },
+      { ...ref, hash: ref.hash.slice(2) },
+      { ...ref, key: 'not a key' },
+      { ...ref, key: 7 },
+    ];
     for (const r of bad) expect(await downloadFile(r as BlobRef, dev)).toBeNull();
   });
 
@@ -115,7 +126,19 @@ describe('blossom', () => {
   it('test server refuses uploads without valid auth', async () => {
     const body = text('x');
     const hash = bytesToHex(sha256(body));
-    const wrong = finalizeEvent({ kind: 24242, created_at: 0, content: '', tags: [['t', 'upload'], ['x', '0'.repeat(64)], ['expiration', '9999999999']] }, generateSecretKey());
+    const wrong = finalizeEvent(
+      {
+        kind: 24242,
+        created_at: 0,
+        content: '',
+        tags: [
+          ['t', 'upload'],
+          ['x', '0'.repeat(64)],
+          ['expiration', '9999999999'],
+        ],
+      },
+      generateSecretKey(),
+    );
     for (const auth of [undefined, 'Nostr ' + btoa(JSON.stringify(wrong)), 'Nostr garbage']) {
       const r = await fetch(server.url + '/upload', { method: 'PUT', body, headers: auth ? { Authorization: auth } : {} });
       expect(r.status).toBe(401);

@@ -4,8 +4,10 @@ import { whichPath } from '../src/runtimes';
 
 describe('start on login command', () => {
   it('runs a stable install directly with this Node', () => {
-    expect(startCommand('/usr/local/lib/node_modules/yurt-bridge/dist/cli.js', '/usr/bin/node'))
-      .toEqual({ exe: '/usr/bin/node', args: ['/usr/local/lib/node_modules/yurt-bridge/dist/cli.js', '--no-open'] });
+    expect(startCommand('/usr/local/lib/node_modules/yurt-bridge/dist/cli.js', '/usr/bin/node')).toEqual({
+      exe: '/usr/bin/node',
+      args: ['/usr/local/lib/node_modules/yurt-bridge/dist/cli.js', '--no-open'],
+    });
   });
 
   it('goes through the runner again for npx and bunx caches, which get wiped', () => {

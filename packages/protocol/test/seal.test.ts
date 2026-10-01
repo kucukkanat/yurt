@@ -1,7 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import {
-  keyFromPhrase, newRecoveryPhrase, newWorkspaceKey, isWorkspaceKey, workspaceKeys, seal, open,
-  inviteHash, parseInvite, parseRelays, newNostrTransport, newTrysteroTransport, signalingOf, isLegacy, padSize, DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, LEGACY_TRYSTERO,
+  keyFromPhrase,
+  newRecoveryPhrase,
+  newWorkspaceKey,
+  isWorkspaceKey,
+  workspaceKeys,
+  seal,
+  open,
+  inviteHash,
+  parseInvite,
+  parseRelays,
+  newNostrTransport,
+  newTrysteroTransport,
+  signalingOf,
+  isLegacy,
+  padSize,
+  DEFAULT_RELAYS,
+  DEFAULT_SIGNAL_URLS,
+  LEGACY_TRYSTERO,
 } from '../src';
 
 const A = keyFromPhrase(newRecoveryPhrase());

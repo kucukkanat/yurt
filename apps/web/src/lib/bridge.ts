@@ -20,8 +20,14 @@ class BridgeClient {
   private waiters: ((m: FromBridge) => void)[] = [];
   private identity: { phrase: string; name: string; handle: string } | null = null;
 
-  subscribe(l: Listener) { this.listeners.add(l); return () => this.listeners.delete(l); }
-  private set(s: BridgeStatus) { this.status = s; this.listeners.forEach((l) => l(this.status, this.state)); }
+  subscribe(l: Listener) {
+    this.listeners.add(l);
+    return () => this.listeners.delete(l);
+  }
+  private set(s: BridgeStatus) {
+    this.status = s;
+    this.listeners.forEach((l) => l(this.status, this.state));
+  }
 
   async autoStart(identity: { phrase: string; name: string; handle: string }) {
     this.identity = identity;
@@ -38,11 +44,29 @@ class BridgeClient {
     if (this.ws || this.timer) return;
     this.set(this.status === 'off' ? 'connecting' : this.status);
     let ws: WebSocket;
-    try { ws = new WebSocket(BRIDGE_URL); } catch { return this.later(); }
+    try {
+      ws = new WebSocket(BRIDGE_URL);
+    } catch {
+      return this.later();
+    }
     this.ws = ws;
-    ws.onopen = () => { this.retry = 2000; this.send({ t: 'hello', token: this.token || undefined }); };
-    ws.onmessage = (e) => { try { this.onMsg(JSON.parse(e.data)); } catch { /* ignore */ } };
-    ws.onclose = () => { this.ws = null; this.state = null; this.set('missing'); this.later(); };
+    ws.onopen = () => {
+      this.retry = 2000;
+      this.send({ t: 'hello', token: this.token || undefined });
+    };
+    ws.onmessage = (e) => {
+      try {
+        this.onMsg(JSON.parse(e.data));
+      } catch {
+        /* ignore */
+      }
+    };
+    ws.onclose = () => {
+      this.ws = null;
+      this.state = null;
+      this.set('missing');
+      this.later();
+    };
   }
 
   stop() {
@@ -51,21 +75,29 @@ class BridgeClient {
     // Detach first: a close event from this socket would otherwise schedule a redial.
     const ws = this.ws;
     this.ws = null;
-    if (ws) { ws.onopen = ws.onmessage = ws.onclose = null; ws.close(); }
+    if (ws) {
+      ws.onopen = ws.onmessage = ws.onclose = null;
+      ws.close();
+    }
     this.state = null;
     this.set('off');
   }
 
   private later() {
-    this.timer = setTimeout(() => { this.timer = null; this.start(); }, this.retry);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.start();
+    }, this.retry);
     this.retry = Math.min(this.retry * 1.6, 30000);
   }
 
   private onMsg(m: FromBridge) {
     [...this.waiters].forEach((w) => w(m));
     if (m.t === 'hello') {
-      if (m.paired) { this.set('connected'); if (this.identity) this.send({ t: 'identity', ...this.identity }); }
-      else this.set('unpaired');
+      if (m.paired) {
+        this.set('connected');
+        if (this.identity) this.send({ t: 'identity', ...this.identity });
+      } else this.set('unpaired');
     } else if (m.t === 'paired') {
       this.token = m.token;
       kv.set('bridgeToken', m.token);
@@ -77,20 +109,32 @@ class BridgeClient {
     }
   }
 
-  send(m: ToBridge) { if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m)); }
+  send(m: ToBridge) {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m));
+  }
 
   pair(code: string): Promise<boolean> {
     return new Promise((res) => {
       // Every exit removes the waiter, so timed-out pairings don't pile up.
-      const done = (ok: boolean) => { clearTimeout(timer); this.waiters = this.waiters.filter((x) => x !== w); res(ok); };
-      const w = (m: FromBridge) => { if (m.t === 'paired' || m.t === 'error') done(m.t === 'paired'); };
+      const done = (ok: boolean) => {
+        clearTimeout(timer);
+        this.waiters = this.waiters.filter((x) => x !== w);
+        res(ok);
+      };
+      const w = (m: FromBridge) => {
+        if (m.t === 'paired' || m.t === 'error') done(m.t === 'paired');
+      };
       const timer = setTimeout(() => done(false), 8000);
       this.waiters.push(w);
       this.send({ t: 'pair', code });
     });
   }
 
-  async forget() { await kv.del('bridgeToken'); this.token = null; this.stop(); }
+  async forget() {
+    await kv.del('bridgeToken');
+    this.token = null;
+    this.stop();
+  }
 }
 
 export const bridge = new BridgeClient();

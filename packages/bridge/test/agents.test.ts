@@ -8,12 +8,24 @@ import type { Config } from '../src/config';
 import { FAKE_ACP, alive, fakeCopilotOnPath, tempDir, until } from './helpers';
 
 let restorePath: () => void;
-beforeAll(() => { restorePath = fakeCopilotOnPath(); });
+beforeAll(() => {
+  restorePath = fakeCopilotOnPath();
+});
 afterAll(() => restorePath());
 
 const agent = (workdir: string, p: Partial<AgentConfig> = {}): AgentConfig => ({
-  id: 'scout-1', name: 'Scout', handle: 'scout', runtime: 'copilot', workdir, instructions: '',
-  autoApprove: ['edit'], contextSize: 20, respondTo: { mentions: true, replies: false }, postIn: { thread: true, channel: false }, discoverable: false, ...p,
+  id: 'scout-1',
+  name: 'Scout',
+  handle: 'scout',
+  runtime: 'copilot',
+  workdir,
+  instructions: '',
+  autoApprove: ['edit'],
+  contextSize: 20,
+  respondTo: { mentions: true, replies: false },
+  postIn: { thread: true, channel: false },
+  discoverable: false,
+  ...p,
 });
 const config = (agents: AgentConfig[]): Config => ({ adminToken: 't', tokens: [], startOnLogin: false, allowedOrigins: [], agents, workspaces: [] });
 const workdir = (mode?: string) => {
@@ -39,7 +51,12 @@ describe('AgentHost sessions', () => {
   it('applies auto-approve changes to a running session (config resolved by id at permission time)', async () => {
     const d = workdir();
     const cfg = config([agent(d)]);
-    const host = new AgentHost(cfg, () => 'me', () => {}, () => {});
+    const host = new AgentHost(
+      cfg,
+      () => 'me',
+      () => {},
+      () => {},
+    );
     const s = await host['session'](agent(d));
     const run = () => s.conn.request<{ permission: { outcome: string } }>('session/prompt', { sessionId: s.id, prompt: [] }, 10_000);
     expect((await run()).permission.outcome).toBe('selected');
@@ -50,7 +67,12 @@ describe('AgentHost sessions', () => {
 
   it('closes the agent process when session setup fails (auth error included) and stores nothing', async () => {
     const d = workdir('auth-fail');
-    const host = new AgentHost(config([agent(d)]), () => 'me', () => {}, () => {});
+    const host = new AgentHost(
+      config([agent(d)]),
+      () => 'me',
+      () => {},
+      () => {},
+    );
     await expect(host['session'](agent(d))).rejects.toThrow('Authentication required');
     expect(host['sessions'].size).toBe(0);
     await until(() => !alive(pidIn(d)));

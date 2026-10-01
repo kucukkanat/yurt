@@ -10,8 +10,17 @@ import { saveAttachment } from './files';
 type Status = 'idle' | 'working' | 'waiting' | 'error';
 /** What started a run: an @mention, a follow-up in its thread, its owner's private chat, or another member's DM. */
 type Kind = 'mention' | 'reply' | 'dm' | 'guest';
-interface Session { conn: AcpConnection; id: string; key: string; onUpdate?: (u: AcpUpdate) => void }
-interface Run { peer: WorkspacePeer; ch: string; trace: TraceStep[] }
+interface Session {
+  conn: AcpConnection;
+  id: string;
+  key: string;
+  onUpdate?: (u: AcpUpdate) => void;
+}
+interface Run {
+  peer: WorkspacePeer;
+  ch: string;
+  trace: TraceStep[];
+}
 
 const STALE_MS = 3 * 60_000;
 const APPROVAL_TIMEOUT_MS = 30 * 60_000;
@@ -58,10 +67,20 @@ export class AgentHost {
   private runs = new Map<string, Run>();
   private agentChains = new Map<string, number[]>();
 
-  constructor(private cfg: Config, private me: () => string | null, private changed: () => void, private presence: (code: string) => void) {}
+  constructor(
+    private cfg: Config,
+    private me: () => string | null,
+    private changed: () => void,
+    private presence: (code: string) => void,
+  ) {}
 
-  private agent(id: string) { return this.cfg.agents.find((a) => a.id === id); }
-  private setStatus(id: string, s: Status) { this.status.set(id, s); this.changed(); }
+  private agent(id: string) {
+    return this.cfg.agents.find((a) => a.id === id);
+  }
+  private setStatus(id: string, s: Status) {
+    this.status.set(id, s);
+    this.changed();
+  }
 
   workingIn(id: string, code: string): string | null {
     const w = this.working.get(id);
@@ -70,7 +89,11 @@ export class AgentHost {
 
   /** Closes every session of an agent: its main one and each member's guest session. */
   drop(id: string) {
-    for (const [slot, s] of this.sessions) if (slot === id || slot.startsWith(id + '|')) { s.conn.close(); this.sessions.delete(slot); }
+    for (const [slot, s] of this.sessions)
+      if (slot === id || slot.startsWith(id + '|')) {
+        s.conn.close();
+        this.sessions.delete(slot);
+      }
   }
 
   onEvents(peer: WorkspacePeer, fresh: Ev[]) {
@@ -79,7 +102,10 @@ export class AgentHost {
     const ws = this.cfg.workspaces.find((w) => w.code === peer.code);
     if (!ws) return;
     for (const e of fresh) {
-      if (isOwnerApproval(e, me)) { this.approvals.get(e.b?.req)?.(e.b?.option); continue; }
+      if (isOwnerApproval(e, me)) {
+        this.approvals.get(e.b?.req)?.(e.b?.option);
+        continue;
+      }
       if (e.t !== 'msg' || !e.ch || Date.now() - e.ts > STALE_MS) continue;
       const m = peer.state.msgs.get(e.id);
       if (!m) continue;
@@ -132,7 +158,9 @@ export class AgentHost {
     conn.onUpdate = (_sid, u) => s.onUpdate?.(u);
     // By id, not `a`: saving the agent replaces its config object, and auto-approve changes must apply mid-session.
     conn.onPermission = (p) => this.permission(a.id, p);
-    conn.onExit = () => { if (this.sessions.get(slot) === s) this.sessions.delete(slot); };
+    conn.onExit = () => {
+      if (this.sessions.get(slot) === s) this.sessions.delete(slot);
+    };
     try {
       await conn.initialize();
       const res = await conn.request<{ sessionId: string }>('session/new', { cwd: a.workdir, mcpServers: [] }, 120_000);
@@ -166,23 +194,46 @@ export class AgentHost {
   private prompt(a: AgentConfig, peer: WorkspacePeer, trigger: Msg, kind: Kind, saved: ReadonlyMap<string, string> = new Map()): string {
     const s = peer.state;
     const me = this.me()!;
-    const nameOf = (m: Msg) => (m.ag ? (s.agents.get(agentKey(m.a, m.ag))?.name || m.ag) + ' (agent)' : (s.profiles.get(m.a)?.name || 'Someone') + ' (@' + (s.profiles.get(m.a)?.handle || '?') + ')');
+    const nameOf = (m: Msg) =>
+      m.ag ? (s.agents.get(agentKey(m.a, m.ag))?.name || m.ag) + ' (agent)' : (s.profiles.get(m.a)?.name || 'Someone') + ' (@' + (s.profiles.get(m.a)?.handle || '?') + ')';
     let ids: string[];
     let where: string;
     const chName = s.channels.get(trigger.ch)?.name || trigger.ch;
     const owner = s.profiles.get(me)?.name || 'your owner';
     const guest = s.profiles.get(trigger.a);
-    if (kind === 'dm') { ids = s.channelMsgs.get(trigger.ch) || []; where = 'a private chat with your owner'; }
-    else if (kind === 'guest') { ids = s.channelMsgs.get(trigger.ch) || []; where = `a private chat with ${guest?.name || 'a member'} (@${guest?.handle || '?'}), a member of the workspace. ${owner} can read this chat too`; }
-    else if (trigger.parent) { const p = s.msgs.get(trigger.parent); ids = p ? [p.id, ...p.replies] : [trigger.id]; where = 'a thread in #' + chName; }
-    else { ids = s.channelMsgs.get(trigger.ch) || []; where = '#' + chName; }
+    if (kind === 'dm') {
+      ids = s.channelMsgs.get(trigger.ch) || [];
+      where = 'a private chat with your owner';
+    } else if (kind === 'guest') {
+      ids = s.channelMsgs.get(trigger.ch) || [];
+      where = `a private chat with ${guest?.name || 'a member'} (@${guest?.handle || '?'}), a member of the workspace. ${owner} can read this chat too`;
+    } else if (trigger.parent) {
+      const p = s.msgs.get(trigger.parent);
+      ids = p ? [p.id, ...p.replies] : [trigger.id];
+      where = 'a thread in #' + chName;
+    } else {
+      ids = s.channelMsgs.get(trigger.ch) || [];
+      where = '#' + chName;
+    }
     const cut = ids.indexOf(trigger.id);
     const recent = (cut >= 0 ? ids.slice(0, cut + 1) : ids).slice(-Math.max(1, a.contextSize));
     // Only the triggering message's files are fetched; earlier ones are listed by name.
     const fileLine = (m: Msg, f: Msg['files'][number]) => (m.id !== trigger.id ? f.name : saved.has(f.id) ? `${f.name} → ${saved.get(f.id)}` : `${f.name} (couldn't download)`);
-    const lines = recent.map((id) => s.msgs.get(id)).filter((m): m is Msg => !!m && !m.deleted)
-      .map((m) => `[${new Date(m.ts).toISOString().slice(11, 16)}] ${nameOf(m)}: ${m.text}${m.files.length ? ' [attached: ' + m.files.map((f) => fileLine(m, f)).join(', ') + ']' : ''}`);
-    const ask = kind === 'dm' ? ' from your owner' : kind === 'guest' ? ' from ' + (guest?.name || 'them') : kind === 'reply' ? ', a follow-up in a thread you take part in' : ', which mentions you';
+    const lines = recent
+      .map((id) => s.msgs.get(id))
+      .filter((m): m is Msg => !!m && !m.deleted)
+      .map(
+        (m) =>
+          `[${new Date(m.ts).toISOString().slice(11, 16)}] ${nameOf(m)}: ${m.text}${m.files.length ? ' [attached: ' + m.files.map((f) => fileLine(m, f)).join(', ') + ']' : ''}`,
+      );
+    const ask =
+      kind === 'dm'
+        ? ' from your owner'
+        : kind === 'guest'
+          ? ' from ' + (guest?.name || 'them')
+          : kind === 'reply'
+            ? ', a follow-up in a thread you take part in'
+            : ', which mentions you';
     return [
       `You are ${a.name} (@${a.handle}), an AI agent in the Yurt workspace "${s.name}", speaking in ${where}. ${owner} owns you and runs you on their machine.`,
       a.instructions ? `\nYour instructions from ${owner}:\n${a.instructions}` : '',
@@ -214,7 +265,10 @@ export class AgentHost {
           if (!t) return;
           const st = trace[t.i];
           if (u.title) st.title = u.title;
-          if (u.status) { st.status = mapStatus(u.status); if (st.status !== 'running') st.ms = Date.now() - t.start; }
+          if (u.status) {
+            st.status = mapStatus(u.status);
+            if (st.status !== 'running') st.ms = Date.now() - t.start;
+          }
         }
       };
       const saved = await this.deliverFiles(a, peer, trigger);
@@ -237,8 +291,16 @@ export class AgentHost {
     const secs = ((Date.now() - t0) / 1000).toFixed(1) + 's';
     const nTools = tools.size;
     peer.publish({
-      t: 'msg', ch: trigger.ch, ag: a.id, to: kind === 'dm' ? me : kind === 'guest' ? trigger.a : undefined,
-      b: { text: text.trim(), ...placement(a, trigger, kind), trace: trace.length ? trace : undefined, meta: (nTools ? nTools + (nTools === 1 ? ' tool · ' : ' tools · ') : '') + secs },
+      t: 'msg',
+      ch: trigger.ch,
+      ag: a.id,
+      to: kind === 'dm' ? me : kind === 'guest' ? trigger.a : undefined,
+      b: {
+        text: text.trim(),
+        ...placement(a, trigger, kind),
+        trace: trace.length ? trace : undefined,
+        meta: (nTools ? nTools + (nTools === 1 ? ' tool · ' : ' tools · ') : '') + secs,
+      },
     });
   }
 
@@ -260,7 +322,10 @@ export class AgentHost {
     const req = Math.random().toString(36).slice(2) + Date.now().toString(36);
     const step = run.trace.push({ title: 'Waiting for approval: ' + title, tool: kind, status: 'waiting' }) - 1;
     run.peer.publish({
-      t: 'msg', ch: agentDmChannel(me, a.id), to: me, ag: a.id,
+      t: 'msg',
+      ch: agentDmChannel(me, a.id),
+      to: me,
+      ag: a.id,
       b: { text: `I need your OK to ${title}.`, approval: { req, title, kind, options: options.map((o) => ({ id: o.optionId, name: o.name, kind: o.kind })) } },
     });
     this.setStatus(a.id, 'waiting');

@@ -1,8 +1,25 @@
 import { describe, it, expect } from 'vitest';
 import {
-  newRecoveryPhrase, keyFromPhrase, isValidPhrase, sign, verify, fingerprint,
-  makeEvent, verifyEvent, reduce, EDIT_WINDOW_MS, summarize, diffDays, idsByDays, reconcile,
-  normalizeCode, formatCode, newInviteCode, dmChannel, mentions, type Ev,
+  newRecoveryPhrase,
+  keyFromPhrase,
+  isValidPhrase,
+  sign,
+  verify,
+  fingerprint,
+  makeEvent,
+  verifyEvent,
+  reduce,
+  EDIT_WINDOW_MS,
+  summarize,
+  diffDays,
+  idsByDays,
+  reconcile,
+  normalizeCode,
+  formatCode,
+  newInviteCode,
+  dmChannel,
+  mentions,
+  type Ev,
 } from '../src';
 
 const WS = 'K7QX2MPD';
@@ -92,11 +109,7 @@ describe('reduce', () => {
   });
   it('lets only the creator promote and never demotes the creator', () => {
     const evs = base();
-    const s = reduce(WS, [...evs,
-      ev(B, 'role', { target: C.pub, admin: true }),
-      ev(A, 'role', { target: B.pub, admin: true }),
-      ev(B, 'role', { target: A.pub, admin: false }),
-    ]);
+    const s = reduce(WS, [...evs, ev(B, 'role', { target: C.pub, admin: true }), ev(A, 'role', { target: B.pub, admin: true }), ev(B, 'role', { target: A.pub, admin: false })]);
     expect([...s.admins].sort()).toEqual([A.pub, B.pub].sort());
   });
   it('drops every event from a banned key, backdated or not, until unbanned', () => {

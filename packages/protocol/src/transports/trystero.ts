@@ -4,10 +4,7 @@ import type { DataLink, LinkHost, Presence } from '../transport';
 import { visibleTo } from '../events';
 import { summarize, diffDays, idsByDays, reconcile, type Summary } from '../sync';
 
-type SyncMsg =
-  | { k: 'sum'; s: Summary }
-  | { k: 'ids'; d: Record<string, string[]> }
-  | { k: 'want'; ids: string[] };
+type SyncMsg = { k: 'sum'; s: Summary } | { k: 'ids'; d: Record<string, string[]> } | { k: 'want'; ids: string[] };
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null;
 
@@ -24,11 +21,16 @@ export class TrysteroData implements DataLink {
   private me: Presence | null = null;
   private beat: ReturnType<typeof setInterval>;
 
-  constructor(private host: LinkHost, room: TRoom) {
+  constructor(
+    private host: LinkHost,
+    room: TRoom,
+  ) {
     this.ev = room.makeAction<Ev[]>('ev');
     this.sync = room.makeAction<SyncMsg>('sync');
     this.pres = room.makeAction<Presence>('pres');
-    this.ev.onMessage = (evs, { peerId }) => { if (this.member(peerId)) host.receive(evs); };
+    this.ev.onMessage = (evs, { peerId }) => {
+      if (this.member(peerId)) host.receive(evs);
+    };
     this.sync.onMessage = (m, { peerId }) => this.onSync(m, peerId);
     this.pres.onMessage = (p, { peerId }) => {
       const who = this.member(peerId);
@@ -39,7 +41,9 @@ export class TrysteroData implements DataLink {
     this.beat = setInterval(() => this.me && this.broadcast(this.pres, this.me), 30_000);
   }
 
-  get connected() { return this.targets(() => true).length > 0; }
+  get connected() {
+    return this.targets(() => true).length > 0;
+  }
 
   send(evs: readonly Ev[]) {
     const pub = evs.filter((e) => !e.to);
@@ -47,7 +51,10 @@ export class TrysteroData implements DataLink {
     for (const e of evs) {
       if (!e.to) continue;
       const t = this.targets((p) => p === e.a || p === e.to);
-      if (t.length) { this.ev.send([e], { target: t }); reached.push(e.id); }
+      if (t.length) {
+        this.ev.send([e], { target: t });
+        reached.push(e.id);
+      }
     }
     // A public event that reached any member spreads onwards through their syncs. A private one
     // only travels between its two parties, so it counts once the other one (or my other device) has it.
@@ -67,7 +74,12 @@ export class TrysteroData implements DataLink {
     // The sync just started hands them whatever of my queue they may see (public events, or
     // private ones they're a party to); nothing else in the queue got any closer to delivery.
     const { events, queued } = this.host;
-    this.host.delivered([...queued].filter((id) => { const e = events.get(id); return !!e && visibleTo(e, pub); }));
+    this.host.delivered(
+      [...queued].filter((id) => {
+        const e = events.get(id);
+        return !!e && visibleTo(e, pub);
+      }),
+    );
   }
 
   onPeerLeave(peerId: string) {
@@ -111,9 +123,18 @@ export class TrysteroData implements DataLink {
     } else if (m.k === 'ids' && isObj(m.d)) {
       const { want, give } = reconcile(vis, m.d as Record<string, string[]>, (id) => events.has(id));
       if (want.length) this.sync.send({ k: 'want', ids: want }, { target: peerId });
-      this.sendEvents(give.flatMap((id) => events.get(id) ?? []), peerId);
+      this.sendEvents(
+        give.flatMap((id) => events.get(id) ?? []),
+        peerId,
+      );
     } else if (m.k === 'want' && Array.isArray(m.ids)) {
-      this.sendEvents(m.ids.flatMap((id) => { const e = typeof id === 'string' ? events.get(id) : undefined; return e && visibleTo(e, who.pub) ? [e] : []; }), peerId);
+      this.sendEvents(
+        m.ids.flatMap((id) => {
+          const e = typeof id === 'string' ? events.get(id) : undefined;
+          return e && visibleTo(e, who.pub) ? [e] : [];
+        }),
+        peerId,
+      );
     }
   }
 }

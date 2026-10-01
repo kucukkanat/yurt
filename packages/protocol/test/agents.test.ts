@@ -6,8 +6,7 @@ const OWNER = keyFromPhrase(newRecoveryPhrase());
 const MEMBER = keyFromPhrase(newRecoveryPhrase());
 const OTHER = keyFromPhrase(newRecoveryPhrase());
 let clock = 1_700_000_000_000;
-const ev = (kp: typeof OWNER, t: EvType, b: unknown, extra: { ch?: string; to?: string; ag?: string } = {}) =>
-  makeEvent(kp, { ws: WS, t, b, ts: (clock += 1000), ...extra });
+const ev = (kp: typeof OWNER, t: EvType, b: unknown, extra: { ch?: string; to?: string; ag?: string } = {}) => makeEvent(kp, { ws: WS, t, b, ts: (clock += 1000), ...extra });
 const agentBody = { id: 'harvey', name: 'Harvey', handle: 'harvey', runtime: 'copilot', replyIn: 'thread' };
 const base = (): Ev[] => [ev(OWNER, 'ws.create', { name: 'W' }), ev(OWNER, 'ch.create', { id: 'general', name: 'general' })];
 const state = (evs: Ev[]) => reduce(WS, evs, { creator: OWNER.pub });
@@ -20,7 +19,10 @@ describe('agent settings', () => {
   });
 
   it('fills in older agents from replyIn, and ignores malformed new fields', () => {
-    for (const [replyIn, postIn] of [['thread', { thread: true, channel: false }], ['channel', { thread: false, channel: true }]] as const) {
+    for (const [replyIn, postIn] of [
+      ['thread', { thread: true, channel: false }],
+      ['channel', { thread: false, channel: true }],
+    ] as const) {
       const s = state([...base(), ev(OWNER, 'agent', { ...agentBody, replyIn, respondTo: { mentions: 'yes' }, postIn: [1], discoverable: 'true' })]);
       const a = s.agents.get(agentKey(OWNER.pub, 'harvey'));
       expect(a?.respondTo).toBeUndefined();

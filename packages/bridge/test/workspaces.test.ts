@@ -14,7 +14,12 @@ beforeAll(async () => {
   const [{ loadConfig }, { Workspaces }, { AgentHost }] = await Promise.all([import('../src/config'), import('../src/workspaces'), import('../src/agents')]);
   cfg = loadConfig();
   ws = new Workspaces(cfg, () => {});
-  ws.host = new AgentHost(cfg, () => ws.me, () => {}, () => {});
+  ws.host = new AgentHost(
+    cfg,
+    () => ws.me,
+    () => {},
+    () => {},
+  );
   ws.setIdentity(newRecoveryPhrase());
 });
 afterAll(() => {

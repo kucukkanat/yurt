@@ -5,7 +5,9 @@ import path from 'node:path';
 import { safeName, saveAttachment } from '../src/files';
 
 let dir: string;
-beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yurt-files-')); });
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yurt-files-'));
+});
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 const bytes = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;

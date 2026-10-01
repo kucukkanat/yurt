@@ -14,7 +14,12 @@ export function App() {
   const ready = useApp((s) => s.ready);
   const identity = useApp((s) => s.identity);
   if (!ready) return null;
-  return <>{identity ? <Shell /> : <Onboarding />}<Toasts /></>;
+  return (
+    <>
+      {identity ? <Shell /> : <Onboarding />}
+      <Toasts />
+    </>
+  );
 }
 
 function useShortcuts() {
@@ -22,11 +27,19 @@ function useShortcuts() {
     const k = (e: KeyboardEvent) => {
       const s = useApp.getState();
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); s.setDialog(s.dialog === 'jump' ? null : 'jump'); }
-      else if (mod && e.key === ',') { e.preventDefault(); s.openSettings(); }
-      else if (mod && e.key.toLowerCase() === 'i' && s.route.code) { e.preventDefault(); s.setPanel(s.panel.type === 'members' ? { type: null } : { type: 'members' }); }
-      else if (mod && e.key.toLowerCase() === 'f' && s.route.code) { e.preventDefault(); s.setPanel({ type: 'search' }); }
-      else if (e.key === 'Escape' && !s.dialog && s.panel.type && !(e.target as HTMLElement)?.closest?.('textarea,input')) {
+      if (mod && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        s.setDialog(s.dialog === 'jump' ? null : 'jump');
+      } else if (mod && e.key === ',') {
+        e.preventDefault();
+        s.openSettings();
+      } else if (mod && e.key.toLowerCase() === 'i' && s.route.code) {
+        e.preventDefault();
+        s.setPanel(s.panel.type === 'members' ? { type: null } : { type: 'members' });
+      } else if (mod && e.key.toLowerCase() === 'f' && s.route.code) {
+        e.preventDefault();
+        s.setPanel({ type: 'search' });
+      } else if (e.key === 'Escape' && !s.dialog && s.panel.type && !(e.target as HTMLElement)?.closest?.('textarea,input')) {
         if (s.panel.type === 'thread' && s.route.code) s.go({ code: s.route.code, ch: s.route.ch });
         s.setPanel({ type: null });
       }
@@ -49,16 +62,23 @@ function Shell() {
       useApp.getState().go({ code: route.code, ch: first });
     }
   }, [route.code, route.ch, nChannels]);
-  const side = <div style={{ display: 'flex', height: '100%', flexShrink: 0 }}><Rail />{route.code && <Sidebar />}</div>;
+  const side = (
+    <div style={{ display: 'flex', height: '100%', flexShrink: 0 }}>
+      <Rail />
+      {route.code && <Sidebar />}
+    </div>
+  );
   return (
     <div style={{ position: 'relative', display: 'flex', height: '100%', background: 'var(--surface-page)' }}>
       {narrow
         ? drawer && (
-          <div onMouseDown={(e) => e.target === e.currentTarget && useApp.setState({ drawer: false })}
-            style={{ position: 'fixed', inset: 0, zIndex: 'var(--z-dialog)' as any, background: 'var(--surface-overlay)', animation: 'ag-fade var(--dur-fast) var(--ease-out)' }}>
-            <div style={{ height: '100%', width: 'min(100%, 340px)', animation: 'ag-rise var(--dur-base) var(--ease-out)' }}>{side}</div>
-          </div>
-        )
+            <div
+              onMouseDown={(e) => e.target === e.currentTarget && useApp.setState({ drawer: false })}
+              style={{ position: 'fixed', inset: 0, zIndex: 'var(--z-dialog)' as any, background: 'var(--surface-overlay)', animation: 'ag-fade var(--dur-fast) var(--ease-out)' }}
+            >
+              <div style={{ height: '100%', width: 'min(100%, 340px)', animation: 'ag-rise var(--dur-base) var(--ease-out)' }}>{side}</div>
+            </div>
+          )
         : side}
       <main style={{ flex: 1, minWidth: 0, display: 'flex', height: '100%' }}>
         {route.code && route.ch ? <ChannelView narrow={narrow} /> : <Home narrow={narrow} />}
@@ -75,11 +95,35 @@ function Toasts() {
   const dismiss = useApp((s) => s.dismiss);
   if (!toasts.length) return null;
   return (
-    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, zIndex: 'var(--z-toast)' as any, pointerEvents: 'none', padding: '0 12px' }}>
+    <div
+      style={{
+        position: 'fixed',
+        left: 0,
+        right: 0,
+        bottom: 20,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 8,
+        zIndex: 'var(--z-toast)' as any,
+        pointerEvents: 'none',
+        padding: '0 12px',
+      }}
+    >
       {toasts.map((t) => (
         <div key={t.id} style={{ pointerEvents: 'auto', maxWidth: '100%' }}>
-          <Toast tone={t.tone} title={t.title} description={t.description} actionLabel={t.actionLabel} duration={t.duration}
-            onAction={() => { t.onAction?.(); dismiss(t.id); }} onClose={() => dismiss(t.id)} />
+          <Toast
+            tone={t.tone}
+            title={t.title}
+            description={t.description}
+            actionLabel={t.actionLabel}
+            duration={t.duration}
+            onAction={() => {
+              t.onAction?.();
+              dismiss(t.id);
+            }}
+            onClose={() => dismiss(t.id)}
+          />
         </div>
       ))}
     </div>

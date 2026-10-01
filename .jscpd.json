@@ -1,0 +1,10 @@
+{
+  "pattern": "**/*.{ts,tsx,js,jsx,mjs}",
+  "ignore": ["**/node_modules/**", "**/dist/**", "**/*.d.ts", "**/test-results/**", "**/playwright-report/**", "**/coverage/**"],
+  "minTokens": 50,
+  "minLines": 5,
+  "reporters": ["console"],
+  "gitignore": true,
+  "absolute": false,
+  "threshold": 2
+}

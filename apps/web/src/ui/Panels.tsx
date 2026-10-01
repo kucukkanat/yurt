@@ -17,9 +17,31 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
   };
   const titles: Record<string, string> = { members: 'Members', profile: 'Profile', thread: 'Thread', pinned: 'Pinned', search: 'Search' };
   return (
-    <aside aria-label={titles[panel.type!]} style={narrow
-      ? { position: 'fixed', inset: 0, zIndex: 'var(--z-dialog)' as any, background: 'var(--surface-page)', display: 'flex', flexDirection: 'column', animation: 'ag-rise var(--dur-base) var(--ease-out)' }
-      : { width: 'var(--layout-panel, 320px)', minWidth: 300, flexShrink: 0, borderLeft: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--surface-page)' }}>
+    <aside
+      aria-label={titles[panel.type!]}
+      style={
+        narrow
+          ? {
+              position: 'fixed',
+              inset: 0,
+              zIndex: 'var(--z-dialog)' as any,
+              background: 'var(--surface-page)',
+              display: 'flex',
+              flexDirection: 'column',
+              animation: 'ag-rise var(--dur-base) var(--ease-out)',
+            }
+          : {
+              width: 'var(--layout-panel, 320px)',
+              minWidth: 300,
+              flexShrink: 0,
+              borderLeft: '1px solid var(--border-subtle)',
+              display: 'flex',
+              flexDirection: 'column',
+              height: '100%',
+              background: 'var(--surface-page)',
+            }
+      }
+    >
       <header style={{ display: 'flex', alignItems: 'center', gap: 8, height: 56, padding: '0 8px 0 18px', borderBottom: '1px solid var(--border-subtle)', flexShrink: 0 }}>
         <span style={{ flex: 1, font: '700 16px/1 var(--font-display)', letterSpacing: '-0.02em', color: 'var(--text-strong)' }}>{titles[panel.type!]}</span>
         <IconButton icon="x" label="Close (Esc)" size="sm" onClick={close} />
@@ -39,20 +61,46 @@ function Members() {
   const { state, peer, identity } = useCurrent();
   const people = roster(state, peer, identity.pub);
   const open = (p: Person) => useApp.getState().setPanel({ type: 'profile', id: p.id });
-  const group = (title: string, list: Person[]) => list.length > 0 && (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <div style={{ padding: '8px 10px 4px', fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>{title} · {list.length}</div>
-      {list.map((p) => (
-        <MemberRow key={p.id} member={p as any} onClick={() => open(p)} cutout="var(--surface-page)"
-          meta={p.kind === 'agent' ? (p.owner?.self ? 'Yours' : p.owner?.name + '’s') + (p.presence === 'offline' ? ' · machine off' : p.working ? ' · working' : '') : p.creator ? 'Creator' : p.admin ? 'Admin' : undefined} />
-      ))}
-    </div>
-  );
+  const group = (title: string, list: Person[]) =>
+    list.length > 0 && (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ padding: '8px 10px 4px', fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>
+          {title} · {list.length}
+        </div>
+        {list.map((p) => (
+          <MemberRow
+            key={p.id}
+            member={p as any}
+            onClick={() => open(p)}
+            cutout="var(--surface-page)"
+            meta={
+              p.kind === 'agent'
+                ? (p.owner?.self ? 'Yours' : p.owner?.name + '’s') + (p.presence === 'offline' ? ' · machine off' : p.working ? ' · working' : '')
+                : p.creator
+                  ? 'Creator'
+                  : p.admin
+                    ? 'Admin'
+                    : undefined
+            }
+          />
+        ))}
+      </div>
+    );
   return (
     <div style={{ overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {group('People', people.filter((p) => p.kind === 'human'))}
-      {group('Agents', people.filter((p) => p.kind === 'agent'))}
-      <div style={{ padding: '4px 10px' }}><Button variant="secondary" size="sm" iconLeft="user-plus" onClick={() => useApp.getState().setDialog('invite')}>Invite people</Button></div>
+      {group(
+        'People',
+        people.filter((p) => p.kind === 'human'),
+      )}
+      {group(
+        'Agents',
+        people.filter((p) => p.kind === 'agent'),
+      )}
+      <div style={{ padding: '4px 10px' }}>
+        <Button variant="secondary" size="sm" iconLeft="user-plus" onClick={() => useApp.getState().setDialog('invite')}>
+          Invite people
+        </Button>
+      </div>
     </div>
   );
 }
@@ -71,12 +119,21 @@ function Profile({ id }: { id: string }) {
     const pids = peer?.peerIdsFor([p.pub]) || [];
     pids.forEach((pid) => (peer?.room?.getPeers()[pid] as RTCPeerConnection | undefined)?.close());
     if (!relayed) {
-      app.toast({ title: p.name + ' is banned', description: 'All their messages are hidden and they’re disconnected.', actionLabel: 'Undo', onAction: () => e && app.publish(code, { t: 'ban', b: { target: p.pub, on: false } }) });
+      app.toast({
+        title: p.name + ' is banned',
+        description: 'All their messages are hidden and they’re disconnected.',
+        actionLabel: 'Undo',
+        onAction: () => e && app.publish(code, { t: 'ban', b: { target: p.pub, on: false } }),
+      });
       return;
     }
     try {
       peer?.rotate();
-      app.toast({ tone: 'success', title: p.name + ' was removed', description: 'The workspace key was rotated: they can’t read anything new, and old invite links no longer work.' });
+      app.toast({
+        tone: 'success',
+        title: p.name + ' was removed',
+        description: 'The workspace key was rotated: they can’t read anything new, and old invite links no longer work.',
+      });
     } catch (err) {
       app.toast({ tone: 'danger', title: 'Banned, but the key wasn’t rotated', description: err instanceof Error ? err.message : String(err), duration: 10_000 });
     }
@@ -87,53 +144,131 @@ function Profile({ id }: { id: string }) {
   const Line = ({ k, v, mono }: { k: string; v: React.ReactNode; mono?: boolean }) => (
     <div style={{ display: 'flex', gap: 12, fontSize: 13.5, padding: '6px 0', borderBottom: '1px solid var(--border-subtle)' }}>
       <span style={{ width: 96, color: 'var(--text-subtle)', flexShrink: 0 }}>{k}</span>
-      <span style={{ color: 'var(--text-body)', fontFamily: mono ? 'var(--font-mono)' : undefined, fontSize: mono ? 12.5 : undefined, minWidth: 0, overflowWrap: 'anywhere' }}>{v}</span>
+      <span style={{ color: 'var(--text-body)', fontFamily: mono ? 'var(--font-mono)' : undefined, fontSize: mono ? 12.5 : undefined, minWidth: 0, overflowWrap: 'anywhere' }}>
+        {v}
+      </span>
     </div>
   );
   return (
     <div style={{ overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <Avatar name={p.name} kind={p.kind} self={p.self} owner={p.kind === 'agent' ? p.owner : undefined} presence={p.presence} working={p.working} size={72} decorative cutout="var(--surface-page)" />
+      <Avatar
+        name={p.name}
+        kind={p.kind}
+        self={p.self}
+        owner={p.kind === 'agent' ? p.owner : undefined}
+        presence={p.presence}
+        working={p.working}
+        size={72}
+        decorative
+        cutout="var(--surface-page)"
+      />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ font: '700 24px/1.1 var(--font-display)', letterSpacing: '-0.035em', color: 'var(--text-strong)' }}>{p.name}</span>
-          {p.kind === 'agent' && <Badge tone="agent" size="sm" icon="sparkles">Agent</Badge>}
-          {p.creator && <Badge tone="accent" size="sm" icon="crown">Creator</Badge>}
-          {!p.creator && p.admin && <Badge tone="accent" size="sm" icon="shield-check">Admin</Badge>}
-          {p.banned && <Badge tone="danger" size="sm" icon="ban">Banned</Badge>}
+          {p.kind === 'agent' && (
+            <Badge tone="agent" size="sm" icon="sparkles">
+              Agent
+            </Badge>
+          )}
+          {p.creator && (
+            <Badge tone="accent" size="sm" icon="crown">
+              Creator
+            </Badge>
+          )}
+          {!p.creator && p.admin && (
+            <Badge tone="accent" size="sm" icon="shield-check">
+              Admin
+            </Badge>
+          )}
+          {p.banned && (
+            <Badge tone="danger" size="sm" icon="ban">
+              Banned
+            </Badge>
+          )}
         </div>
-        <span style={{ fontSize: 13.5, color: 'var(--text-muted)' }}>@{p.handle} · {p.presence === 'online' ? 'Online' : p.presence === 'away' ? 'Away' : 'Offline'}</span>
+        <span style={{ fontSize: 13.5, color: 'var(--text-muted)' }}>
+          @{p.handle} · {p.presence === 'online' ? 'Online' : p.presence === 'away' ? 'Away' : 'Offline'}
+        </span>
       </div>
       <div>
-        {p.kind === 'agent' ? <>
-          <Line k="Owner" v={p.owner?.self ? 'You' : p.owner?.name} />
-          <Line k="Runtime" v={p.runtime || '—'} />
-          <Line k="Runs on" v={(p.owner?.self ? 'Your' : p.owner?.name + '’s') + ' machine'} />
-          <Line k="Owner key" v={fingerprint(p.pub)} mono />
-          {p.prefs && <Line k="Settings" v={<span data-testid="agent-prefs">{prefsLine(p.prefs)}</span>} />}
-        </> : <Line k="Key" v={fingerprint(p.pub)} mono />}
+        {p.kind === 'agent' ? (
+          <>
+            <Line k="Owner" v={p.owner?.self ? 'You' : p.owner?.name} />
+            <Line k="Runtime" v={p.runtime || '—'} />
+            <Line k="Runs on" v={(p.owner?.self ? 'Your' : p.owner?.name + '’s') + ' machine'} />
+            <Line k="Owner key" v={fingerprint(p.pub)} mono />
+            {p.prefs && <Line k="Settings" v={<span data-testid="agent-prefs">{prefsLine(p.prefs)}</span>} />}
+          </>
+        ) : (
+          <Line k="Key" v={fingerprint(p.pub)} mono />
+        )}
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {p.kind === 'human' && <Button variant="primary" size="sm" iconLeft="message-square" onClick={() => app.go({ code, ch: dmChannel(me, p.pub) })}>{p.self ? 'Notes to self' : 'Message'}</Button>}
-        {p.kind === 'agent' && p.owner?.self && <>
-          <Button variant="agent" size="sm" iconLeft="lock" onClick={() => app.go({ code, ch: agentDmChannel(me, p.agentId!) })}>Message privately</Button>
-          <Button variant="secondary" size="sm" iconLeft="external-link" onClick={() => window.open('http://127.0.0.1:7717/', '_blank')}>Configure</Button>
-        </>}
-        {p.kind === 'agent' && !p.owner?.self && (p.prefs?.discoverable
-          ? <Button variant="agent" size="sm" iconLeft="message-square" data-testid="agent-message" onClick={() => app.go({ code, ch: guestDmChannel(me, p.pub, p.agentId ?? '') })}>Message</Button>
-          : <span data-testid="agent-not-discoverable" style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>Not discoverable: @mention {p.name} in a channel or reply to its messages.</span>)}
+        {p.kind === 'human' && (
+          <Button variant="primary" size="sm" iconLeft="message-square" onClick={() => app.go({ code, ch: dmChannel(me, p.pub) })}>
+            {p.self ? 'Notes to self' : 'Message'}
+          </Button>
+        )}
+        {p.kind === 'agent' && p.owner?.self && (
+          <>
+            <Button variant="agent" size="sm" iconLeft="lock" onClick={() => app.go({ code, ch: agentDmChannel(me, p.agentId!) })}>
+              Message privately
+            </Button>
+            <Button variant="secondary" size="sm" iconLeft="external-link" onClick={() => window.open('http://127.0.0.1:7717/', '_blank')}>
+              Configure
+            </Button>
+          </>
+        )}
+        {p.kind === 'agent' &&
+          !p.owner?.self &&
+          (p.prefs?.discoverable ? (
+            <Button
+              variant="agent"
+              size="sm"
+              iconLeft="message-square"
+              data-testid="agent-message"
+              onClick={() => app.go({ code, ch: guestDmChannel(me, p.pub, p.agentId ?? '') })}
+            >
+              Message
+            </Button>
+          ) : (
+            <span data-testid="agent-not-discoverable" style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>
+              Not discoverable: @mention {p.name} in a channel or reply to its messages.
+            </span>
+          ))}
       </div>
       {p.kind === 'human' && !p.self && iAmAdmin && !p.creator && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12, borderTop: '1px solid var(--border-subtle)' }}>
           <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>Moderation</span>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {iAmCreator && !p.admin && !p.banned && <Button size="sm" variant="secondary" iconLeft="shield-check" onClick={() => app.publish(code, { t: 'role', b: { target: p.pub, admin: true } })}>Make admin</Button>}
-            {p.admin && <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'role', b: { target: p.pub, admin: false } })}>Remove admin</Button>}
-            {p.banned
-              ? <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'ban', b: { target: p.pub, on: false } })}>Unban</Button>
-              : relayed && !confirmBan
-                ? <Button size="sm" variant="danger" iconLeft="ban" data-testid="ban-button" onClick={() => setConfirmBan(true)}>Ban</Button>
-                : <Button size="sm" variant="danger" iconLeft="ban" data-testid={relayed ? 'ban-confirm' : 'ban-button'} onClick={ban}>{relayed ? 'Ban and rotate key' : 'Ban'}</Button>}
-            {relayed && confirmBan && <span data-testid="ban-warning" style={{ flexBasis: '100%', fontSize: 12.5, color: 'var(--text-subtle)' }}>They keep what they’ve already read. Everyone else moves to a new key; old invite links stop working.</span>}
+            {iAmCreator && !p.admin && !p.banned && (
+              <Button size="sm" variant="secondary" iconLeft="shield-check" onClick={() => app.publish(code, { t: 'role', b: { target: p.pub, admin: true } })}>
+                Make admin
+              </Button>
+            )}
+            {p.admin && (
+              <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'role', b: { target: p.pub, admin: false } })}>
+                Remove admin
+              </Button>
+            )}
+            {p.banned ? (
+              <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'ban', b: { target: p.pub, on: false } })}>
+                Unban
+              </Button>
+            ) : relayed && !confirmBan ? (
+              <Button size="sm" variant="danger" iconLeft="ban" data-testid="ban-button" onClick={() => setConfirmBan(true)}>
+                Ban
+              </Button>
+            ) : (
+              <Button size="sm" variant="danger" iconLeft="ban" data-testid={relayed ? 'ban-confirm' : 'ban-button'} onClick={ban}>
+                {relayed ? 'Ban and rotate key' : 'Ban'}
+              </Button>
+            )}
+            {relayed && confirmBan && (
+              <span data-testid="ban-warning" style={{ flexBasis: '100%', fontSize: 12.5, color: 'var(--text-subtle)' }}>
+                They keep what they’ve already read. Everyone else moves to a new key; old invite links stop working.
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -148,14 +283,30 @@ function Thread({ id }: { id: string }) {
   const people = useMemo(() => roster(state, peer, identity.pub), [state, peer, tick]);
   const typing = useTyping(route.ch || '');
   const parent = state?.msgs.get(id);
-  if (!state || !parent) return <div style={{ padding: 20, fontSize: 14, color: 'var(--text-muted)' }}>{peer?.transport.kind === 'nostr' ? 'This thread shows up once it arrives from the workspace’s relays.' : 'This thread syncs once a member who has it is online.'}</div>;
-  const ctx: MsgCtx = { state, peer, me: identity.pub, handle: identity.handle.toLowerCase(), roster: people, code: route.code!, inThread: true, forceRender: () => setN((x) => x + 1) };
+  if (!state || !parent)
+    return (
+      <div style={{ padding: 20, fontSize: 14, color: 'var(--text-muted)' }}>
+        {peer?.transport.kind === 'nostr' ? 'This thread shows up once it arrives from the workspace’s relays.' : 'This thread syncs once a member who has it is online.'}
+      </div>
+    );
+  const ctx: MsgCtx = {
+    state,
+    peer,
+    me: identity.pub,
+    handle: identity.handle.toLowerCase(),
+    roster: people,
+    code: route.code!,
+    inThread: true,
+    forceRender: () => setN((x) => x + 1),
+  };
   return (
     <>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '8px 0 12px' }}>
         <MessageItem m={parent} continued={false} ctx={ctx} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px' }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-subtle)' }}>{parent.replies.length} {parent.replies.length === 1 ? 'reply' : 'replies'}</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-subtle)' }}>
+            {parent.replies.length} {parent.replies.length === 1 ? 'reply' : 'replies'}
+          </span>
           <span style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
         </div>
         {parent.replies.map((rid, i) => {
@@ -165,8 +316,19 @@ function Thread({ id }: { id: string }) {
         })}
       </div>
       <div style={{ padding: '0 12px 12px' }}>
-        {typing.length > 0 && <div style={{ fontSize: 12, color: 'var(--text-subtle)', padding: '0 4px 6px' }}>{typing.map((t) => t.name).join(', ')} {typing.length === 1 ? 'is' : 'are'} typing…</div>}
-        <Composer key={route.code + '/' + route.ch + '/' + id} members={people.filter((m) => !m.self)} placeholder="Reply in thread" onSend={(t, f) => useApp.getState().send(t, f, id)} onTyping={() => useApp.getState().setTyping(route.ch || null)} autoFocus />
+        {typing.length > 0 && (
+          <div style={{ fontSize: 12, color: 'var(--text-subtle)', padding: '0 4px 6px' }}>
+            {typing.map((t) => t.name).join(', ')} {typing.length === 1 ? 'is' : 'are'} typing…
+          </div>
+        )}
+        <Composer
+          key={route.code + '/' + route.ch + '/' + id}
+          members={people.filter((m) => !m.self)}
+          placeholder="Reply in thread"
+          onSend={(t, f) => useApp.getState().send(t, f, id)}
+          onTyping={() => useApp.getState().setTyping(route.ch || null)}
+          autoFocus
+        />
       </div>
     </>
   );
@@ -177,12 +339,32 @@ function ResultRow({ m, onClick }: { m: Msg; onClick: () => void }) {
   const a = personFor(state, peer, authorKey(m), identity.pub);
   const [h, setH] = useState(false);
   return (
-    <button type="button" onClick={onClick} onPointerEnter={() => setH(true)} onPointerLeave={() => setH(false)}
-      style={{ display: 'flex', gap: 10, textAlign: 'left', padding: '10px 12px', border: '1px solid var(--border-subtle)', borderRadius: 14, background: h ? 'var(--surface-hover)' : 'var(--surface-card)', cursor: 'pointer', width: '100%' }}>
+    <button
+      type="button"
+      onClick={onClick}
+      onPointerEnter={() => setH(true)}
+      onPointerLeave={() => setH(false)}
+      style={{
+        display: 'flex',
+        gap: 10,
+        textAlign: 'left',
+        padding: '10px 12px',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 14,
+        background: h ? 'var(--surface-hover)' : 'var(--surface-card)',
+        cursor: 'pointer',
+        width: '100%',
+      }}
+    >
       <Avatar name={a.name} kind={a.kind} size={24} decorative />
       <span style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-        <span style={{ fontSize: 12, color: 'var(--text-subtle)' }}><b style={{ color: 'var(--text-strong)' }}>{a.name}</b> · {m.ch.includes(':') ? channelTitle(state, m.ch, identity.pub) : '#' + channelTitle(state, m.ch, identity.pub)} · {fmtDay(m.ts)} {fmtTime(m.ts)}</span>
-        <span style={{ fontSize: 13.5, color: 'var(--text-body)', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' } as any}>{m.text || m.files.map((f) => f.name).join(', ')}</span>
+        <span style={{ fontSize: 12, color: 'var(--text-subtle)' }}>
+          <b style={{ color: 'var(--text-strong)' }}>{a.name}</b> · {m.ch.includes(':') ? channelTitle(state, m.ch, identity.pub) : '#' + channelTitle(state, m.ch, identity.pub)} ·{' '}
+          {fmtDay(m.ts)} {fmtTime(m.ts)}
+        </span>
+        <span style={{ fontSize: 13.5, color: 'var(--text-body)', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' } as any}>
+          {m.text || m.files.map((f) => f.name).join(', ')}
+        </span>
       </span>
     </button>
   );
@@ -191,17 +373,30 @@ function ResultRow({ m, onClick }: { m: Msg; onClick: () => void }) {
 function openMsg(code: string, m: Msg) {
   const app = useApp.getState();
   if (m.parent) app.go({ code, ch: m.ch, thread: m.parent });
-  else { app.go({ code, ch: m.ch }); setTimeout(() => useApp.setState({ highlight: m.id }), 50); }
+  else {
+    app.go({ code, ch: m.ch });
+    setTimeout(() => useApp.setState({ highlight: m.id }), 50);
+  }
 }
 
 function Pinned() {
   const { state, route } = useCurrent();
   const ids = [...(state?.pins.get(route.ch || '') || [])];
-  const msgs = ids.map((id) => state!.msgs.get(id)).filter((m): m is Msg => !!m && !m.deleted).sort((a, b) => b.ts - a.ts);
+  const msgs = ids
+    .map((id) => state!.msgs.get(id))
+    .filter((m): m is Msg => !!m && !m.deleted)
+    .sort((a, b) => b.ts - a.ts);
   return (
     <div style={{ overflow: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {!msgs.length && <div style={{ padding: 8, fontSize: 14, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="pin" size={16} />Hover a message and pin it to keep it here.</div>}
-      {msgs.map((m) => <ResultRow key={m.id} m={m} onClick={() => openMsg(route.code!, m)} />)}
+      {!msgs.length && (
+        <div style={{ padding: 8, fontSize: 14, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Icon name="pin" size={16} />
+          Hover a message and pin it to keep it here.
+        </div>
+      )}
+      {msgs.map((m) => (
+        <ResultRow key={m.id} m={m} onClick={() => openMsg(route.code!, m)} />
+      ))}
     </div>
   );
 }
@@ -223,11 +418,23 @@ function Search() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
       <div style={{ padding: 12 }}>
-        <Input autoFocus iconLeft="search" placeholder="Search this workspace" aria-label="Search this workspace" value={q} onChange={(e) => setQ(e.target.value)} suffix={q ? <span style={{ font: '400 11px var(--font-mono)', color: 'var(--text-subtle)' }}>{results.length}</span> : <Kbd keys="mod+f" size="sm" />} />
+        <Input
+          autoFocus
+          iconLeft="search"
+          placeholder="Search this workspace"
+          aria-label="Search this workspace"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          suffix={q ? <span style={{ font: '400 11px var(--font-mono)', color: 'var(--text-subtle)' }}>{results.length}</span> : <Kbd keys="mod+f" size="sm" />}
+        />
       </div>
       <div style={{ overflow: 'auto', padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {q.trim().length >= 2 && !results.length && <div style={{ fontSize: 14, color: 'var(--text-muted)', padding: 8 }}>Nothing on this device matches “{q}”. Search covers history synced here.</div>}
-        {results.map((m) => <ResultRow key={m.id} m={m} onClick={() => openMsg(route.code!, m)} />)}
+        {q.trim().length >= 2 && !results.length && (
+          <div style={{ fontSize: 14, color: 'var(--text-muted)', padding: 8 }}>Nothing on this device matches “{q}”. Search covers history synced here.</div>
+        )}
+        {results.map((m) => (
+          <ResultRow key={m.id} m={m} onClick={() => openMsg(route.code!, m)} />
+        ))}
       </div>
     </div>
   );

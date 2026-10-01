@@ -3,19 +3,48 @@ import { EDIT_WINDOW_MS, sortEvents, isEventShape } from './events';
 import { isPrivateChannel, dmChannel, parseGuestDm } from './codes';
 
 export interface Msg {
-  id: string; ch: string; a: string; ag?: string; ts: number; to?: string;
+  id: string;
+  ch: string;
+  a: string;
+  ag?: string;
+  ts: number;
+  to?: string;
   /** A thread reply that is also listed in the channel. */
   alsoInChannel?: boolean;
-  text: string; parent?: string; files: FileRef[]; trace?: TraceStep[]; meta?: string; approval?: ApprovalReq;
-  edited: boolean; deleted: boolean;
+  text: string;
+  parent?: string;
+  files: FileRef[];
+  trace?: TraceStep[];
+  meta?: string;
+  approval?: ApprovalReq;
+  edited: boolean;
+  deleted: boolean;
   reactions: Record<string, string[]>; // icon → reactor keys ("pub" or "pub/agentId"); null-prototype, so any icon is a safe key
   replies: string[];
 }
 /** A rekey that counts: by someone who has been an admin and isn't banned. Earliest (ts, id) wins an epoch. */
-export interface ValidRekey { id: string; a: string; ts: number; epoch: number; keys: Record<string, string>; history: string }
-export interface Channel { id: string; name: string; topic: string; ts: number; a: string }
-export interface Agent extends AgentBody { owner: string; ts: number }
-export interface Profile extends ProfileBody { ts: number }
+export interface ValidRekey {
+  id: string;
+  a: string;
+  ts: number;
+  epoch: number;
+  keys: Record<string, string>;
+  history: string;
+}
+export interface Channel {
+  id: string;
+  name: string;
+  topic: string;
+  ts: number;
+  a: string;
+}
+export interface Agent extends AgentBody {
+  owner: string;
+  ts: number;
+}
+export interface Profile extends ProfileBody {
+  ts: number;
+}
 
 export interface WsState {
   ws: string;
@@ -25,19 +54,33 @@ export interface WsState {
   bans: Set<string>;
   channels: Map<string, Channel>;
   profiles: Map<string, Profile>;
-  agents: Map<string, Agent>;          // key: owner/agentId
+  agents: Map<string, Agent>; // key: owner/agentId
   msgs: Map<string, Msg>;
-  channelMsgs: Map<string, string[]>;  // top-level messages per channel, chronological
+  channelMsgs: Map<string, string[]>; // top-level messages per channel, chronological
   pins: Map<string, Set<string>>;
-  approvals: Map<string, string>;      // req → optionId
-  rekeys: ValidRekey[];                // chronological
+  approvals: Map<string, string>; // req → optionId
+  rekeys: ValidRekey[]; // chronological
 }
 
 export const agentKey = (owner: string, id: string) => owner + '/' + id;
 export const reactorKey = (e: Pick<Ev, 'a' | 'ag'>) => (e.ag ? agentKey(e.a, e.ag) : e.a);
 
 export function emptyState(ws: string): WsState {
-  return { ws, name: '', creator: null, admins: new Set(), bans: new Set(), channels: new Map(), profiles: new Map(), agents: new Map(), msgs: new Map(), channelMsgs: new Map(), pins: new Map(), approvals: new Map(), rekeys: [] };
+  return {
+    ws,
+    name: '',
+    creator: null,
+    admins: new Set(),
+    bans: new Set(),
+    channels: new Map(),
+    profiles: new Map(),
+    agents: new Map(),
+    msgs: new Map(),
+    channelMsgs: new Map(),
+    pins: new Map(),
+    approvals: new Map(),
+    rekeys: [],
+  };
 }
 
 // Bodies are attacker-controlled JSON, so every field is read through these: wrong types are ignored, never coerced.
@@ -62,7 +105,16 @@ function fileRef(x: unknown): FileRef | undefined {
 }
 function traceStep(x: unknown): TraceStep | undefined {
   const o = obj(x);
-  if (!o || typeof o.title !== 'string' || typeof o.status !== 'string' || !TRACE_STATUS.has(o.status) || !optStr(o.tool) || !optStr(o.detail) || !(o.ms === undefined || num(o.ms))) return undefined;
+  if (
+    !o ||
+    typeof o.title !== 'string' ||
+    typeof o.status !== 'string' ||
+    !TRACE_STATUS.has(o.status) ||
+    !optStr(o.tool) ||
+    !optStr(o.detail) ||
+    !(o.ms === undefined || num(o.ms))
+  )
+    return undefined;
   return { title: o.title, status: o.status as TraceStep['status'], tool: str(o.tool), ms: num(o.ms) ? o.ms : undefined, detail: str(o.detail) };
 }
 function approvalReq(x: unknown): ApprovalReq | undefined {
@@ -115,20 +167,29 @@ export function reduce(ws: string, events: Ev[], opts: { creator?: string | null
   // Rekeys stay valid if their author is later demoted: members already moved to that key, and
   // voiding it would put everyone back on an older key a banned member still holds.
   const everAdmins = new Set(s.creator ? [s.creator] : []);
-  for (const e of evs) if (e.t === 'role' && e.a === s.creator && obj(e.b)?.admin === true) { const t = str(obj(e.b)?.target); if (t) everAdmins.add(t); }
+  for (const e of evs)
+    if (e.t === 'role' && e.a === s.creator && obj(e.b)?.admin === true) {
+      const t = str(obj(e.b)?.target);
+      if (t) everAdmins.add(t);
+    }
   const approves: Ev[] = [];
   for (const e of evs) {
     if (s.bans.has(e.a) || e.t === 'role' || e.t === 'ban') continue;
     // Approvals are checked against the request message, which may sort after the answer when clocks disagree.
     if (e.t === 'approve') approves.push(e);
-    else if (e.t === 'rekey') guarded(() => { const r = parseRekey(e); if (r && everAdmins.has(e.a)) s.rekeys.push(r); });
+    else if (e.t === 'rekey')
+      guarded(() => {
+        const r = parseRekey(e);
+        if (r && everAdmins.has(e.a)) s.rekeys.push(r);
+      });
     else guarded(() => apply(s, e));
   }
   const reqOwners = new Map<string, Set<string>>();
   for (const m of s.msgs.values()) if (m.approval) reqOwners.set(m.approval.req, (reqOwners.get(m.approval.req) ?? new Set()).add(m.a));
   for (const e of approves) {
     const b = obj(e.b);
-    const req = str(b?.req), option = str(b?.option);
+    const req = str(b?.req),
+      option = str(b?.option);
     // Only the human owner of the agent that asked may answer; never the agent itself.
     if (req && option !== undefined && !e.ag && reqOwners.get(req)?.has(e.a)) s.approvals.set(req, option);
   }
@@ -139,7 +200,9 @@ const HEX64 = /^[0-9a-f]{64}$/;
 
 /** A rekey event's body, validated; undefined if malformed. Authority is checked separately. */
 export function parseRekey(e: Ev): ValidRekey | undefined {
-  const b = obj(e.b), keys = obj(b?.keys), history = str(b?.history);
+  const b = obj(e.b),
+    keys = obj(b?.keys),
+    history = str(b?.history);
   if (!b || !keys || history === undefined || !Number.isSafeInteger(b.epoch) || (b.epoch as number) < 1) return;
   const clean: Record<string, string> = Object.create(null);
   for (const [pub, k] of Object.entries(keys)) if (HEX64.test(pub) && typeof k === 'string') clean[pub] = k;
@@ -149,7 +212,11 @@ export function parseRekey(e: Ev): ValidRekey | undefined {
 // Every member reduces the same log, so an event that throws would break the workspace for all of
 // them, permanently. The validation above should make this unreachable; this is the backstop.
 function guarded(f: () => void) {
-  try { f(); } catch { /* a hostile event is dropped, like any other invalid one */ }
+  try {
+    f();
+  } catch {
+    /* a hostile event is dropped, like any other invalid one */
+  }
 }
 
 /** Only the creator promotes or demotes, and bans admins. Admins ban non-admins, never the creator or themselves. */
@@ -159,12 +226,16 @@ function authority(s: WsState, e: Ev) {
   if (!b || !target || target === s.creator || target === e.a) return;
   if (e.t === 'role') {
     if (e.a !== s.creator || typeof b.admin !== 'boolean') return;
-    if (b.admin) s.admins.add(target); else s.admins.delete(target);
+    if (b.admin) s.admins.add(target);
+    else s.admins.delete(target);
     return;
   }
   if (!s.admins.has(e.a) || typeof b.on !== 'boolean') return;
   if (s.admins.has(target) && e.a !== s.creator) return;
-  if (b.on) { s.bans.add(target); s.admins.delete(target); } else s.bans.delete(target);
+  if (b.on) {
+    s.bans.add(target);
+    s.admins.delete(target);
+  } else s.bans.delete(target);
 }
 
 function apply(s: WsState, e: Ev) {
@@ -180,14 +251,20 @@ function apply(s: WsState, e: Ev) {
       break;
     }
     case 'ch.create': {
-      const id = str(b.id), name = str(b.name);
-      if (id && name && optStr(b.topic) && !isPrivateChannel(id) && !s.channels.has(id)) s.channels.set(id, { id, name: name.slice(0, 60), topic: str(b.topic) ?? '', ts: e.ts, a: e.a });
+      const id = str(b.id),
+        name = str(b.name);
+      if (id && name && optStr(b.topic) && !isPrivateChannel(id) && !s.channels.has(id))
+        s.channels.set(id, { id, name: name.slice(0, 60), topic: str(b.topic) ?? '', ts: e.ts, a: e.a });
       break;
     }
     case 'ch.update': {
       const c = s.channels.get(str(b.id) ?? '');
-      const name = str(b.name), topic = str(b.topic);
-      if (c) { if (name) c.name = name.slice(0, 60); if (topic !== undefined) c.topic = topic; }
+      const name = str(b.name),
+        topic = str(b.topic);
+      if (c) {
+        if (name) c.name = name.slice(0, 60);
+        if (topic !== undefined) c.topic = topic;
+      }
       break;
     }
     case 'msg': {
@@ -201,8 +278,22 @@ function apply(s: WsState, e: Ev) {
       // Approval prompts come only from agents to their owner, in the owner's private agent channel.
       const approval = ch.startsWith('adm:') ? approvalReq(b.approval) : undefined;
       const m: Msg = {
-        id: e.id, ch, a: e.a, ag: e.ag, ts: e.ts, to: e.to, text: str(b.text) ?? '', parent: parent?.id, files: list(b.files, fileRef),
-        trace, meta: str(b.meta), approval, edited: false, deleted: false, reactions: Object.create(null) as Record<string, string[]>, replies: [],
+        id: e.id,
+        ch,
+        a: e.a,
+        ag: e.ag,
+        ts: e.ts,
+        to: e.to,
+        text: str(b.text) ?? '',
+        parent: parent?.id,
+        files: list(b.files, fileRef),
+        trace,
+        meta: str(b.meta),
+        approval,
+        edited: false,
+        deleted: false,
+        reactions: Object.create(null) as Record<string, string[]>,
+        replies: [],
         ...(parent && b.alsoInChannel === true ? { alsoInChannel: true } : {}),
       };
       s.msgs.set(e.id, m);
@@ -211,14 +302,23 @@ function apply(s: WsState, e: Ev) {
       if (!parent || m.alsoInChannel) s.channelMsgs.set(ch, [...(s.channelMsgs.get(ch) ?? []), e.id]);
       break;
     }
-    case 'edit': case 'del': {
+    case 'edit':
+    case 'del': {
       const m = s.msgs.get(str(b.target) ?? '');
       if (!m || m.deleted || m.a !== e.a || (m.ag || '') !== (e.ag || '')) return;
       // Advisory only: authors choose their own ts, so a late edit can simply claim an early time.
       // Honest clients enforce the window in the UI; this just keeps them consistent with each other.
       if (e.ts - m.ts > EDIT_WINDOW_MS || e.ts < m.ts) return;
-      if (e.t === 'edit') { const text = str(b.text); if (text === undefined) return; m.text = text; m.edited = true; }
-      else { m.deleted = true; m.text = ''; m.files = []; }
+      if (e.t === 'edit') {
+        const text = str(b.text);
+        if (text === undefined) return;
+        m.text = text;
+        m.edited = true;
+      } else {
+        m.deleted = true;
+        m.text = '';
+        m.files = [];
+      }
       break;
     }
     case 'react': {
@@ -227,15 +327,18 @@ function apply(s: WsState, e: Ev) {
       if (!m || m.deleted || !icon || icon.length > 64 || typeof b.on !== 'boolean') return;
       const who = reactorKey(e);
       const set = new Set(Object.hasOwn(m.reactions, icon) ? m.reactions[icon] : []);
-      if (b.on) set.add(who); else set.delete(who);
-      if (set.size) m.reactions[icon] = [...set]; else delete m.reactions[icon];
+      if (b.on) set.add(who);
+      else set.delete(who);
+      if (set.size) m.reactions[icon] = [...set];
+      else delete m.reactions[icon];
       break;
     }
     case 'pin': {
       const m = s.msgs.get(str(b.target) ?? '');
       if (!m || typeof b.on !== 'boolean') return;
       const set = s.pins.get(m.ch) || new Set<string>();
-      if (b.on) set.add(m.id); else set.delete(m.id);
+      if (b.on) set.add(m.id);
+      else set.delete(m.id);
       s.pins.set(m.ch, set);
       break;
     }
@@ -244,12 +347,25 @@ function apply(s: WsState, e: Ev) {
       if (typeof id !== 'string' || !id || typeof handle !== 'string' || !handle || typeof name !== 'string' || typeof runtime !== 'string') return;
       if (!optStr(b.model) || (b.replyIn !== 'thread' && b.replyIn !== 'channel') || !(b.removed === undefined || typeof b.removed === 'boolean')) return;
       // Newer fields are optional (older bridges don't send them); wrong types are ignored, never coerced.
-      const flags = <K extends string>(x: unknown, keys: readonly K[]) => { const o = obj(x); return o && keys.every((k) => typeof o[k] === 'boolean') ? (Object.fromEntries(keys.map((k) => [k, o[k] as boolean])) as Record<K, boolean>) : undefined; };
+      const flags = <K extends string>(x: unknown, keys: readonly K[]) => {
+        const o = obj(x);
+        return o && keys.every((k) => typeof o[k] === 'boolean') ? (Object.fromEntries(keys.map((k) => [k, o[k] as boolean])) as Record<K, boolean>) : undefined;
+      };
       const respondTo = flags(b.respondTo, ['mentions', 'replies'] as const);
       const postIn = flags(b.postIn, ['thread', 'channel'] as const);
       s.agents.set(agentKey(e.a, id), {
-        id, name, handle, runtime, model: str(b.model), replyIn: b.replyIn, removed: b.removed === true || undefined, owner: e.a, ts: e.ts,
-        ...(respondTo ? { respondTo } : {}), ...(postIn ? { postIn } : {}), ...(b.discoverable === true ? { discoverable: true } : {}),
+        id,
+        name,
+        handle,
+        runtime,
+        model: str(b.model),
+        replyIn: b.replyIn,
+        removed: b.removed === true || undefined,
+        owner: e.a,
+        ts: e.ts,
+        ...(respondTo ? { respondTo } : {}),
+        ...(postIn ? { postIn } : {}),
+        ...(b.discoverable === true ? { discoverable: true } : {}),
       });
       break;
     }

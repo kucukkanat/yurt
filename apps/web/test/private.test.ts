@@ -22,12 +22,16 @@ describe('private channels', () => {
 
   it('title a guest DM for the member and for the owner', () => {
     let ts = 1_700_000_000_000;
-    const s = reduce(WS, [
-      makeEvent(OWNER, { ws: WS, t: 'ws.create', b: { name: 'W' }, ts: ++ts }),
-      makeEvent(OWNER, { ws: WS, t: 'profile', b: { name: 'Ada', handle: 'ada' }, ts: ++ts }),
-      makeEvent(MEMBER, { ws: WS, t: 'profile', b: { name: 'Bea', handle: 'bea' }, ts: ++ts }),
-      makeEvent(OWNER, { ws: WS, t: 'agent', b: { id: 'harvey', name: 'Harvey', handle: 'harvey', runtime: 'copilot', replyIn: 'thread' }, ts: ++ts }),
-    ], { creator: OWNER.pub });
+    const s = reduce(
+      WS,
+      [
+        makeEvent(OWNER, { ws: WS, t: 'ws.create', b: { name: 'W' }, ts: ++ts }),
+        makeEvent(OWNER, { ws: WS, t: 'profile', b: { name: 'Ada', handle: 'ada' }, ts: ++ts }),
+        makeEvent(MEMBER, { ws: WS, t: 'profile', b: { name: 'Bea', handle: 'bea' }, ts: ++ts }),
+        makeEvent(OWNER, { ws: WS, t: 'agent', b: { id: 'harvey', name: 'Harvey', handle: 'harvey', runtime: 'copilot', replyIn: 'thread' }, ts: ++ts }),
+      ],
+      { creator: OWNER.pub },
+    );
     expect(guestDmTitle(s, ch, MEMBER.pub)).toBe('Harvey (Ada’s agent)');
     expect(guestDmTitle(s, ch, OWNER.pub)).toBe('Bea ↔ Harvey');
     expect(guestDmTitle(undefined, ch, MEMBER.pub)).toMatch(/^harvey \(.+’s agent\)$/);
@@ -38,7 +42,11 @@ describe('private channels', () => {
 describe('prefsLine', () => {
   it('summarizes when an agent answers and where it posts', () => {
     expect(prefsLine(agentPrefs({ replyIn: 'thread' }))).toBe('answers @mentions · posts in thread');
-    expect(prefsLine({ respondTo: { mentions: true, replies: true }, postIn: { thread: true, channel: true }, discoverable: true })).toBe('answers @mentions and replies · posts in thread + channel · discoverable');
-    expect(prefsLine({ respondTo: { mentions: false, replies: false }, postIn: { thread: false, channel: true }, discoverable: false })).toBe('answers only private chats · posts in channel');
+    expect(prefsLine({ respondTo: { mentions: true, replies: true }, postIn: { thread: true, channel: true }, discoverable: true })).toBe(
+      'answers @mentions and replies · posts in thread + channel · discoverable',
+    );
+    expect(prefsLine({ respondTo: { mentions: false, replies: false }, postIn: { thread: false, channel: true }, discoverable: false })).toBe(
+      'answers only private chats · posts in channel',
+    );
   });
 });

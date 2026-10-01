@@ -32,7 +32,10 @@ export function idsByDays(evs: Pick<Ev, 'id' | 'ts'>[], days: string[]): Record<
   const want = new Set(days.filter(isDay));
   const out: Record<string, string[]> = {};
   for (const d of want) out[d] = [];
-  for (const e of evs) { const d = dayOf(e.ts); if (want.has(d)) out[d].push(e.id); }
+  for (const e of evs) {
+    const d = dayOf(e.ts);
+    if (want.has(d)) out[d].push(e.id);
+  }
   return out;
 }
 

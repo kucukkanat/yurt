@@ -7,11 +7,20 @@ import { CALM, type FaviconState } from './lib/favicon';
 import { getPeer } from './lib/net';
 
 export interface Person {
-  id: string; pub: string; agentId?: string;
-  name: string; handle: string; kind: 'human' | 'agent';
-  self?: boolean; owner?: { name: string; self?: boolean };
-  presence?: 'online' | 'away' | 'offline'; working?: boolean;
-  admin?: boolean; creator?: boolean; runtime?: string; banned?: boolean;
+  id: string;
+  pub: string;
+  agentId?: string;
+  name: string;
+  handle: string;
+  kind: 'human' | 'agent';
+  self?: boolean;
+  owner?: { name: string; self?: boolean };
+  presence?: 'online' | 'away' | 'offline';
+  working?: boolean;
+  admin?: boolean;
+  creator?: boolean;
+  runtime?: string;
+  banned?: boolean;
   /** Agents only: when it answers, where it posts, and whether other members can DM it. */
   prefs?: AgentPrefs;
 }
@@ -27,18 +36,24 @@ export function useCurrent() {
 
 export function useMedia(q: string): boolean {
   const [m, setM] = useState(() => matchMedia(q).matches);
-  useEffect(() => { const mq = matchMedia(q); const f = () => setM(mq.matches); mq.addEventListener('change', f); return () => mq.removeEventListener('change', f); }, [q]);
+  useEffect(() => {
+    const mq = matchMedia(q);
+    const f = () => setM(mq.matches);
+    mq.addEventListener('change', f);
+    return () => mq.removeEventListener('change', f);
+  }, [q]);
   return m;
 }
 
 function presenceOf(peer: WorkspacePeer | undefined, pub: string, me: string): 'online' | 'away' | 'offline' {
   if (pub === me) return document.hidden ? 'away' : 'online';
   let best: 'away' | 'offline' = 'offline';
-  if (peer) for (const pr of peer.presence.values()) {
-    if (pr.pub !== pub || pr.bridge) continue;
-    if (pr.st === 'online') return 'online';
-    best = 'away';
-  }
+  if (peer)
+    for (const pr of peer.presence.values()) {
+      if (pr.pub !== pub || pr.bridge) continue;
+      if (pr.st === 'online') return 'online';
+      best = 'away';
+    }
   return best;
 }
 
@@ -50,9 +65,10 @@ export function othersOnline(peer: WorkspacePeer | undefined, me: string): numbe
 }
 
 function agentPresence(peer: WorkspacePeer | undefined, owner: string, id: string): { online: boolean; working: string | null } {
-  if (peer) for (const pr of peer.presence.values()) {
-    if (pr.pub === owner && pr.bridge && pr.agents && id in pr.agents) return { online: true, working: pr.agents[id]?.working || null };
-  }
+  if (peer)
+    for (const pr of peer.presence.values()) {
+      if (pr.pub === owner && pr.bridge && pr.agents && id in pr.agents) return { online: true, working: pr.agents[id]?.working || null };
+    }
   return { online: false, working: null };
 }
 
@@ -62,12 +78,33 @@ export function personFor(state: WsState | undefined, peer: WorkspacePeer | unde
     const a = state?.agents.get(key);
     const owner = state?.profiles.get(pub);
     const pr = agentPresence(peer, pub, agentId);
-    return { id: key, pub, agentId, name: a?.name || agentId, handle: a?.handle || agentId, kind: 'agent', runtime: a?.runtime, prefs: a ? agentPrefs(a) : undefined,
-      owner: { name: pub === me ? 'You' : owner?.name || 'Someone', self: pub === me }, presence: pr.online ? 'online' : 'offline', working: !!pr.working };
+    return {
+      id: key,
+      pub,
+      agentId,
+      name: a?.name || agentId,
+      handle: a?.handle || agentId,
+      kind: 'agent',
+      runtime: a?.runtime,
+      prefs: a ? agentPrefs(a) : undefined,
+      owner: { name: pub === me ? 'You' : owner?.name || 'Someone', self: pub === me },
+      presence: pr.online ? 'online' : 'offline',
+      working: !!pr.working,
+    };
   }
   const p = state?.profiles.get(pub);
-  return { id: key, pub, name: p?.name || fingerprint(pub), handle: p?.handle || pub.slice(0, 8), kind: 'human', self: pub === me,
-    presence: presenceOf(peer, pub, me), admin: state?.admins.has(pub), creator: state?.creator === pub, banned: state?.bans.has(pub) };
+  return {
+    id: key,
+    pub,
+    name: p?.name || fingerprint(pub),
+    handle: p?.handle || pub.slice(0, 8),
+    kind: 'human',
+    self: pub === me,
+    presence: presenceOf(peer, pub, me),
+    admin: state?.admins.has(pub),
+    creator: state?.creator === pub,
+    banned: state?.bans.has(pub),
+  };
 }
 
 export const authorKey = (m: Pick<Msg, 'a' | 'ag'>) => (m.ag ? agentKey(m.a, m.ag) : m.a);
@@ -78,13 +115,16 @@ export function roster(state: WsState | undefined, peer: WorkspacePeer | undefin
   if (!people.some((p) => p.pub === me)) people.unshift(personFor(state, peer, me, me));
   const agents = liveAgents(state).map((a) => personFor(state, peer, agentKey(a.owner, a.id), me));
   const rank = { online: 0, away: 1, offline: 2 } as const;
-  return [...people, ...agents].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'human' ? -1 : 1) || rank[a.presence || 'offline'] - rank[b.presence || 'offline'] || a.name.localeCompare(b.name));
+  return [...people, ...agents].sort(
+    (a, b) => (a.kind === b.kind ? 0 : a.kind === 'human' ? -1 : 1) || rank[a.presence || 'offline'] - rank[b.presence || 'offline'] || a.name.localeCompare(b.name),
+  );
 }
 
 export function unread(state: WsState, rec: WsRecord | undefined, ch: string, me: string, handle: string) {
   const last = rec?.lastRead[ch] || 0;
   const ids = state.channelMsgs.get(ch) || [];
-  let n = 0, m = 0;
+  let n = 0,
+    m = 0;
   for (let i = ids.length - 1; i >= 0; i--) {
     const x = state.msgs.get(ids[i])!;
     if (x.ts <= last) break;
@@ -96,8 +136,18 @@ export function unread(state: WsState, rec: WsRecord | undefined, ch: string, me
 }
 
 export function channelTitle(state: WsState | undefined, ch: string, me: string): string {
-  if (ch.startsWith('dm:')) { const other = ch.slice(3).split(':').find((k) => k !== me) || me; return state?.profiles.get(other)?.name || fingerprint(other); }
-  if (ch.startsWith('adm:')) { const [, owner, id] = ch.split(':'); return state?.agents.get(owner + '/' + id)?.name || id; }
+  if (ch.startsWith('dm:')) {
+    const other =
+      ch
+        .slice(3)
+        .split(':')
+        .find((k) => k !== me) || me;
+    return state?.profiles.get(other)?.name || fingerprint(other);
+  }
+  if (ch.startsWith('adm:')) {
+    const [, owner, id] = ch.split(':');
+    return state?.agents.get(owner + '/' + id)?.name || id;
+  }
   const guest = guestDmTitle(state, ch, me);
   if (guest) return guest;
   return state?.channels.get(ch)?.name || ch;
@@ -111,15 +161,18 @@ export function channelTitle(state: WsState | undefined, ch: string, me: string)
 export function faviconStateOf(s: AppState, peerOf: (code: string) => WorkspacePeer | undefined, visible: boolean): FaviconState {
   const me = s.identity;
   if (!me) return CALM;
-  let mentionCount = 0, unreadAny = false, callNearby = false;
+  let mentionCount = 0,
+    unreadAny = false,
+    callNearby = false;
   for (const w of s.workspaces) {
     const st = s.states[w.code];
-    if (st) for (const ch of st.channelMsgs.keys()) {
-      if (w.muted.includes(ch) || (visible && s.route.code === w.code && s.route.ch === ch)) continue;
-      const u = unread(st, w, ch, me.pub, me.handle);
-      mentionCount += u.m;
-      if (u.n) unreadAny = true;
-    }
+    if (st)
+      for (const ch of st.channelMsgs.keys()) {
+        if (w.muted.includes(ch) || (visible && s.route.code === w.code && s.route.ch === ch)) continue;
+        const u = unread(st, w, ch, me.pub, me.handle);
+        mentionCount += u.m;
+        if (u.n) unreadAny = true;
+      }
     const p = peerOf(w.code);
     if (p) for (const h of p.huddles.values()) if (h.ch && !(s.huddle.code === w.code && s.huddle.ch === h.ch)) callNearby = true;
   }

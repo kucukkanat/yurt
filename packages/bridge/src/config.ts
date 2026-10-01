@@ -20,7 +20,11 @@ export interface Config {
   workspaces: (BridgeWorkspace & { creator?: string | null; transport?: WsTransport })[];
 }
 
-export interface StoredIdentity { phrase: string; name: string; handle: string }
+export interface StoredIdentity {
+  phrase: string;
+  name: string;
+  handle: string;
+}
 
 // Origins can't carry a path, so this admits every GitHub Pages site of this user, not just /yurt.
 // Accepted risk: any of them can still only reach the pairing prompt, which is rate limited and
@@ -32,7 +36,11 @@ function ensure() {
 }
 
 function readJson<T>(file: string): T | null {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')) as T; } catch { return null; }
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
+  } catch {
+    return null;
+  }
 }
 
 function writeJson(file: string, v: unknown) {

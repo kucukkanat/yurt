@@ -12,14 +12,29 @@ export function IconButton({ icon, label, variant = 'ghost', size = 'md', active
   const bg = active ? 'var(--accent-soft)' : st.press ? v.press : st.hover ? v.hover : v.bg;
   return (
     <button
-      type="button" aria-label={label} title={label} disabled={disabled} aria-pressed={active || undefined}
-      {...rest} {...mergeHandlers(hd, rest)}
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      aria-pressed={active || undefined}
+      {...rest}
+      {...mergeHandlers(hd, rest)}
       style={{
-        width: h, height: h, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        color: active ? 'var(--accent-soft-ink)' : v.fg, background: bg, border: '1px solid ' + v.bd,
-        borderRadius: round ? 'var(--radius-pill)' : r, padding: 0,
+        width: h,
+        height: h,
+        flexShrink: 0,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: active ? 'var(--accent-soft-ink)' : v.fg,
+        background: bg,
+        border: '1px solid ' + v.bd,
+        borderRadius: round ? 'var(--radius-pill)' : r,
+        padding: 0,
         boxShadow: shadows(st.focus && 'var(--focus-ring)', !st.press && v.lip),
-        opacity: disabled ? 0.45 : 1, cursor: disabled ? 'not-allowed' : 'pointer', outline: 'none',
+        opacity: disabled ? 0.45 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        outline: 'none',
         transform: disabled ? 'none' : st.press ? 'scale(.92)' : 'none',
         transition: 'transform var(--dur-fast) var(--ease-spring), background var(--dur-fast) var(--ease-out), color var(--dur-fast)',
         ...style,

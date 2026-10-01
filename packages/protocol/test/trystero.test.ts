@@ -1,8 +1,23 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { RTCPeerConnection } from 'werift';
 import {
-  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, newTrysteroTransport, signalingOf, dmChannel, guestDmChannel, sha256Buf, makeEvent,
-  type Ev, type JoinRoom, type KeyPair, type PeerStore, type WsTransport, type HuddleState, type WsState,
+  WorkspacePeer,
+  keyFromPhrase,
+  newRecoveryPhrase,
+  newNostrTransport,
+  newTrysteroTransport,
+  signalingOf,
+  dmChannel,
+  guestDmChannel,
+  sha256Buf,
+  makeEvent,
+  type Ev,
+  type JoinRoom,
+  type KeyPair,
+  type PeerStore,
+  type WsTransport,
+  type HuddleState,
+  type WsState,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
 
@@ -16,9 +31,13 @@ function memStore(blobs = new Map<string, ArrayBuffer>()): PeerStore {
   const evs = new Map<string, Ev>();
   return {
     load: async () => [...evs.values()],
-    save: async (xs) => { xs.forEach((e) => evs.set(e.id, e)); },
+    save: async (xs) => {
+      xs.forEach((e) => evs.set(e.id, e));
+    },
     getBlob: async (id) => blobs.get(id) ?? null,
-    putBlob: async (id, buf) => { blobs.set(id, buf); },
+    putBlob: async (id, buf) => {
+      blobs.set(id, buf);
+    },
   };
 }
 
@@ -36,7 +55,12 @@ const open: WorkspacePeer[] = [];
 let errors: string[] = []; // every onError of the test; afterEach requires none
 
 interface DeviceOpts {
-  transport?: WsTransport; code?: string; blobs?: Map<string, ArrayBuffer>; events?: Ev[]; webrtc?: boolean; fetchMs?: number;
+  transport?: WsTransport;
+  code?: string;
+  blobs?: Map<string, ArrayBuffer>;
+  events?: Ev[];
+  webrtc?: boolean;
+  fetchMs?: number;
   /** Hold `store.load` until this settles, and don't wait for start(). */
   loading?: Promise<void>;
 }
@@ -52,8 +76,21 @@ async function device(kp: KeyPair, opts: DeviceOpts = {}) {
   const { loading } = opts;
   const blobsSeen: string[] = [];
   const p = new WorkspacePeer({
-    code: opts.code ?? CODE, kp, selfId, transport, roomIdleMs: 1_500, fetchMs: opts.fetchMs,
-    store: loading ? { ...store, load: async (ws) => { await loading; return store.load(ws); } } : store,
+    code: opts.code ?? CODE,
+    kp,
+    selfId,
+    transport,
+    roomIdleMs: 1_500,
+    fetchMs: opts.fetchMs,
+    store: loading
+      ? {
+          ...store,
+          load: async (ws) => {
+            await loading;
+            return store.load(ws);
+          },
+        }
+      : store,
     // `webrtc: false` is a relay workspace without the user's opt-in: no WebRTC at all.
     joinRoom: opts.webrtc === false ? undefined : (joinRoom as unknown as JoinRoom),
     rtc: { rtcPolyfill: RTCPeerConnection, relayConfig: { urls: [relay.url] } },
@@ -72,9 +109,14 @@ const pubs = (m: ReadonlyMap<string, { pub: string }>) => [...m.values()].map((x
 const legacyLocal = (): WsTransport => ({ kind: 'trystero', signal: { kind: 'nostr', urls: [relay.url] } });
 const texts = (p: WorkspacePeer) => [...p.state.msgs.values()].map((m) => m.text);
 
-beforeAll(async () => { relay = await startRelay(); });
+beforeAll(async () => {
+  relay = await startRelay();
+});
 afterAll(() => relay.close());
-beforeEach(() => { keyed = newTrysteroTransport({ kind: 'nostr', urls: [relay.url] }); errors = []; });
+beforeEach(() => {
+  keyed = newTrysteroTransport({ kind: 'nostr', urls: [relay.url] });
+  errors = [];
+});
 afterEach(() => {
   open.splice(0).forEach((p) => p.leave());
   expect(errors).toEqual([]);
@@ -127,7 +169,7 @@ describe('trystero transport', () => {
     const got = await b.fetchFile(id); // waits for the WebRTC transfer
     expect(got && new TextDecoder().decode(got)).toBe('file body');
     expect(blobsSeen).toContain(id);
-    expect(new TextDecoder().decode((await b.fetchFile(id)) ?? new ArrayBuffer(0))).toBe("file body"); // now served locally
+    expect(new TextDecoder().decode((await b.fetchFile(id)) ?? new ArrayBuffer(0))).toBe('file body'); // now served locally
     a.leave();
     await until(() => b.peers.size === 0 && seen.at(-1) === null, 20_000, 'peer leave');
   }, 60_000);
@@ -169,7 +211,9 @@ describe('trystero transport', () => {
     a.o.onState = (s, fresh) => calls.push({ s, fresh });
     const late = makeEvent(C, { ws: CODE, t: 'profile', b: { name: 'Carol', handle: 'carol' } });
     // Lands inside the 16 ms batch window that the join opens.
-    a.o.onPeers = () => { if (a.peers.size && !a.events.has(late.id)) a.receive([late]); };
+    a.o.onPeers = () => {
+      if (a.peers.size && !a.events.has(late.id)) a.receive([late]);
+    };
     await device(B);
     await until(() => calls.some(({ fresh }) => fresh.includes(late)), 20_000, 'fresh event');
     for (const { s, fresh } of calls) if (fresh.includes(late)) expect(s.profiles.has(C.pub)).toBe(true);
@@ -188,7 +232,11 @@ describe('trystero transport', () => {
 
   it('opens no room when left while still loading', async () => {
     let release = () => {};
-    const { p: a, started } = await device(A, { loading: new Promise<void>((r) => { release = r; }) });
+    const { p: a, started } = await device(A, {
+      loading: new Promise<void>((r) => {
+        release = r;
+      }),
+    });
     a.leave();
     release();
     await started;

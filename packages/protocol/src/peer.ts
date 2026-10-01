@@ -14,7 +14,10 @@ import { NostrData } from './transports/nostr';
 export type { Presence } from './transport';
 
 /* Structural subset of the Trystero ≥0.25 room API, so this package doesn't depend on it. */
-export interface TCtx { peerId: string; metadata?: any }
+export interface TCtx {
+  peerId: string;
+  metadata?: any;
+}
 export interface TAction<T = any> {
   send(data: T, opts?: { target?: string | string[] | null; metadata?: any; onProgress?: (p: number, c: { peerId: string }) => void }): Promise<unknown>;
   onMessage: ((data: T, ctx: TCtx) => void) | null;
@@ -32,7 +35,12 @@ export interface TRoom {
 }
 export type JoinRoom = (config: any, roomId: string, callbacks?: any) => TRoom;
 
-export interface HuddleState { ch: string | null; mic: boolean; cam: boolean; screen: boolean }
+export interface HuddleState {
+  ch: string | null;
+  mic: boolean;
+  cam: boolean;
+  screen: boolean;
+}
 
 export interface PeerStore {
   load(ws: string): Promise<Ev[]>;
@@ -136,10 +144,18 @@ export class WorkspacePeer implements LinkHost {
     this.myPresence = { pub: o.kp.pub, st: 'online', bridge: o.isBridge || undefined };
   }
 
-  get me() { return this.o.kp.pub; }
-  get kp() { return this.o.kp; }
-  get code() { return this.o.code; }
-  get transport(): WsTransport { return this.o.transport ?? LEGACY_TRYSTERO; }
+  get me() {
+    return this.o.kp.pub;
+  }
+  get kp() {
+    return this.o.kp;
+  }
+  get code() {
+    return this.o.code;
+  }
+  get transport(): WsTransport {
+    return this.o.transport ?? LEGACY_TRYSTERO;
+  }
   /** Online members, keyed by a link-specific id; each entry's `pub` is authenticated. */
   get presence(): ReadonlyMap<string, Presence> {
     const all = this.data?.presence;
@@ -153,19 +169,29 @@ export class WorkspacePeer implements LinkHost {
     return this.data?.relayStatus?.() ?? new Map(t.relays.map((u) => [u, false]));
   }
   /** Whether events can currently leave this device (a peer or relay is reachable). */
-  get connected(): boolean { return this.data?.connected ?? false; }
-  private get lazyRoom() { return this.transport.kind === 'nostr'; }
+  get connected(): boolean {
+    return this.data?.connected ?? false;
+  }
+  private get lazyRoom() {
+    return this.transport.kind === 'nostr';
+  }
   /** Whether this peer may open WebRTC for voice and video. Relay workspaces only with the user's opt-in (joinRoom given). */
-  get calls(): boolean { return !!this.o.joinRoom; }
+  get calls(): boolean {
+    return !!this.o.joinRoom;
+  }
 
   /** Relay workspaces: the key chain (see rekey.ts); null for Trystero. */
   private ring: Keyring | null = null;
 
   /** The workspace key to put in invite links: after a rotation, the newest one. */
-  get inviteKey(): string | undefined { return this.ring?.write.key ?? this.transport.key; }
+  get inviteKey(): string | undefined {
+    return this.ring?.write.key ?? this.transport.key;
+  }
 
   /** Removed from this workspace: banned, or the key was rotated without me, so nothing new reaches me. */
-  get lockedOut(): boolean { return this.state.bans.has(this.me) || !!this.ring?.lockedOut; }
+  get lockedOut(): boolean {
+    return this.state.bans.has(this.me) || !!this.ring?.lockedOut;
+  }
 
   /**
    * Relay workspaces: replace the workspace key so removed members can't read anything new (they keep
@@ -219,7 +245,9 @@ export class WorkspacePeer implements LinkHost {
       const { code, store } = this.o;
       const mark = (await store.loadMark?.(code)) ?? 0;
       if (this.closed) return;
-      const saveMark = (sec: number) => { store.saveMark?.(code, sec).catch((err: unknown) => this.error(`Couldn't save the sync mark: ${errMsg(err)}`)); };
+      const saveMark = (sec: number) => {
+        store.saveMark?.(code, sec).catch((err: unknown) => this.error(`Couldn't save the sync mark: ${errMsg(err)}`));
+      };
       const ring = this.ring;
       if (!ring) throw new Error('keyring missing after the first recompute'); // unreachable: recompute builds it
       this.data = new NostrData(this, { keys: this.linkKeys(ring), relays: t.relays, mark, saveMark });
@@ -235,7 +263,9 @@ export class WorkspacePeer implements LinkHost {
   }
 
   /** The WebRTC room, joining it now if needed (huddles call this). Null when this peer has no WebRTC. */
-  ensureRoom(): TRoom | null { return this.room ?? this.joinMedia(); }
+  ensureRoom(): TRoom | null {
+    return this.room ?? this.joinMedia();
+  }
 
   private joinMedia(): TRoom | null {
     const { code, kp, selfId, joinRoom } = this.o;
@@ -246,7 +276,9 @@ export class WorkspacePeer implements LinkHost {
     const signal = signalingOf(t);
     const k = key ? workspaceKeys(key) : null;
     const config = {
-      appId: k?.app ?? APP_ID, password: k?.password ?? code, ...(this.o.rtc || {}),
+      appId: k?.app ?? APP_ID,
+      password: k?.password ?? code,
+      ...(this.o.rtc || {}),
       // Signaling servers belong to the workspace (members must share them); relay workspaces use
       // their own relays, so no other relay learns anything about them. Empty = strategy defaults.
       ...(signal.urls.length ? { relayConfig: { urls: [...signal.urls] } } : {}),
@@ -274,7 +306,10 @@ export class WorkspacePeer implements LinkHost {
       const pub = this.pendingPub.get(peerId);
       if (!pub) return;
       this.pendingPub.delete(peerId);
-      if (this.isBanned(pub)) { room.getPeers()[peerId]?.close(); return; } // banned since its handshake
+      if (this.isBanned(pub)) {
+        room.getPeers()[peerId]?.close();
+        return;
+      } // banned since its handshake
       this.peers.set(peerId, { pub });
       if (this.myHuddle.ch) hud.send(this.myHuddle, { target: peerId });
       if (this.files) for (const id of this.fetching.keys()) if (this.canSeeFile(id, pub)) this.files.fwant.send({ id }, { target: peerId });
@@ -290,7 +325,10 @@ export class WorkspacePeer implements LinkHost {
   private peerLeft(peerId: string) {
     this.peers.delete(peerId);
     this.data?.onPeerLeave?.(peerId);
-    if (this.huddles.has(peerId)) { this.huddles.delete(peerId); this.onHuddle?.(peerId, null); }
+    if (this.huddles.has(peerId)) {
+      this.huddles.delete(peerId);
+      this.onHuddle?.(peerId, null);
+    }
     this.o.onPeers?.();
   }
 
@@ -310,8 +348,11 @@ export class WorkspacePeer implements LinkHost {
       const who = this.peers.get(peerId);
       const id = isObj(m) ? m.id : undefined;
       if (!who || typeof id !== 'string' || !this.canSeeFile(id, who.pub)) return;
-      this.o.store.getBlob?.(id)
-        .then((b) => { if (b) file.send(b, { target: peerId, metadata: { id } }); })
+      this.o.store
+        .getBlob?.(id)
+        .then((b) => {
+          if (b) file.send(b, { target: peerId, metadata: { id } });
+        })
         .catch((err: unknown) => this.error(`Couldn't serve file ${id}: ${errMsg(err)}`));
     };
     file.onMessage = (data: unknown, { peerId, metadata }) => {
@@ -416,7 +457,10 @@ export class WorkspacePeer implements LinkHost {
       this.events.set(ev.id, ev);
       fresh.push(ev);
     }
-    if (fresh.length) { this.save(fresh); this.schedule(fresh); }
+    if (fresh.length) {
+      this.save(fresh);
+      this.schedule(fresh);
+    }
   }
 
   private save(evs: Ev[]) {
@@ -429,14 +473,18 @@ export class WorkspacePeer implements LinkHost {
     this.o.onPeers?.();
   }
 
-  isBanned(pub: string): boolean { return this.state.bans.has(pub); }
+  isBanned(pub: string): boolean {
+    return this.state.bans.has(pub);
+  }
 
   changed() {
     this.syncRoom();
     this.o.onPeers?.();
   }
 
-  error(msg: string) { this.o.onError(msg); }
+  error(msg: string) {
+    this.o.onError(msg);
+  }
 
   visibleFor(pub: string): Ev[] {
     const out: Ev[] = [];
@@ -456,18 +504,26 @@ export class WorkspacePeer implements LinkHost {
   }
 
   /** A file may only travel to or from someone who can see a message attaching it (DM files stay within the pair), and never a banned key. */
-  private canSeeFile(id: string, pub: string): boolean { return !this.isBanned(pub) && !!this.fileRef(id, pub); }
+  private canSeeFile(id: string, pub: string): boolean {
+    return !this.isBanned(pub) && !!this.fileRef(id, pub);
+  }
 
   private schedule(fresh: Ev[]) {
     this.fresh.push(...fresh);
     if (this.timer) return;
-    this.timer = setTimeout(() => { this.timer = null; this.recompute(); }, 16);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.recompute();
+    }, 16);
   }
 
   private recompute() {
     const hadCreator = this.o.creator;
     this.state = reduce(this.o.code, [...this.events.values()], { creator: this.o.creator });
-    if (!hadCreator && this.state.creator) { this.o.creator = this.state.creator; this.o.onCreator?.(this.state.creator); }
+    if (!hadCreator && this.state.creator) {
+      this.o.creator = this.state.creator;
+      this.o.onCreator?.(this.state.creator);
+    }
     this.dropBanned();
     this.updateKeyring();
     const fresh = this.fresh;
@@ -493,9 +549,15 @@ export class WorkspacePeer implements LinkHost {
    * download it from Blossom. Trystero workspaces ask peers who may see it, retrying as peers join.
    */
   requestBlob(id: string) {
-    if (this.transport.kind === 'nostr') { void this.download(id); return; } // never rejects: failures are reported
+    if (this.transport.kind === 'nostr') {
+      void this.download(id);
+      return;
+    } // never rejects: failures are reported
     clearTimeout(this.fetching.get(id));
-    this.fetching.set(id, setTimeout(() => this.settle(id, null), this.o.fetchMs ?? FETCH_MS));
+    this.fetching.set(
+      id,
+      setTimeout(() => this.settle(id, null), this.o.fetchMs ?? FETCH_MS),
+    );
     const t = [...this.peers].filter(([, v]) => this.canSeeFile(id, v.pub)).map(([k]) => k);
     if (t.length) this.files?.fwant.send({ id }, { target: t });
   }
@@ -524,7 +586,10 @@ export class WorkspacePeer implements LinkHost {
       await this.gotBlob(id, buf);
       return buf;
     })()
-      .catch((err: unknown) => { this.error(`Couldn't download file ${id}: ${errMsg(err)}`); return null; })
+      .catch((err: unknown) => {
+        this.error(`Couldn't download file ${id}: ${errMsg(err)}`);
+        return null;
+      })
       .finally(() => this.downloads.delete(id));
     this.downloads.set(id, run);
     return run;

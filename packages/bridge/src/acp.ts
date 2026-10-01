@@ -14,7 +14,13 @@ export interface AcpUpdate {
 }
 
 export class AcpError extends Error {
-  constructor(msg: string, public code?: number, public data?: unknown) { super(msg); }
+  constructor(
+    msg: string,
+    public code?: number,
+    public data?: unknown,
+  ) {
+    super(msg);
+  }
 }
 
 export class AcpConnection {
@@ -27,7 +33,12 @@ export class AcpConnection {
   onPermission?: (params: any) => Promise<any>;
   onExit?: () => void;
 
-  constructor(public label: string, cmd: string, args: string[], cwd: string) {
+  constructor(
+    public label: string,
+    cmd: string,
+    args: string[],
+    cwd: string,
+  ) {
     this.proc = spawn(cmd, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32', env: { ...process.env } });
     this.proc.stdout!.setEncoding('utf8');
     this.proc.stdout!.on('data', (d: string) => this.onData(d));
@@ -35,8 +46,14 @@ export class AcpConnection {
     this.proc.stdin!.on('error', (e) => log('warn', label, 'stdin: ' + e.message));
     this.proc.stderr!.setEncoding('utf8');
     this.proc.stderr!.on('data', (d: string) => log('acp', label, 'stderr: ' + d.trim()));
-    this.proc.on('error', (e) => { log('error', label, 'spawn failed: ' + e.message); this.fail(e); });
-    this.proc.on('exit', (code) => { log('info', label, 'agent process exited (' + code + ')'); this.fail(new Error('Agent process exited')); });
+    this.proc.on('error', (e) => {
+      log('error', label, 'spawn failed: ' + e.message);
+      this.fail(e);
+    });
+    this.proc.on('exit', (code) => {
+      log('info', label, 'agent process exited (' + code + ')');
+      this.fail(new Error('Agent process exited'));
+    });
   }
 
   private fail(e: Error) {
@@ -63,7 +80,11 @@ export class AcpConnection {
       if (!line) continue;
       log('acp', this.label, '← ' + line);
       let m: any;
-      try { m = JSON.parse(line); } catch { continue; }
+      try {
+        m = JSON.parse(line);
+      } catch {
+        continue;
+      }
       this.handle(m);
     }
   }
@@ -76,7 +97,10 @@ export class AcpConnection {
       m.error ? p.rej(new AcpError(m.error.message || 'ACP error', m.error.code, m.error.data)) : p.res(m.result);
       return;
     }
-    if (m.method === 'session/update') { this.onUpdate?.(m.params?.sessionId, m.params?.update || {}); return; }
+    if (m.method === 'session/update') {
+      this.onUpdate?.(m.params?.sessionId, m.params?.update || {});
+      return;
+    }
     if (m.id == null) return;
     try {
       if (m.method === 'session/request_permission' && this.onPermission) this.write({ id: m.id, result: await this.onPermission(m.params) });
@@ -92,22 +116,38 @@ export class AcpConnection {
     return new Promise<T>((res, rej) => {
       this.pending.set(id, { res, rej });
       this.write({ id, method, params });
-      if (timeoutMs) setTimeout(() => { if (this.pending.delete(id)) rej(new Error(method + ' timed out')); }, timeoutMs);
+      if (timeoutMs)
+        setTimeout(() => {
+          if (this.pending.delete(id)) rej(new Error(method + ' timed out'));
+        }, timeoutMs);
     });
   }
 
-  notify(method: string, params: unknown) { if (!this.closed) this.write({ method, params }); }
+  notify(method: string, params: unknown) {
+    if (!this.closed) this.write({ method, params });
+  }
 
   async initialize() {
-    return this.request<{ protocolVersion: number; agentCapabilities?: any; authMethods?: { id: string; name: string; description?: string }[] }>('initialize', {
-      protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: 'yurt-bridge', version: VERSION },
-    }, 60_000);
+    return this.request<{ protocolVersion: number; agentCapabilities?: any; authMethods?: { id: string; name: string; description?: string }[] }>(
+      'initialize',
+      {
+        protocolVersion: 1,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        clientInfo: { name: 'yurt-bridge', version: VERSION },
+      },
+      60_000,
+    );
   }
 
   /** Stops the agent and rejects in-flight requests: the exit event arrives after `closed` is set, so it can't. */
-  close() { this.fail(new Error('Agent was stopped')); try { this.proc.kill(); } catch { /* gone */ } }
+  close() {
+    this.fail(new Error('Agent was stopped'));
+    try {
+      this.proc.kill();
+    } catch {
+      /* gone */
+    }
+  }
 }
 
 export const isAuthError = (e: unknown) => {

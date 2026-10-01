@@ -16,4 +16,7 @@ export function log(level: Entry['level'], src: string, msg: string) {
 }
 
 export const recentLogs = () => ring.slice(-200);
-export const onLog = (f: (e: Entry) => void) => { subs.add(f); return () => subs.delete(f); };
+export const onLog = (f: (e: Entry) => void) => {
+  subs.add(f);
+  return () => subs.delete(f);
+};

@@ -1,15 +1,21 @@
 import { DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, parseRelays, parseServers, type SignalKind, type Signaling, type WsTransport } from '@yurt/protocol';
 
 /** What a new workspace starts with: shared by its members, so it travels in the invite link (except file servers). */
-export type NewWorkspaceNet =
-  | { kind: 'trystero'; signal: Signaling }
-  | { kind: 'nostr'; relays: string[]; blossom: string[] };
+export type NewWorkspaceNet = { kind: 'trystero'; signal: Signaling } | { kind: 'nostr'; relays: string[]; blossom: string[] };
 
 /** What the create step used last for each mode; it prefills the next new workspace. */
-export interface LastNet { trystero?: Signaling; nostr?: { relays: string[]; blossom: string[] } }
+export interface LastNet {
+  trystero?: Signaling;
+  nostr?: { relays: string[]; blossom: string[] };
+}
 
 /** The create form's free text for a mode. */
-export interface NetForm { sigKind: SignalKind; sigUrls: string; relays: string; blossom: string }
+export interface NetForm {
+  sigKind: SignalKind;
+  sigUrls: string;
+  relays: string;
+  blossom: string;
+}
 
 /**
  * Empty fields mean the built-ins: Nostr relays and Nostr signaling fall back to nos.lol; trackers with
@@ -39,8 +45,7 @@ const LEGACY = ['relays', 'blossom', 'signalKind', 'signalUrls'];
 const text = (x: unknown) => (typeof x === 'string' ? x : '');
 
 /** Saved settings without the old default fields. */
-export const dropLegacy = (saved: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(saved).filter(([k]) => !LEGACY.includes(k)));
+export const dropLegacy = (saved: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(saved).filter(([k]) => !LEGACY.includes(k)));
 
 /** `lastNet` from saved settings, seeding it once from the old defaults so a returning user keeps them. */
 export function migrateLastNet(saved: Record<string, unknown>): LastNet | undefined {

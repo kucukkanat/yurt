@@ -1,0 +1,53 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": ["**", "!**/dist", "!**/test-results", "!**/playwright-report", "!**/*.d.ts", "!**/*.css"]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 180
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always"
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "off"
+      }
+    }
+  },
+  "linter": {
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        "noExplicitAny": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "error",
+        "useTemplate": "off"
+      },
+      "complexity": {
+        "noExcessiveCognitiveComplexity": {
+          "level": "warn",
+          "options": {
+            "maxAllowedComplexity": 20
+          }
+        },
+        "useLiteralKeys": "off"
+      }
+    }
+  }
+}

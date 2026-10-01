@@ -4,7 +4,7 @@ import type { KeyPair } from './crypto';
 export interface Presence {
   pub: string;
   st: 'online' | 'away';
-  typing?: string | null;                              // channel id
+  typing?: string | null; // channel id
   agents?: Record<string, { working?: string | null }>; // agentId → channel it's working in
   bridge?: boolean;
   /** Relay workspaces: this member is in a huddle and needs the WebRTC room, so opted-in members should join it. */
@@ -38,7 +38,10 @@ export interface LinkHost {
  * on Blossom; a Nostr workspace uses WebRTC only for opted-in voice and video.
  */
 /** Every workspace key a member holds (epoch null = not yet known), and the one new events use. */
-export interface LinkKeys { readonly all: readonly { key: string; epoch: number | null }[]; readonly write: string }
+export interface LinkKeys {
+  readonly all: readonly { key: string; epoch: number | null }[];
+  readonly write: string;
+}
 
 export interface DataLink {
   /** Who is online, keyed by a link-specific id. Every entry's `pub` is authenticated. */

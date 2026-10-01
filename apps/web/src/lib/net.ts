@@ -13,11 +13,13 @@ export interface NetSettings {
 }
 
 // Free public TURN (Open Relay by Metered). Rate-limited; set your own in Settings → Network.
-const DEFAULT_TURN = [{
-  urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turns:openrelay.metered.ca:443?transport=tcp'],
-  username: 'openrelayproject',
-  credential: 'openrelayproject',
-}];
+const DEFAULT_TURN = [
+  {
+    urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turns:openrelay.metered.ca:443?transport=tcp'],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
 
 function rtcOptions(n: NetSettings): Record<string, unknown> {
   const o: Record<string, unknown> = {};
@@ -42,12 +44,14 @@ export function connect(code: string, kp: KeyPair, creator: string | null, trans
   const existing = peers.get(code);
   if (existing) return existing;
   const p = new WorkspacePeer({
-    code, kp, selfId, creator, transport,
+    code,
+    kp,
+    selfId,
+    creator,
+    transport,
     // No mixing: a relay workspace gets no WebRTC at all unless the user opted in. The Trystero strategy
     // follows the workspace's signaling method, since members only meet over the same one.
-    joinRoom: transport.kind === 'trystero' || net.webrtc
-      ? ((signalingOf(transport).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom)
-      : undefined,
+    joinRoom: transport.kind === 'trystero' || net.webrtc ? ((signalingOf(transport).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom) : undefined,
     store: peerStore,
     rtc: rtcOptions(net),
     onState: (s, fresh) => h.onState(code, s, fresh),

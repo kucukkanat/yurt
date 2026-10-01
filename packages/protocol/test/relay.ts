@@ -8,7 +8,12 @@ import { matchFilter, type Filter } from 'nostr-tools/filter';
  * integration and E2E tests so they never depend on public relays. `stored` exposes exactly
  * what an operator would hold, for privacy assertions.
  */
-export interface TestRelay { url: string; port: number; stored: Event[]; close(): Promise<void> }
+export interface TestRelay {
+  url: string;
+  port: number;
+  stored: Event[];
+  close(): Promise<void>;
+}
 export interface RelayOpts {
   /** Cap every REQ's `limit`, like public relays that serve fewer than asked. */
   maxLimit?: number;
@@ -52,14 +57,22 @@ export function startRelay(port = 0, opts: RelayOpts = {}): Promise<TestRelay> {
     });
   });
 
-  return new Promise((resolve) => wss.on('listening', () => {
-    const addr = wss.address();
-    const p = typeof addr === 'object' && addr ? addr.port : port;
-    resolve({
-      url: `ws://127.0.0.1:${p}`, port: p, stored,
-      close: () => new Promise((r) => { for (const c of wss.clients) c.terminate(); wss.close(() => r()); }),
-    });
-  }));
+  return new Promise((resolve) =>
+    wss.on('listening', () => {
+      const addr = wss.address();
+      const p = typeof addr === 'object' && addr ? addr.port : port;
+      resolve({
+        url: `ws://127.0.0.1:${p}`,
+        port: p,
+        stored,
+        close: () =>
+          new Promise((r) => {
+            for (const c of wss.clients) c.terminate();
+            wss.close(() => r());
+          }),
+      });
+    }),
+  );
 }
 
 // `npm run relay -w packages/protocol` (PORT env) serves the E2E suite.

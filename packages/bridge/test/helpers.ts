@@ -14,10 +14,20 @@ export function fakeCopilotOnPath(): () => void {
   fs.writeFileSync(exe, `#!/bin/sh\nexec "${process.execPath}" "${FAKE_ACP}" "$@"\n`, { mode: 0o755 });
   const prev = process.env.PATH;
   process.env.PATH = bin + path.delimiter + prev;
-  return () => { process.env.PATH = prev; fs.rmSync(bin, { recursive: true, force: true }); };
+  return () => {
+    process.env.PATH = prev;
+    fs.rmSync(bin, { recursive: true, force: true });
+  };
 }
 
-export const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+export const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 export async function until(cond: () => boolean, ms = 5000) {
   const end = Date.now() + ms;

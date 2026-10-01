@@ -15,7 +15,9 @@ import { log } from './log';
 
 const argv = process.argv.slice(2);
 if (argv.includes('--help') || argv.includes('-h')) {
-  console.log(`yurt-bridge ${VERSION}\n\nConnects Yurt to agent CLIs on this machine.\n\n  --no-open    don't open the setup page\n  --port N     listen on N (default ${BRIDGE_PORT}; the web app expects ${BRIDGE_PORT})\n\nData lives in ${HOME}`);
+  console.log(
+    `yurt-bridge ${VERSION}\n\nConnects Yurt to agent CLIs on this machine.\n\n  --no-open    don't open the setup page\n  --port N     listen on N (default ${BRIDGE_PORT}; the web app expects ${BRIDGE_PORT})\n\nData lives in ${HOME}`,
+  );
   process.exit(0);
 }
 const portAt = argv.indexOf('--port');
@@ -33,7 +35,12 @@ const cfg = loadConfig();
 let server: BridgeServer | null = null;
 const changed = () => server?.changed();
 const workspaces = new Workspaces(cfg, changed);
-const host = new AgentHost(cfg, () => workspaces.me, changed, (code) => workspaces.presence(code));
+const host = new AgentHost(
+  cfg,
+  () => workspaces.me,
+  changed,
+  (code) => workspaces.presence(code),
+);
 workspaces.host = host;
 server = new BridgeServer(port, cfg, workspaces, host, path.resolve(uiDir));
 
@@ -52,7 +59,9 @@ const id = loadIdentity();
 if (id) workspaces.setIdentity(id.phrase);
 
 detectAll();
-(async () => { for (const r of runtimeStatus()) if (r.installed) await check(r.id); })();
+(async () => {
+  for (const r of runtimeStatus()) if (r.installed) await check(r.id);
+})();
 
 const url = `http://127.0.0.1:${server.boundPort}/`;
 const c = server.pairingCode;
@@ -73,6 +82,9 @@ function openUrl(u: string) {
   p.unref();
 }
 
-const bye = () => { for (const p of workspaces.peers.values()) p.leave(); process.exit(0); };
+const bye = () => {
+  for (const p of workspaces.peers.values()) p.leave();
+  process.exit(0);
+};
 process.on('SIGINT', bye);
 process.on('SIGTERM', bye);

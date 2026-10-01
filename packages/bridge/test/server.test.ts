@@ -19,25 +19,39 @@ beforeAll(async () => {
   fs.mkdirSync(path.join(root, 'ui-secret'));
   fs.writeFileSync(path.join(root, 'ui-secret', 'secret.txt'), 'top secret');
   const [{ loadConfig }, { Workspaces }, { AgentHost }, { BridgeServer }] = await Promise.all([
-    import('../src/config'), import('../src/workspaces'), import('../src/agents'), import('../src/server'),
+    import('../src/config'),
+    import('../src/workspaces'),
+    import('../src/agents'),
+    import('../src/server'),
   ]);
   const cfg = loadConfig();
   const ws = new Workspaces(cfg, () => {});
-  const host = new AgentHost(cfg, () => null, () => {}, () => {});
+  const host = new AgentHost(
+    cfg,
+    () => null,
+    () => {},
+    () => {},
+  );
   ws.host = host;
   server = new BridgeServer(0, cfg, ws, host, uiDir);
   await server.listen();
   port = server.boundPort;
 });
-afterAll(async () => { await server.close(); fs.rmSync(root, { recursive: true, force: true }); });
+afterAll(async () => {
+  await server.close();
+  fs.rmSync(root, { recursive: true, force: true });
+});
 
 /** Raw GET: fetch() would normalize or reject the hostile paths under test. */
-const get = (p: string) => new Promise<{ status: number; body: string }>((res, rej) => {
-  http.get({ host: '127.0.0.1', port, path: p }, (r) => {
-    let body = '';
-    r.on('data', (d) => (body += d)).on('end', () => res({ status: r.statusCode ?? 0, body }));
-  }).on('error', rej);
-});
+const get = (p: string) =>
+  new Promise<{ status: number; body: string }>((res, rej) => {
+    http
+      .get({ host: '127.0.0.1', port, path: p }, (r) => {
+        let body = '';
+        r.on('data', (d) => (body += d)).on('end', () => res({ status: r.statusCode ?? 0, body }));
+      })
+      .on('error', rej);
+  });
 
 describe('static UI server', () => {
   it('serves the UI', async () => {
@@ -64,7 +78,10 @@ async function connect() {
   const replies: Reply[] = [];
   const closed = new Promise<number>((res) => sock.on('close', (code) => res(code)));
   sock.on('message', (d) => replies.push(JSON.parse(String(d)) as Reply));
-  await new Promise((res, rej) => { sock.once('open', res); sock.once('error', rej); });
+  await new Promise((res, rej) => {
+    sock.once('open', res);
+    sock.once('error', rej);
+  });
   const pair = async (code: string) => {
     const n = replies.length;
     sock.send(JSON.stringify({ t: 'pair', code }));

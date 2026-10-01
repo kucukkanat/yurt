@@ -1,7 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-  WorkspacePeer, reduce, makeEvent, keyFromPhrase, newRecoveryPhrase, newNostrTransport, newTrysteroTransport, dmChannel, workspaceKeys, open,
-  type Ev, type KeyPair, type PeerStore, type KeyedTransport,
+  WorkspacePeer,
+  reduce,
+  makeEvent,
+  keyFromPhrase,
+  newRecoveryPhrase,
+  newNostrTransport,
+  newTrysteroTransport,
+  dmChannel,
+  workspaceKeys,
+  open,
+  type Ev,
+  type KeyPair,
+  type PeerStore,
+  type KeyedTransport,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
 
@@ -14,9 +26,13 @@ function memStore() {
   let mark = 0;
   const store: PeerStore = {
     load: async () => [...evs.values()],
-    save: async (xs) => { xs.forEach((e) => evs.set(e.id, e)); },
+    save: async (xs) => {
+      xs.forEach((e) => evs.set(e.id, e));
+    },
     loadMark: async () => mark,
-    saveMark: async (_ws, s) => { mark = s; },
+    saveMark: async (_ws, s) => {
+      mark = s;
+    },
   };
   return store;
 }
@@ -37,7 +53,16 @@ const peers: WorkspacePeer[] = [];
 
 async function join(kp: KeyPair, name: string, opts: { key?: string; store?: PeerStore; onKey?: (k: string) => void } = {}) {
   const t = { ...transport, key: opts.key ?? transport.key };
-  const p = new WorkspacePeer({ code: CODE, kp, selfId: kp.pub.slice(0, 20), transport: t, creator: A.pub, store: opts.store ?? memStore(), onError: (m) => errors.push(m), onKey: opts.onKey });
+  const p = new WorkspacePeer({
+    code: CODE,
+    kp,
+    selfId: kp.pub.slice(0, 20),
+    transport: t,
+    creator: A.pub,
+    store: opts.store ?? memStore(),
+    onError: (m) => errors.push(m),
+    onKey: opts.onKey,
+  });
   peers.push(p);
   await p.start();
   await until(() => p.connected, name + ' connected');
@@ -181,7 +206,17 @@ describe('key rotation', () => {
   });
 
   it('only rotates relay workspaces', () => {
-    const p = new WorkspacePeer({ code: CODE, kp: A, selfId: 'a', transport: newTrysteroTransport(), store: memStore(), onError: (m) => errors.push(m), joinRoom: () => { throw new Error('unused'); } });
+    const p = new WorkspacePeer({
+      code: CODE,
+      kp: A,
+      selfId: 'a',
+      transport: newTrysteroTransport(),
+      store: memStore(),
+      onError: (m) => errors.push(m),
+      joinRoom: () => {
+        throw new Error('unused');
+      },
+    });
     expect(() => p.rotate()).toThrow('Only relay workspaces');
   });
 });

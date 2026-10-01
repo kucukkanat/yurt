@@ -10,9 +10,17 @@ export function useInteraction(disabled) {
     onPointerLeave: () => up({ hover: false, press: false }),
     onPointerDown: () => !disabled && up({ press: true }),
     onPointerUp: () => up({ press: false }),
-    onFocus: (e) => { let fv = true; try { fv = e.currentTarget.matches(':focus-visible'); } catch (_) {} up({ focus: fv }); },
+    onFocus: (e) => {
+      let fv = true;
+      try {
+        fv = e.currentTarget.matches(':focus-visible');
+      } catch (_) {}
+      up({ focus: fv });
+    },
     onBlur: () => up({ focus: false, press: false }),
-    onKeyDown: (e) => { if (!disabled && (e.key === ' ' || e.key === 'Enter')) up({ press: true }); },
+    onKeyDown: (e) => {
+      if (!disabled && (e.key === ' ' || e.key === 'Enter')) up({ press: true });
+    },
     onKeyUp: () => up({ press: false }),
   };
   return [s, handlers];
@@ -22,7 +30,11 @@ export function useInteraction(disabled) {
 export function mergeHandlers(ours, theirs) {
   const out = { ...ours };
   for (const k in theirs) {
-    if (typeof theirs[k] === 'function' && ours[k]) out[k] = (e) => { ours[k](e); theirs[k](e); };
+    if (typeof theirs[k] === 'function' && ours[k])
+      out[k] = (e) => {
+        ours[k](e);
+        theirs[k](e);
+      };
   }
   return out;
 }

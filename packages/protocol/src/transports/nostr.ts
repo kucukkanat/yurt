@@ -8,7 +8,7 @@ import type { DataLink, LinkHost, LinkKeys, Presence } from '../transport';
 import { sign, verify } from '../crypto';
 import { open, seal, workspaceKeys, type WsKeys } from '../seal';
 
-const KIND_EVENT = 4344;     // regular: relays store it
+const KIND_EVENT = 4344; // regular: relays store it
 const KIND_PRESENCE = 24344; // ephemeral: relays forward it, never store it
 
 const BEAT_MS = 60_000;
@@ -34,7 +34,14 @@ export interface NostrOpts {
   saveMark(sec: number): void;
 }
 
-const parse = (s: string | null): unknown => { if (s === null) return null; try { return JSON.parse(s); } catch { return null; } };
+const parse = (s: string | null): unknown => {
+  if (s === null) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+};
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null;
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const now = () => Math.floor(Date.now() / 1000);
@@ -47,7 +54,8 @@ const presMsg = (code: string, t: number, j: string) => `yurt-pres:${code}:${t}:
  */
 const refusals = (err: unknown): string[] =>
   (err instanceof AggregateError ? err.errors : [err]).flatMap((e: unknown) =>
-    e instanceof Error && /^[a-z-]+:/.test(e.message) && !e.message.startsWith('rate-limited:') ? [e.message] : []);
+    e instanceof Error && /^[a-z-]+:/.test(e.message) && !e.message.startsWith('rate-limited:') ? [e.message] : [],
+  );
 
 /**
  * Events and presence through Nostr relays, end-to-end encrypted with the workspace key. After key
@@ -84,7 +92,10 @@ export class NostrData implements DataLink {
   private syncing = false;
   private closed = false;
 
-  constructor(private host: LinkHost, private o: NostrOpts) {
+  constructor(
+    private host: LinkHost,
+    private o: NostrOpts,
+  ) {
     this.k = this.useKeys(o.keys);
     this.relays = [...o.relays];
     this.mark = o.mark;
@@ -93,13 +104,19 @@ export class NostrData implements DataLink {
     void this.backfill();
     this.timers = [
       // Heartbeats only while the member is actually here, or needs the WebRTC room.
-      setInterval(() => { if (this.me && (this.me.st === 'online' || this.me.rtc || this.me.bridge)) this.publishPresence(); }, BEAT_MS),
-      setInterval(() => { for (const [id, e] of this.pending) this.publish(id, e); }, RETRY_MS),
+      setInterval(() => {
+        if (this.me && (this.me.st === 'online' || this.me.rtc || this.me.bridge)) this.publishPresence();
+      }, BEAT_MS),
+      setInterval(() => {
+        for (const [id, e] of this.pending) this.publish(id, e);
+      }, RETRY_MS),
       setInterval(() => this.sweep(), 5_000),
     ];
   }
 
-  private get tags() { return [...this.byTag.keys()]; }
+  private get tags() {
+    return [...this.byTag.keys()];
+  }
 
   private useKeys(keys: LinkKeys): WsKeys {
     this.byTag.clear();
@@ -139,7 +156,9 @@ export class NostrData implements DataLink {
     }
   }
 
-  get connected() { return [...this.relayStatus().values()].some(Boolean); }
+  get connected() {
+    return [...this.relayStatus().values()].some(Boolean);
+  }
 
   /** Each of this workspace's relays → whether it's connected now (the pool may also hold others). */
   relayStatus(): ReadonlyMap<string, boolean> {
@@ -202,7 +221,11 @@ export class NostrData implements DataLink {
   // quietly; reachable relays refusing it is retried MAX_REFUSALS times, then reported once.
   private publish(id: string, nes: NostrEvent[]) {
     Promise.all(nes.map((ne) => Promise.any(this.pool.publish(this.relays, ne)))).then(
-      () => { this.onRelay.add(id); this.refused.delete(id); if (this.pending.delete(id)) this.host.delivered([id]); },
+      () => {
+        this.onRelay.add(id);
+        this.refused.delete(id);
+        if (this.pending.delete(id)) this.host.delivered([id]);
+      },
       (err: unknown) => {
         const why = refusals(err);
         if (!why.length || !this.pending.has(id)) return;
@@ -249,7 +272,9 @@ export class NostrData implements DataLink {
     // My own recent events the relays don't have, e.g. the app closed before any relay acked them.
     // created_at is backdated up to FUZZ_S, so only events newer than since + FUZZ_S surely came back.
     const me = this.host.kp.pub;
-    const lost = [...this.host.events.values()].filter((e) => e.a === me && e.ts / 1000 >= since + FUZZ_S && !this.onRelay.has(e.id) && !this.pending.has(e.id) && !this.abandoned.has(e.id));
+    const lost = [...this.host.events.values()].filter(
+      (e) => e.a === me && e.ts / 1000 >= since + FUZZ_S && !this.onRelay.has(e.id) && !this.pending.has(e.id) && !this.abandoned.has(e.id),
+    );
     if (lost.length) this.send(lost);
     this.needSync = false;
     this.mark = started;
@@ -269,7 +294,10 @@ export class NostrData implements DataLink {
       if (!evs) return first ? 'down' : 'partial';
       const fresh = evs.filter((e) => !got.has(e.id));
       if (!fresh.length) return 'done';
-      for (const e of fresh) { got.add(e.id); this.onNostr(e); }
+      for (const e of fresh) {
+        got.add(e.id);
+        this.onNostr(e);
+      }
       // Inclusive: more events may share the oldest second than fit on this page; `got` drops repeats.
       until = Math.min(until, ...evs.map((e) => e.created_at));
     }
@@ -345,7 +373,12 @@ export class NostrData implements DataLink {
     if (!up) this.needSync = true;
     else if (this.needSync) void this.backfill(); // never rejects: failures are reported inside
     this.wasConnected = up;
-    for (const [s, at] of this.seen) if (Date.now() - at > PRESENCE_TTL_MS) { this.seen.delete(s); this.presence.delete(s); dirty = true; }
+    for (const [s, at] of this.seen)
+      if (Date.now() - at > PRESENCE_TTL_MS) {
+        this.seen.delete(s);
+        this.presence.delete(s);
+        dirty = true;
+      }
     if (dirty) this.host.changed();
   }
 }

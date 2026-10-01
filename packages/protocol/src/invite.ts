@@ -15,7 +15,10 @@ import { isWorkspaceKey, newWorkspaceKey } from './seal';
  * Empty `urls` = the strategy's built-in public servers.
  */
 export type SignalKind = 'nostr' | 'torrent';
-export interface Signaling { readonly kind: SignalKind; readonly urls: readonly string[] }
+export interface Signaling {
+  readonly kind: SignalKind;
+  readonly urls: readonly string[];
+}
 export const SIGNAL_KINDS: readonly SignalKind[] = ['nostr', 'torrent'];
 
 export type WsTransport =
@@ -28,7 +31,11 @@ export type KeyedTransport = WsTransport & { readonly key: string };
  * `creator` pins the workspace creator's Ed25519 public key (64 lowercase hex) so a joiner can't be
  * fooled by a forged or backdated ws.create. Links from before it existed omit it (TOFU on first join).
  */
-export interface Invite { readonly code: string; readonly transport: KeyedTransport; readonly creator?: string }
+export interface Invite {
+  readonly code: string;
+  readonly transport: KeyedTransport;
+  readonly creator?: string;
+}
 
 const isPubKey = (s: string) => /^[0-9a-f]{64}$/.test(s);
 
@@ -74,9 +81,12 @@ const sameRelays = (a: readonly string[], b: readonly string[]) => a.length === 
  */
 export function inviteHash({ code, transport: t, creator }: Invite): string {
   const base = '#/w/' + code + '/k/' + t.key;
-  const net = t.kind === 'trystero'
-    ? (t.signal ? '/s/' + encodeURIComponent([t.signal.kind, ...t.signal.urls].join(',')) : '')
-    : '/n/' + (sameRelays(t.relays, DEFAULT_RELAYS) ? '-' : encodeURIComponent(t.relays.join(',')));
+  const net =
+    t.kind === 'trystero'
+      ? t.signal
+        ? '/s/' + encodeURIComponent([t.signal.kind, ...t.signal.urls].join(','))
+        : ''
+      : '/n/' + (sameRelays(t.relays, DEFAULT_RELAYS) ? '-' : encodeURIComponent(t.relays.join(',')));
   return base + net + (creator ? '/o/' + creator : '');
 }
 
@@ -84,10 +94,24 @@ export function inviteHash({ code, transport: t, creator }: Invite): string {
 export function parseInvite(input: string): Invite | null {
   const code = normalizeCode(input);
   if (!code) return null;
-  const seg = input.trim().replace(/^.*?#\/?/, '').split('/');
+  const seg = input
+    .trim()
+    .replace(/^.*?#\/?/, '')
+    .split('/');
   // Links are pasted by users, so a malformed percent-escape is just an invalid link: null, not a URIError.
-  const at = (k: string) => { const i = seg.indexOf(k); if (i < 0) return undefined; try { return decodeURIComponent(seg[i + 1] ?? ''); } catch { return null; } };
-  const key = at('k'), n = at('n'), o = at('o'), sig = at('s');
+  const at = (k: string) => {
+    const i = seg.indexOf(k);
+    if (i < 0) return undefined;
+    try {
+      return decodeURIComponent(seg[i + 1] ?? '');
+    } catch {
+      return null;
+    }
+  };
+  const key = at('k'),
+    n = at('n'),
+    o = at('o'),
+    sig = at('s');
   if (typeof key !== 'string' || !isWorkspaceKey(key) || n === null || sig === null) return null;
   const creator = o && isPubKey(o) ? { creator: o } : {};
   if (n === undefined) {

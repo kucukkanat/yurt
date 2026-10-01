@@ -6,7 +6,11 @@ export const FILES_DIR = path.join('.yurt', 'files');
 
 /** A name that can't leave its folder: no separators, no leading dots, only plain characters. */
 export function safeName(name: string): string {
-  const base = path.basename(name.replace(/\\/g, '/')).replace(/[^\w.\- ]+/g, '_').replace(/^\.+/, '_').slice(0, 120);
+  const base = path
+    .basename(name.replace(/\\/g, '/'))
+    .replace(/[^\w.\- ]+/g, '_')
+    .replace(/^\.+/, '_')
+    .slice(0, 120);
   return base || 'file';
 }
 

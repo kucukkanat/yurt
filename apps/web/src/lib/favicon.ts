@@ -27,7 +27,12 @@ export const sameState = (a: FaviconState, b: FaviconState) =>
 /** Badge text: counts above 9 don't fit at favicon size. */
 export const badgeText = (n: number) => (n > 9 ? '9+' : String(n));
 
-export interface Palette { danger: string; accent: string; success: string; onColor: string }
+export interface Palette {
+  danger: string;
+  accent: string;
+  success: string;
+  onColor: string;
+}
 
 /** Draws `base` (if it loaded) decorated for `s` onto a square canvas of `size` pixels. */
 export function paint(ctx: CanvasRenderingContext2D, size: number, base: CanvasImageSource | null, s: FaviconState, c: Palette) {
@@ -35,7 +40,10 @@ export function paint(ctx: CanvasRenderingContext2D, size: number, base: CanvasI
   const inset = s.inCall ? size * 0.12 : 0; // leave room for the ring
   if (base) {
     ctx.save();
-    if (s.offline) { ctx.filter = 'grayscale(1)'; ctx.globalAlpha = 0.55; }
+    if (s.offline) {
+      ctx.filter = 'grayscale(1)';
+      ctx.globalAlpha = 0.55;
+    }
     ctx.drawImage(base, inset, inset, size - 2 * inset, size - 2 * inset);
     ctx.restore();
   }
@@ -101,7 +109,10 @@ export function installFavicon(read: () => FaviconState): { update(): void } {
     drawn = false;
     const img = new Image();
     img.crossOrigin = 'anonymous'; // a cross-origin icon without CORS taints the canvas; we then draw badges alone
-    img.onload = () => { base = img; render(true); };
+    img.onload = () => {
+      base = img;
+      render(true);
+    };
     img.onerror = () => render(true);
     img.src = baseHref;
     return true;
@@ -114,19 +125,30 @@ export function installFavicon(read: () => FaviconState): { update(): void } {
     if (!force && drawn && sameState(s, shown)) return;
     shown = s;
     drawn = true;
-    if (isCalm(s)) { link.href = baseHref; return; }
+    if (isCalm(s)) {
+      link.href = baseHref;
+      return;
+    }
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     paint(ctx, SIZE, base, s, palette());
     let href: string;
-    try { href = canvas.toDataURL('image/png'); } catch { base = null; paint(ctx, SIZE, null, s, palette()); href = canvas.toDataURL('image/png'); }
+    try {
+      href = canvas.toDataURL('image/png');
+    } catch {
+      base = null;
+      paint(ctx, SIZE, null, s, palette());
+      href = canvas.toDataURL('image/png');
+    }
     ours.add(href);
     link.href = href;
   };
 
   // Someone swapping the icon (new <link> or a new href) gives us a new base to decorate. Our own
   // writes also trigger this, but adopt() recognises them, so they don't redraw (or loop).
-  new MutationObserver(() => { if (adopt()) render(true); }).observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'rel'] });
+  new MutationObserver(() => {
+    if (adopt()) render(true);
+  }).observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'rel'] });
   render(true);
   return { update: () => render() };
 }

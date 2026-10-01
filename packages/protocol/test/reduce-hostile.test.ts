@@ -40,7 +40,9 @@ describe('reduce on hostile bodies', () => {
       ev(B, 'edit', { target: m.id, text: evil }),
       ev(C, 'pin', { target: m.id, on: evil }),
       ev(C, 'agent', { id: 'x', handle: 'x', name: evil, runtime: 'r', replyIn: 'thread' }),
-      ev(C, 'role', null), ev(A, 'role', { target: evil, admin: true }), ev(A, 'ban', { target: C.pub, on: 'yes' }),
+      ev(C, 'role', null),
+      ev(A, 'role', { target: evil, admin: true }),
+      ev(A, 'ban', { target: C.pub, on: 'yes' }),
       ev(C, 'approve', { req: evil, option: evil }),
       ev(A, 'ws.create', null),
     ];
@@ -81,7 +83,15 @@ describe('reduce authority', () => {
     const promote = [ev(A, 'role', { target: B.pub, admin: true }), ev(A, 'role', { target: C.pub, admin: true })];
     // Admin C backdates a ban of admin B to before anything else: ignored.
     const preempt = makeEvent(C, { ws: WS, t: 'ban', b: { target: B.pub, on: true }, ts: 2 });
-    const s = reduce(WS, [...base(), ...promote, preempt, ev(C, 'ban', { target: B.pub, on: true }), ev(C, 'ban', { target: D.pub, on: true }), ev(C, 'ban', { target: C.pub, on: true }), ev(B, 'role', { target: C.pub, admin: false })]);
+    const s = reduce(WS, [
+      ...base(),
+      ...promote,
+      preempt,
+      ev(C, 'ban', { target: B.pub, on: true }),
+      ev(C, 'ban', { target: D.pub, on: true }),
+      ev(C, 'ban', { target: C.pub, on: true }),
+      ev(B, 'role', { target: C.pub, admin: false }),
+    ]);
     expect([...s.admins].sort()).toEqual([A.pub, B.pub, C.pub].sort());
     expect([...s.bans]).toEqual([D.pub]);
     const t = reduce(WS, [...base(), ...promote, ev(A, 'ban', { target: B.pub, on: true }), ev(A, 'role', { target: C.pub, admin: false })]);
@@ -158,11 +168,15 @@ describe('reduce keeps well-formed data intact', () => {
     const trace = [{ title: 'Read', tool: 'read', status: 'done', ms: 5 }];
     const m = ev(B, 'msg', { text: 'x', files: [file, { ...file, blob: { key: 1 } }], trace, meta: 'm' }, { ch: 'general' });
     const agent = { id: 'scout', name: 'Scout', handle: 'scout', runtime: 'claude', replyIn: 'thread' };
-    const s = reduce(WS, [...evs, m,
+    const s = reduce(WS, [
+      ...evs,
+      m,
       ev(A, 'ch.update', { id: 'general', name: 'main', topic: 'hi' }),
-      ev(A, 'react', { target: m.id, icon: 'heart', on: true }), ev(A, 'react', { target: m.id, icon: 'heart', on: false }),
+      ev(A, 'react', { target: m.id, icon: 'heart', on: true }),
+      ev(A, 'react', { target: m.id, icon: 'heart', on: false }),
       ev(A, 'pin', { target: m.id, on: true }),
-      ev(A, 'agent', agent), ev(B, 'agent', { ...agent, removed: true }),
+      ev(A, 'agent', agent),
+      ev(B, 'agent', { ...agent, removed: true }),
     ]);
     expect(s.msgs.get(m.id)).toMatchObject({ files: [file], trace, meta: 'm', reactions: {} });
     expect(s.channels.get('general')).toMatchObject({ name: 'main', topic: 'hi' });

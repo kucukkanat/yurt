@@ -8,10 +8,10 @@ import { log } from './log';
 
 interface RuntimeDef {
   name: string;
-  bin: string;              // CLI that must be on PATH
+  bin: string; // CLI that must be on PATH
   acp: [string, ...string[]]; // command that speaks ACP on stdio
-  npm: string;              // package for one-click install
-  login: string;            // shown / run in a terminal when ACP has no auth method
+  npm: string; // package for one-click install
+  login: string; // shown / run in a terminal when ACP has no auth method
 }
 
 // Order matters: this is the order shown in the UI.
@@ -26,7 +26,9 @@ export const RUNTIME_IDS = Object.keys(RUNTIMES) as RuntimeId[];
 
 const status = new Map<RuntimeId, RuntimeStatus>();
 let onChange: () => void = () => {};
-export const onRuntimeChange = (f: () => void) => { onChange = f; };
+export const onRuntimeChange = (f: () => void) => {
+  onChange = f;
+};
 
 function set(id: RuntimeId, p: Partial<RuntimeStatus>) {
   status.set(id, { ...(status.get(id) || { id, name: RUNTIMES[id].name, installed: false, auth: 'unknown' }), ...p });
@@ -53,12 +55,19 @@ export function detect(id: RuntimeId) {
   let version: string | undefined;
   if (installed) {
     const r = spawnSync(d.bin, ['--version'], { encoding: 'utf8', timeout: 8000, shell: process.platform === 'win32' });
-    version = (r.stdout || '').trim().split('\n')[0]?.replace(/^[^\d]*/, '').slice(0, 24) || undefined;
+    version =
+      (r.stdout || '')
+        .trim()
+        .split('\n')[0]
+        ?.replace(/^[^\d]*/, '')
+        .slice(0, 24) || undefined;
   }
   set(id, { installed, version, loginHint: d.login, busy: undefined, auth: installed ? status.get(id)?.auth || 'unknown' : 'unknown' });
 }
 
-export function detectAll() { RUNTIME_IDS.forEach(detect); }
+export function detectAll() {
+  RUNTIME_IDS.forEach(detect);
+}
 export const runtimeStatus = (): RuntimeStatus[] => RUNTIME_IDS.map((id) => status.get(id) || { id, name: RUNTIMES[id].name, installed: false, auth: 'unknown' });
 
 export function install(id: RuntimeId): Promise<boolean> {
@@ -108,8 +117,15 @@ export async function login(id: RuntimeId): Promise<void> {
   try {
     const init = await c.initialize();
     const m = init.authMethods?.[0];
-    if (m) { await c.request('authenticate', { methodId: m.id }, 10 * 60_000); c.close(); await check(id); return; }
-  } catch (e) { log('warn', id, 'ACP sign-in unavailable: ' + (e as Error).message); }
+    if (m) {
+      await c.request('authenticate', { methodId: m.id }, 10 * 60_000);
+      c.close();
+      await check(id);
+      return;
+    }
+  } catch (e) {
+    log('warn', id, 'ACP sign-in unavailable: ' + (e as Error).message);
+  }
   c.close();
   openTerminal(d.login);
   set(id, { busy: undefined });
@@ -117,7 +133,8 @@ export async function login(id: RuntimeId): Promise<void> {
 
 export function openTerminal(command: string) {
   log('info', 'bridge', 'opening a terminal for: ' + command);
-  if (process.platform === 'darwin') spawn('osascript', ['-e', `tell application "Terminal" to do script "${command.replace(/"/g, '\\"')}"`, '-e', 'tell application "Terminal" to activate']);
+  if (process.platform === 'darwin')
+    spawn('osascript', ['-e', `tell application "Terminal" to do script "${command.replace(/"/g, '\\"')}"`, '-e', 'tell application "Terminal" to activate']);
   else if (process.platform === 'win32') spawn('cmd', ['/c', 'start', 'cmd', '/k', command], { shell: true });
   else {
     for (const t of ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xterm']) {

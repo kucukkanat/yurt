@@ -13,18 +13,22 @@ async function onboard(page: Page, name: string, finish: 'Start chatting' | 'Joi
 /** Point new relay workspaces at the local relay and file server, through the same IndexedDB settings the Settings dialog writes. */
 async function useLocalRelay(page: Page) {
   await page.goto('./');
-  await page.evaluate(({ relays, servers }) => new Promise<void>((res, rej) => {
-    const r = indexedDB.open('yurt', 1);
-    r.onsuccess = () => {
-      const t = r.result.transaction('kv', 'readwrite');
-      const kv = t.objectStore('kv');
-      const get = kv.get('settings');
-      get.onsuccess = () => kv.put({ ...(get.result || {}), relays, blossom: servers }, 'settings');
-      t.oncomplete = () => res();
-      t.onerror = () => rej(t.error);
-    };
-    r.onerror = () => rej(r.error);
-  }), { relays: RELAY, servers: BLOSSOM });
+  await page.evaluate(
+    ({ relays, servers }) =>
+      new Promise<void>((res, rej) => {
+        const r = indexedDB.open('yurt', 1);
+        r.onsuccess = () => {
+          const t = r.result.transaction('kv', 'readwrite');
+          const kv = t.objectStore('kv');
+          const get = kv.get('settings');
+          get.onsuccess = () => kv.put({ ...(get.result || {}), relays, blossom: servers }, 'settings');
+          t.oncomplete = () => res();
+          t.onerror = () => rej(t.error);
+        };
+        r.onerror = () => rej(r.error);
+      }),
+    { relays: RELAY, servers: BLOSSOM },
+  );
   await page.reload();
 }
 
@@ -351,19 +355,32 @@ test('the tab icon shows unread messages on top of whatever favicon is set, and 
   await a.getByRole('button', { name: 'Create channel' }).click();
   await expect(a).toHaveURL(/\/c\/side/);
   const icon = () => a.locator('link[rel~="icon"]').getAttribute('href');
-  const say = async (text: string) => { const c = b.getByRole('textbox', { name: 'Message #general' }); await c.fill(text); await c.press('Enter'); };
+  const say = async (text: string) => {
+    const c = b.getByRole('textbox', { name: 'Message #general' });
+    await c.fill(text);
+    await c.press('Enter');
+  };
   await say('unread one');
   await expect.poll(icon, { timeout: 30_000 }).toMatch(/^data:image\/png/);
-  await a.getByRole('button', { name: /general/ }).first().click();
+  await a
+    .getByRole('button', { name: /general/ })
+    .first()
+    .click();
   await expect.poll(icon).toBe(original);
 
   // Swap the favicon: the badges now decorate the new icon, and reading restores the new one.
   const custom = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Crect width='8' height='8' fill='%23f80'/%3E%3C/svg%3E";
-  await a.evaluate((href) => { const l = document.querySelector<HTMLLinkElement>('link[rel~="icon"]'); if (l) l.href = href; }, custom);
+  await a.evaluate((href) => {
+    const l = document.querySelector<HTMLLinkElement>('link[rel~="icon"]');
+    if (l) l.href = href;
+  }, custom);
   await a.getByRole('button', { name: /side/ }).first().click();
   await say('unread two');
   await expect.poll(icon, { timeout: 30_000 }).toMatch(/^data:image\/png/);
-  await a.getByRole('button', { name: /general/ }).first().click();
+  await a
+    .getByRole('button', { name: /general/ })
+    .first()
+    .click();
   await expect.poll(icon).toBe(custom);
 });
 

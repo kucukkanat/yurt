@@ -16,13 +16,32 @@ export function Badge({ tone = 'neutral', variant = 'soft', dot = false, live = 
   const solid = variant === 'solid';
   const sm = size === 'sm';
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5, height: sm ? 20 : 24, padding: sm ? '0 7px' : '0 9px',
-      borderRadius: 'var(--radius-pill)', background: solid ? t.solid : t.soft, color: solid ? t.on : t.ink,
-      fontFamily: 'var(--font-body)', fontSize: sm ? 11 : 12, fontWeight: 600, lineHeight: 1, whiteSpace: 'nowrap',
-      boxShadow: variant === 'outline' ? 'inset 0 0 0 1px ' + t.dot : 'none', ...(variant === 'outline' ? { background: 'transparent' } : null), ...style,
-    }}>
-      {(dot || live) && <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 99, background: solid ? t.on : t.dot, animation: live ? 'ag-pulse 1.6s var(--ease-out) infinite' : 'none' }} />}
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        height: sm ? 20 : 24,
+        padding: sm ? '0 7px' : '0 9px',
+        borderRadius: 'var(--radius-pill)',
+        background: solid ? t.solid : t.soft,
+        color: solid ? t.on : t.ink,
+        fontFamily: 'var(--font-body)',
+        fontSize: sm ? 11 : 12,
+        fontWeight: 600,
+        lineHeight: 1,
+        whiteSpace: 'nowrap',
+        boxShadow: variant === 'outline' ? 'inset 0 0 0 1px ' + t.dot : 'none',
+        ...(variant === 'outline' ? { background: 'transparent' } : null),
+        ...style,
+      }}
+    >
+      {(dot || live) && (
+        <span
+          aria-hidden="true"
+          style={{ width: 6, height: 6, borderRadius: 99, background: solid ? t.on : t.dot, animation: live ? 'ag-pulse 1.6s var(--ease-out) infinite' : 'none' }}
+        />
+      )}
       {icon && <Icon name={icon} size={sm ? 12 : 13} strokeWidth={2.25} />}
       {children}
     </span>

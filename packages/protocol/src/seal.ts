@@ -43,7 +43,11 @@ export interface WsKeys {
 export const newWorkspaceKey = (): string => b64(randomBytes(32));
 
 export function isWorkspaceKey(k: string): boolean {
-  try { return /^[A-Za-z0-9_-]{43}$/.test(k) && unb64(k).length === 32; } catch { return false; }
+  try {
+    return /^[A-Za-z0-9_-]{43}$/.test(k) && unb64(k).length === 32;
+  } catch {
+    return false;
+  }
 }
 
 export function workspaceKeys(key: string): WsKeys {
@@ -98,7 +102,11 @@ export const seal = (key: Uint8Array, tag: string, text: string): string => b64(
 
 export function open(key: Uint8Array, tag: string, sealed: string): string | null {
   let raw: Uint8Array;
-  try { raw = unb64(sealed); } catch { return null; } // not base64: foreign junk under our tag
+  try {
+    raw = unb64(sealed);
+  } catch {
+    return null;
+  } // not base64: foreign junk under our tag
   const plain = openBytes(key, tag, raw);
   return plain && new TextDecoder().decode(plain);
 }

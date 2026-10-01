@@ -13,7 +13,12 @@ import { setStartOnLogin } from './autostart';
 import { log, onLog, recentLogs } from './log';
 import { VERSION } from './version';
 
-interface Client { sock: WebSocket; paired: boolean; admin: boolean; misses: number }
+interface Client {
+  sock: WebSocket;
+  paired: boolean;
+  admin: boolean;
+  misses: number;
+}
 
 // Pairing brute force: a 6-digit code rotates every 5 misses, a socket is closed after 3, and more
 // than 10 misses a minute (from any origin) lock pairing for 30 s, doubling per lockout up to an hour.
@@ -23,7 +28,14 @@ const MINUTE_MISSES = 10;
 const LOCK_MS = 30_000;
 const MAX_LOCK_MS = 60 * 60_000;
 
-const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.map': 'application/json' };
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript',
+  '.css': 'text/css',
+  '.woff2': 'font/woff2',
+  '.svg': 'image/svg+xml',
+  '.map': 'application/json',
+};
 
 export class BridgeServer {
   private clients = new Set<Client>();
@@ -38,15 +50,25 @@ export class BridgeServer {
   private readonly rotator: ReturnType<typeof setInterval>;
   private readonly unLog: () => void;
 
-  constructor(private port: number, private cfg: Config, private ws: Workspaces, private host: AgentHost, private uiDir: string) {
+  constructor(
+    private port: number,
+    private cfg: Config,
+    private ws: Workspaces,
+    private host: AgentHost,
+    private uiDir: string,
+  ) {
     this.rotate();
     this.rotator = setInterval(() => Date.now() - this.codeAt > 10 * 60_000 && this.rotate(), 30_000);
     onRuntimeChange(() => this.changed());
     this.unLog = onLog((e) => this.send((c) => c.admin, e));
   }
 
-  get pairingCode() { return this.code; }
-  get origin() { return `http://127.0.0.1:${this.boundPort}`; }
+  get pairingCode() {
+    return this.code;
+  }
+  get origin() {
+    return `http://127.0.0.1:${this.boundPort}`;
+  }
 
   rotate() {
     this.code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
@@ -78,10 +100,16 @@ export class BridgeServer {
     };
   }
 
-  private sendTo(c: Client, m: FromBridge) { if (c.sock.readyState === 1) c.sock.send(JSON.stringify(m)); }
-  private send(pred: (c: Client) => boolean, m: FromBridge) { for (const c of this.clients) if (pred(c)) this.sendTo(c, m); }
+  private sendTo(c: Client, m: FromBridge) {
+    if (c.sock.readyState === 1) c.sock.send(JSON.stringify(m));
+  }
+  private send(pred: (c: Client) => boolean, m: FromBridge) {
+    for (const c of this.clients) if (pred(c)) this.sendTo(c, m);
+  }
 
-  private okHost(h?: string) { return h === `127.0.0.1:${this.boundPort}` || h === `localhost:${this.boundPort}`; }
+  private okHost(h?: string) {
+    return h === `127.0.0.1:${this.boundPort}` || h === `localhost:${this.boundPort}`;
+  }
 
   listen() {
     const server = http.createServer((req, res) => this.http(req, res));
@@ -120,15 +148,29 @@ export class BridgeServer {
   }
 
   private http(req: http.IncomingMessage, res: http.ServerResponse) {
-    if (!this.okHost(req.headers.host)) { res.writeHead(403).end(); return; }
+    if (!this.okHost(req.headers.host)) {
+      res.writeHead(403).end();
+      return;
+    }
     const url = new URL(req.url || '/', this.origin);
     let rel: string;
-    try { rel = decodeURIComponent(url.pathname); } catch { res.writeHead(400).end(); return; } // e.g. /%E0
+    try {
+      rel = decodeURIComponent(url.pathname);
+    } catch {
+      res.writeHead(400).end();
+      return;
+    } // e.g. /%E0
     let file = path.join(this.uiDir, rel);
     // Separator required: a bare prefix check would also admit a sibling like <uiDir>-secrets.
-    if (file !== this.uiDir && !file.startsWith(this.uiDir + path.sep)) { res.writeHead(403).end(); return; }
+    if (file !== this.uiDir && !file.startsWith(this.uiDir + path.sep)) {
+      res.writeHead(403).end();
+      return;
+    }
     if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(this.uiDir, 'index.html');
-    if (!fs.existsSync(file)) { res.writeHead(500, { 'content-type': 'text/plain' }).end('Bridge UI is missing. Run: npm run build -w packages/bridge'); return; }
+    if (!fs.existsSync(file)) {
+      res.writeHead(500, { 'content-type': 'text/plain' }).end('Bridge UI is missing. Run: npm run build -w packages/bridge');
+      return;
+    }
     const ext = path.extname(file);
     const headers = { 'content-type': MIME[ext] || 'application/octet-stream', 'x-frame-options': 'DENY', 'cache-control': ext === '.html' ? 'no-store' : 'max-age=3600' };
     if (ext === '.html') {
@@ -147,8 +189,16 @@ export class BridgeServer {
     sock.on('close', () => this.clients.delete(c));
     sock.on('message', (raw) => {
       let m: ToBridge;
-      try { m = JSON.parse(String(raw)); } catch { return; }
-      try { this.handle(c, m); } catch (e) { this.sendTo(c, { t: 'error', msg: (e as Error).message }); }
+      try {
+        m = JSON.parse(String(raw));
+      } catch {
+        return;
+      }
+      try {
+        this.handle(c, m);
+      } catch (e) {
+        this.sendTo(c, { t: 'error', msg: (e as Error).message });
+      }
     });
   }
 
@@ -177,7 +227,10 @@ export class BridgeServer {
         return;
       }
       if (wait > 0) this.sendTo(c, { t: 'error', msg: `Too many wrong pairing codes. Try again in ${Math.ceil(wait / 1000)} s.` });
-      else { this.sendTo(c, { t: 'error', msg: 'Wrong pairing code' }); this.miss(); }
+      else {
+        this.sendTo(c, { t: 'error', msg: 'Wrong pairing code' });
+        this.miss();
+      }
       if (++c.misses >= CONN_MISSES) {
         log('warn', 'bridge', 'closed a connection after ' + c.misses + ' pairing attempts');
         c.sock.close(1008, 'Too many pairing attempts');
@@ -196,9 +249,15 @@ export class BridgeServer {
         this.ws.setIdentity(m.phrase);
         break;
       }
-      case 'ws.join': this.ws.join(m.code, m.name, m.creator, m.agents, m.transport); break;
-      case 'ws.agents': this.ws.join(m.code, this.cfg.workspaces.find((w) => w.code === m.code)?.name || m.code, null, m.agents); break;
-      case 'ws.leave': this.ws.leave(m.code); break;
+      case 'ws.join':
+        this.ws.join(m.code, m.name, m.creator, m.agents, m.transport);
+        break;
+      case 'ws.agents':
+        this.ws.join(m.code, this.cfg.workspaces.find((w) => w.code === m.code)?.name || m.code, null, m.agents);
+        break;
+      case 'ws.leave':
+        this.ws.leave(m.code);
+        break;
       default:
         if (!c.admin) throw new Error('Only the bridge page can change this');
         this.admin(m);
@@ -227,7 +286,8 @@ export class BridgeServer {
         fs.mkdirSync(a.workdir, { recursive: true });
         const i = this.cfg.agents.findIndex((x) => x.id === a.id);
         const prev = this.cfg.agents[i];
-        if (i >= 0) this.cfg.agents[i] = a; else this.cfg.agents.push(a);
+        if (i >= 0) this.cfg.agents[i] = a;
+        else this.cfg.agents.push(a);
         if (prev && (prev.runtime !== a.runtime || prev.workdir !== a.workdir || prev.model !== a.model)) this.host.drop(a.id);
         saveConfig(this.cfg);
         this.ws.refreshAll();
@@ -241,13 +301,24 @@ export class BridgeServer {
         saveConfig(this.cfg);
         this.ws.refreshAll();
         break;
-      case 'runtime.install': install(m.id); break;
-      case 'runtime.check': check(m.id); break;
-      case 'runtime.login': login(m.id); break;
-      case 'startOnLogin':
-        if (setStartOnLogin(m.on)) { this.cfg.startOnLogin = m.on; saveConfig(this.cfg); }
+      case 'runtime.install':
+        install(m.id);
         break;
-      case 'pair.rotate': this.rotate(); break;
+      case 'runtime.check':
+        check(m.id);
+        break;
+      case 'runtime.login':
+        login(m.id);
+        break;
+      case 'startOnLogin':
+        if (setStartOnLogin(m.on)) {
+          this.cfg.startOnLogin = m.on;
+          saveConfig(this.cfg);
+        }
+        break;
+      case 'pair.rotate':
+        this.rotate();
+        break;
       case 'origins':
         this.cfg.allowedOrigins = m.list.map((o) => o.trim().replace(/\/+$/, '')).filter((o) => /^https?:\/\/[^/]+$/.test(o));
         saveConfig(this.cfg);
@@ -259,7 +330,9 @@ export class BridgeServer {
 /** Validates an agent from the (paired, but still untrusted) UI and migrates older shapes. */
 export function sanitize(a: AgentConfig): AgentConfig {
   if (!RUNTIME_IDS.includes(a.runtime)) throw new Error('Unknown runtime');
-  const name = String(a.name || '').trim().slice(0, 40);
+  const name = String(a.name || '')
+    .trim()
+    .slice(0, 40);
   if (!name) throw new Error('Give the agent a name');
   const handle = slug(a.handle || name).slice(0, 24);
   if (!handle) throw new Error('Give the agent a handle');
@@ -267,7 +340,9 @@ export function sanitize(a: AgentConfig): AgentConfig {
   if (a.postIn && !a.postIn.thread && !a.postIn.channel) throw new Error('Pick where the agent posts: in a thread, in the channel, or both');
   return {
     id: a.id || handle + '-' + crypto.randomBytes(2).toString('hex'),
-    name, handle, runtime: a.runtime,
+    name,
+    handle,
+    runtime: a.runtime,
     model: a.model?.trim() || undefined,
     workdir: path.resolve(a.workdir),
     instructions: String(a.instructions || '').slice(0, 8000),

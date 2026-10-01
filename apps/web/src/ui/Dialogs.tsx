@@ -1,6 +1,19 @@
 import React, { useMemo, useState } from 'react';
 import { Dialog, Button, Input, Tabs, Switch, Radio, Icon, Kbd, Avatar } from '@yurt/ui';
-import { formatCode, dmChannel, agentDmChannel, guestDmChannel, agentPrefs, liveAgents, parseRelays, parseServers, DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, type WsTransport, type SignalKind } from '@yurt/protocol';
+import {
+  formatCode,
+  dmChannel,
+  agentDmChannel,
+  guestDmChannel,
+  agentPrefs,
+  liveAgents,
+  parseRelays,
+  parseServers,
+  DEFAULT_RELAYS,
+  DEFAULT_SIGNAL_URLS,
+  type WsTransport,
+  type SignalKind,
+} from '@yurt/protocol';
 import { useApp } from '../store';
 import { useCurrent, roster } from '../model';
 import { defaultNewNet, netFromForm } from '../lib/newNet';
@@ -39,16 +52,22 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
   const [netOpen, setNetOpen] = useState(false);
   const [netErr, setNetErr] = useState<{ signal?: string; relays?: string; blossom?: string }>({});
   const list = (urls: string[], none: string) => (urls.length ? urls.join(', ') : none);
-  const summary = kind === 'nostr'
-    ? 'Relays: ' + list(parseRelays(relays), DEFAULT_RELAYS.join(', ')) + ' · Files: ' + list(parseServers(blossom), 'default servers')
-    : 'Signaling: ' + (sigKind === 'nostr' ? 'Nostr relays · ' + list(parseRelays(sigUrls), DEFAULT_SIGNAL_URLS.join(', ')) : 'BitTorrent trackers · ' + list(parseRelays(sigUrls), 'built-in'));
+  const summary =
+    kind === 'nostr'
+      ? 'Relays: ' + list(parseRelays(relays), DEFAULT_RELAYS.join(', ')) + ' · Files: ' + list(parseServers(blossom), 'default servers')
+      : 'Signaling: ' +
+        (sigKind === 'nostr' ? 'Nostr relays · ' + list(parseRelays(sigUrls), DEFAULT_SIGNAL_URLS.join(', ')) : 'BitTorrent trackers · ' + list(parseRelays(sigUrls), 'built-in'));
   const create = async () => {
     if (!name.trim()) return setErr('Give it a name people will recognize.');
-    const errs = kind === 'nostr'
-      ? { relays: listError(rejected(relays, parseRelays), 'a ws:// or wss:// relay'), blossom: listError(rejected(blossom, parseServers), 'an http(s) server') }
-      : { signal: listError(rejected(sigUrls, parseRelays), 'a ws:// or wss:// server') };
+    const errs =
+      kind === 'nostr'
+        ? { relays: listError(rejected(relays, parseRelays), 'a ws:// or wss:// relay'), blossom: listError(rejected(blossom, parseServers), 'an http(s) server') }
+        : { signal: listError(rejected(sigUrls, parseRelays), 'a ws:// or wss:// server') };
     setNetErr(errs);
-    if (Object.values(errs).some(Boolean)) { setNetOpen(true); return; }
+    if (Object.values(errs).some(Boolean)) {
+      setNetOpen(true);
+      return;
+    }
     // The form's values through the same rules as Settings → Network: emptied fields mean the built-in defaults.
     const net = netFromForm(kind, { sigKind, sigUrls, relays, blossom });
     await app.createWorkspace(name, net);
@@ -56,40 +75,158 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
   };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <Tabs items={[{ id: 'create', label: 'Start a workspace', icon: 'plus' }, { id: 'join', label: 'Join with a link', icon: 'log-in' }]} value={tab} onChange={(t) => { setTab(t); setErr(''); }} fullWidth label="Create or join" />
+      <Tabs
+        items={[
+          { id: 'create', label: 'Start a workspace', icon: 'plus' },
+          { id: 'join', label: 'Join with a link', icon: 'log-in' },
+        ]}
+        value={tab}
+        onChange={(t) => {
+          setTab(t);
+          setErr('');
+        }}
+        fullWidth
+        label="Create or join"
+      />
       {tab === 'create' ? (
-        <form onSubmit={async (e) => { e.preventDefault(); await create(); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            await create();
+          }}
+          style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+        >
           <Input label="Workspace name" placeholder="Northwind design" value={name} onChange={(e) => setName(e.target.value)} error={err || undefined} autoFocus data-autofocus />
           <div role="radiogroup" aria-label="How messages travel" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <Radio name="transport" value="trystero" label="Live, peer to peer" description="Messages go straight between members’ browsers and are stored nowhere else. Members need to be online together to sync." checked={kind === 'trystero'} onChange={() => { setKind('trystero'); setNetErr({}); }} data-testid="transport-trystero" />
-            <Radio name="transport" value="nostr" label="Encrypted on Nostr relays" description="Relays keep end-to-end encrypted history, so messages arrive even when no one else is online. Relays can’t read them." checked={kind === 'nostr'} onChange={() => { setKind('nostr'); setNetErr({}); }} data-testid="transport-nostr" />
+            <Radio
+              name="transport"
+              value="trystero"
+              label="Live, peer to peer"
+              description="Messages go straight between members’ browsers and are stored nowhere else. Members need to be online together to sync."
+              checked={kind === 'trystero'}
+              onChange={() => {
+                setKind('trystero');
+                setNetErr({});
+              }}
+              data-testid="transport-trystero"
+            />
+            <Radio
+              name="transport"
+              value="nostr"
+              label="Encrypted on Nostr relays"
+              description="Relays keep end-to-end encrypted history, so messages arrive even when no one else is online. Relays can’t read them."
+              checked={kind === 'nostr'}
+              onChange={() => {
+                setKind('nostr');
+                setNetErr({});
+              }}
+              data-testid="transport-nostr"
+            />
           </div>
-          <div data-testid="create-net" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', border: 'var(--border-width) solid var(--border-subtle)', background: 'var(--surface-sunken)' }}>
-            <button type="button" data-testid="create-net-toggle" aria-expanded={netOpen} onClick={() => setNetOpen(!netOpen)}
-              style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 0, border: 0, background: 'none', cursor: 'pointer', textAlign: 'left', color: 'var(--text-body)' }}>
+          <div
+            data-testid="create-net"
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--space-3)',
+              padding: 'var(--space-3)',
+              borderRadius: 'var(--radius-md)',
+              border: 'var(--border-width) solid var(--border-subtle)',
+              background: 'var(--surface-sunken)',
+            }}
+          >
+            <button
+              type="button"
+              data-testid="create-net-toggle"
+              aria-expanded={netOpen}
+              onClick={() => setNetOpen(!netOpen)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-2)',
+                padding: 0,
+                border: 0,
+                background: 'none',
+                cursor: 'pointer',
+                textAlign: 'left',
+                color: 'var(--text-body)',
+              }}
+            >
               <Icon name={netOpen ? 'chevron-down' : 'chevron-right'} size={16} />
               <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                 <span style={{ fontSize: 'var(--fs-body-sm)', fontWeight: 'var(--weight-semibold)', color: 'var(--text-strong)' }}>Network settings</span>
-                <span data-testid="create-net-summary" style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-subtle)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
+                <span
+                  data-testid="create-net-summary"
+                  style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-subtle)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {summary}
+                </span>
               </span>
             </button>
-            {netOpen && (kind === 'nostr' ? <>
-              <Input label="Relays" placeholder="wss://nos.lol" data-testid="create-relays" error={netErr.relays} value={relays}
-                hint="ws:// or wss:// URLs, separated by spaces or commas. Empty means wss://nos.lol." onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRelays(e.target.value)} />
-              <Input label="File servers (Blossom)" optional placeholder="https://blossom.example.com" data-testid="create-blossom" error={netErr.blossom} value={blossom}
-                hint="Where your uploads in this workspace go. Leave empty for the defaults." onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBlossom(e.target.value)} />
-            </> : <SignalFields prefix="create" kind={sigKind} urls={sigUrls} error={netErr.signal} onKind={setSigKind} onUrls={setSigUrls} />)}
-            {netOpen && <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-subtle)' }}>Members need {kind === 'nostr' ? 'a relay' : 'a server'} in common; the invite link carries these. Starts from what you used last.</span>}
+            {netOpen &&
+              (kind === 'nostr' ? (
+                <>
+                  <Input
+                    label="Relays"
+                    placeholder="wss://nos.lol"
+                    data-testid="create-relays"
+                    error={netErr.relays}
+                    value={relays}
+                    hint="ws:// or wss:// URLs, separated by spaces or commas. Empty means wss://nos.lol."
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRelays(e.target.value)}
+                  />
+                  <Input
+                    label="File servers (Blossom)"
+                    optional
+                    placeholder="https://blossom.example.com"
+                    data-testid="create-blossom"
+                    error={netErr.blossom}
+                    value={blossom}
+                    hint="Where your uploads in this workspace go. Leave empty for the defaults."
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBlossom(e.target.value)}
+                  />
+                </>
+              ) : (
+                <SignalFields prefix="create" kind={sigKind} urls={sigUrls} error={netErr.signal} onKind={setSigKind} onUrls={setSigUrls} />
+              ))}
+            {netOpen && (
+              <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-subtle)' }}>
+                Members need {kind === 'nostr' ? 'a relay' : 'a server'} in common; the invite link carries these. Starts from what you used last.
+              </span>
+            )}
           </div>
-          <Button type="submit" variant="primary" iconRight="arrow-right" fullWidth>Create workspace</Button>
-          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>{kind === 'nostr'
-            ? 'You get an invite link that carries the workspace key. Share it privately: anyone with it can read the history.'
-            : 'You get an invite link that carries the workspace key. Share it privately: anyone with it can join.'}</span>
+          <Button type="submit" variant="primary" iconRight="arrow-right" fullWidth>
+            Create workspace
+          </Button>
+          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>
+            {kind === 'nostr'
+              ? 'You get an invite link that carries the workspace key. Share it privately: anyone with it can read the history.'
+              : 'You get an invite link that carries the workspace key. Share it privately: anyone with it can join.'}
+          </span>
         </form>
       ) : (
-        <form onSubmit={async (e) => { e.preventDefault(); if (!(await app.joinWorkspace(code))) return setErr('Paste the whole invite link. Codes alone can’t be joined: they carry no key.'); onDone?.(); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Input label="Invite link" placeholder="https://…/#/w/K7QX2MPD/k/…" data-testid="join-link" value={code} onChange={(e) => setCode(e.target.value)} error={err || undefined} autoFocus data-autofocus style={{ fontFamily: 'var(--font-mono)' }} />
-          <Button type="submit" variant="primary" iconRight="arrow-right" fullWidth>Join workspace</Button>
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!(await app.joinWorkspace(code))) return setErr('Paste the whole invite link. Codes alone can’t be joined: they carry no key.');
+            onDone?.();
+          }}
+          style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+        >
+          <Input
+            label="Invite link"
+            placeholder="https://…/#/w/K7QX2MPD/k/…"
+            data-testid="join-link"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            error={err || undefined}
+            autoFocus
+            data-autofocus
+            style={{ fontFamily: 'var(--font-mono)' }}
+          />
+          <Button type="submit" variant="primary" iconRight="arrow-right" fullWidth>
+            Join workspace
+          </Button>
           <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>The link carries the workspace key, so keep it private.</span>
         </form>
       )}
@@ -98,7 +235,11 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
 }
 
 function WorkspaceDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  return <Dialog open={open} onClose={onClose} title="Create or join a workspace" width={460}>{open && <CreateJoin onDone={onClose} />}</Dialog>;
+  return (
+    <Dialog open={open} onClose={onClose} title="Create or join a workspace" width={460}>
+      {open && <CreateJoin onDone={onClose} />}
+    </Dialog>
+  );
 }
 
 function ChannelDialog({ onClose }: { onClose: () => void }) {
@@ -106,12 +247,33 @@ function ChannelDialog({ onClose }: { onClose: () => void }) {
   const [topic, setTopic] = useState('');
   return (
     <Dialog open onClose={onClose} title="New channel" width={460} description="Everyone in the workspace can see and join it.">
-      <form onSubmit={(e) => { e.preventDefault(); if (name.trim()) { useApp.getState().createChannel(name, topic); onClose(); } }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <Input label="Name" iconLeft="hash" placeholder="launch-q4" value={name} onChange={(e) => setName(e.target.value.toLowerCase().replace(/\s+/g, '-'))} autoFocus data-autofocus />
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (name.trim()) {
+            useApp.getState().createChannel(name, topic);
+            onClose();
+          }
+        }}
+        style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+      >
+        <Input
+          label="Name"
+          iconLeft="hash"
+          placeholder="launch-q4"
+          value={name}
+          onChange={(e) => setName(e.target.value.toLowerCase().replace(/\s+/g, '-'))}
+          autoFocus
+          data-autofocus
+        />
         <Input label="Topic" optional placeholder="What happens here" value={topic} onChange={(e) => setTopic(e.target.value)} />
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="primary" disabled={!name.trim()}>Create channel</Button>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" disabled={!name.trim()}>
+            Create channel
+          </Button>
         </div>
       </form>
     </Dialog>
@@ -126,12 +288,37 @@ function ChannelSettings({ onClose }: { onClose: () => void }) {
   if (!ch || !route.code) return null;
   const muted = !!rec?.muted.includes(ch.id);
   return (
-    <Dialog open onClose={onClose} title={'#' + ch.name} width={460}
-      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" onClick={() => { useApp.getState().publish(route.code!, { t: 'ch.update', b: { id: ch.id, name: name.trim() || ch.name, topic } }); onClose(); }}>Save</Button></>}>
+    <Dialog
+      open
+      onClose={onClose}
+      title={'#' + ch.name}
+      width={460}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              useApp.getState().publish(route.code!, { t: 'ch.update', b: { id: ch.id, name: name.trim() || ch.name, topic } });
+              onClose();
+            }}
+          >
+            Save
+          </Button>
+        </>
+      }
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Input label="Name" iconLeft="hash" value={name} onChange={(e) => setName(e.target.value.toLowerCase().replace(/\s+/g, '-'))} />
         <Input label="Topic" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="What happens here" />
-        <Switch checked={muted} onChange={() => useApp.getState().toggleMute(route.code!, ch.id)} label="Mute channel" description="No notifications or unread bold. Mentions still count." />
+        <Switch
+          checked={muted}
+          onChange={() => useApp.getState().toggleMute(route.code!, ch.id)}
+          label="Mute channel"
+          description="No notifications or unread bold. Mentions still count."
+        />
       </div>
     </Dialog>
   );
@@ -149,35 +336,103 @@ function JumpDialog({ onClose }: { onClose: () => void }) {
     const out: Item[] = [];
     const code = route.code;
     if (state && code) {
-      for (const c of state.channels.values()) out.push({ id: 'c' + c.id, label: c.name, sub: c.topic, icon: <Icon name="hash" size={16} />, go: () => app.go({ code, ch: c.id }) });
+      for (const c of state.channels.values())
+        out.push({ id: 'c' + c.id, label: c.name, sub: c.topic, icon: <Icon name="hash" size={16} />, go: () => app.go({ code, ch: c.id }) });
       for (const p of roster(state, peer, me)) {
-        if (p.kind === 'human') out.push({ id: 'p' + p.id, label: p.name + (p.self ? ' (you)' : ''), sub: '@' + p.handle, icon: <Avatar name={p.name} self={p.self} presence={p.presence} size={20} decorative />, go: () => app.go({ code, ch: dmChannel(me, p.pub) }) });
+        if (p.kind === 'human')
+          out.push({
+            id: 'p' + p.id,
+            label: p.name + (p.self ? ' (you)' : ''),
+            sub: '@' + p.handle,
+            icon: <Avatar name={p.name} self={p.self} presence={p.presence} size={20} decorative />,
+            go: () => app.go({ code, ch: dmChannel(me, p.pub) }),
+          });
       }
       for (const a of liveAgents(state)) {
         const icon = <Avatar name={a.name} kind="agent" size={20} decorative />;
         if (a.owner === me) out.push({ id: 'a' + a.id, label: a.name, sub: 'Your agent · private chat', icon, go: () => app.go({ code, ch: agentDmChannel(me, a.id) }) });
         // Someone else's agent only when its owner made it discoverable; the rest are reached by @mention.
-        else if (agentPrefs(a).discoverable) out.push({ id: 'g' + a.owner + a.id, label: a.name, sub: (state.profiles.get(a.owner)?.name || 'Someone') + '’s agent · discoverable', icon, go: () => app.go({ code, ch: guestDmChannel(me, a.owner, a.id) }) });
+        else if (agentPrefs(a).discoverable)
+          out.push({
+            id: 'g' + a.owner + a.id,
+            label: a.name,
+            sub: (state.profiles.get(a.owner)?.name || 'Someone') + '’s agent · discoverable',
+            icon,
+            go: () => app.go({ code, ch: guestDmChannel(me, a.owner, a.id) }),
+          });
       }
     }
-    for (const w of workspaces) if (w.code !== route.code) out.push({ id: 'w' + w.code, label: w.name, sub: 'Workspace · ' + formatCode(w.code), icon: <Icon name="layers" size={16} />, go: () => app.go({ code: w.code }) });
+    for (const w of workspaces)
+      if (w.code !== route.code)
+        out.push({ id: 'w' + w.code, label: w.name, sub: 'Workspace · ' + formatCode(w.code), icon: <Icon name="layers" size={16} />, go: () => app.go({ code: w.code }) });
     const s = q.trim().toLowerCase();
     return (s ? out.filter((i) => i.label.toLowerCase().includes(s) || i.sub?.toLowerCase().includes(s)) : out).slice(0, 12);
   }, [q, state, workspaces]);
-  const choose = (i: Item | undefined) => { if (i) { i.go(); onClose(); } };
+  const choose = (i: Item | undefined) => {
+    if (i) {
+      i.go();
+      onClose();
+    }
+  };
   return (
     <Dialog open onClose={onClose} width={560} dismissible>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: -20 }}>
-        <Input autoFocus data-autofocus iconLeft="search" placeholder="Jump to a channel, person or workspace" aria-label="Jump to" value={q}
-          onChange={(e) => { setQ(e.target.value); setIdx(0); }}
-          onKeyDown={(e) => { if (e.key === 'ArrowDown') { e.preventDefault(); setIdx((i) => Math.min(i + 1, items.length - 1)); } if (e.key === 'ArrowUp') { e.preventDefault(); setIdx((i) => Math.max(i - 1, 0)); } if (e.key === 'Enter') { e.preventDefault(); choose(items[idx]); } }} />
+        <Input
+          autoFocus
+          data-autofocus
+          iconLeft="search"
+          placeholder="Jump to a channel, person or workspace"
+          aria-label="Jump to"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setIdx(0);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              setIdx((i) => Math.min(i + 1, items.length - 1));
+            }
+            if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              setIdx((i) => Math.max(i - 1, 0));
+            }
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              choose(items[idx]);
+            }
+          }}
+        />
         <div role="listbox" aria-label="Results" style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 380, overflow: 'auto' }}>
           {items.map((i, n) => (
-            <button key={i.id} type="button" role="option" aria-selected={n === idx} onMouseEnter={() => setIdx(n)} onClick={() => choose(i)}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, height: 40, padding: '0 10px', border: 0, borderRadius: 10, cursor: 'pointer', textAlign: 'left', background: n === idx ? 'var(--surface-press)' : 'transparent', color: 'var(--text-body)' }}>
+            <button
+              key={i.id}
+              type="button"
+              role="option"
+              aria-selected={n === idx}
+              onMouseEnter={() => setIdx(n)}
+              onClick={() => choose(i)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                height: 40,
+                padding: '0 10px',
+                border: 0,
+                borderRadius: 10,
+                cursor: 'pointer',
+                textAlign: 'left',
+                background: n === idx ? 'var(--surface-press)' : 'transparent',
+                color: 'var(--text-body)',
+              }}
+            >
               <span style={{ display: 'flex', color: 'var(--text-subtle)' }}>{i.icon}</span>
               <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)' }}>{i.label}</span>
-              {i.sub && <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--text-subtle)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.sub}</span>}
+              {i.sub && (
+                <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--text-subtle)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {i.sub}
+                </span>
+              )}
               {n === idx && <Kbd keys="enter" size="sm" />}
             </button>
           ))}
@@ -191,5 +446,9 @@ function JumpDialog({ onClose }: { onClose: () => void }) {
 /** The quick share action; the same link lives in Settings → workspace → General. */
 function InviteDialog({ onClose }: { onClose: () => void }) {
   const { state, rec } = useCurrent();
-  return <Dialog open onClose={onClose} title={'Invite to ' + (state?.name || rec?.name)} width={480}><InviteBody /></Dialog>;
+  return (
+    <Dialog open onClose={onClose} title={'Invite to ' + (state?.name || rec?.name)} width={480}>
+      <InviteBody />
+    </Dialog>
+  );
 }

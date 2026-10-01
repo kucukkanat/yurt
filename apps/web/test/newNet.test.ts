@@ -18,7 +18,10 @@ describe('new workspace network settings', () => {
 
   it('turn emptied form fields into the built-ins', () => {
     expect(netFromForm('nostr', { sigKind: 'nostr', sigUrls: '', relays: ' ', blossom: '' })).toEqual({ kind: 'nostr', relays: [...DEFAULT_RELAYS], blossom: [] });
-    expect(netFromForm('trystero', { sigKind: 'nostr', sigUrls: '', relays: '', blossom: '' })).toEqual({ kind: 'trystero', signal: { kind: 'nostr', urls: [...DEFAULT_SIGNAL_URLS] } });
+    expect(netFromForm('trystero', { sigKind: 'nostr', sigUrls: '', relays: '', blossom: '' })).toEqual({
+      kind: 'trystero',
+      signal: { kind: 'nostr', urls: [...DEFAULT_SIGNAL_URLS] },
+    });
     // Trackers with none listed means the strategy's own public ones, not nos.lol.
     expect(netFromForm('trystero', { sigKind: 'torrent', sigUrls: '', relays: '', blossom: '' })).toEqual({ kind: 'trystero', signal: { kind: 'torrent', urls: [] } });
   });

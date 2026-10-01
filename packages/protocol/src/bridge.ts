@@ -28,7 +28,7 @@ export interface AgentConfig {
   workdir: string;
   instructions: string;
   autoApprove: ToolKind[];
-  contextSize: number;       // last N messages sent as context
+  contextSize: number; // last N messages sent as context
   /** What makes it answer in rooms: @mentions and/or replies in threads it takes part in. */
   respondTo: AgentTriggers;
   /** Where it answers: a thread, the channel, or both (thread reply also shown in the channel). At least one. */
@@ -37,7 +37,12 @@ export interface AgentConfig {
   discoverable: boolean;
 }
 
-export interface BridgeWorkspace { code: string; name: string; agents: string[]; peers?: number }
+export interface BridgeWorkspace {
+  code: string;
+  name: string;
+  agents: string[];
+  peers?: number;
+}
 
 export interface BridgeState {
   version: string;
@@ -47,8 +52,8 @@ export interface BridgeState {
   runtimes: RuntimeStatus[];
   startOnLogin: boolean;
   allowedOrigins: string[];
-  pairingCode?: string;      // only sent to the local bridge UI
-  home?: string;             // only sent to the local bridge UI
+  pairingCode?: string; // only sent to the local bridge UI
+  home?: string; // only sent to the local bridge UI
 }
 
 export type ToBridge =

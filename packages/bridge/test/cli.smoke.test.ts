@@ -16,7 +16,10 @@ const bin = path.join(pkg, 'node_modules', '.bin');
 
 beforeAll(() => {
   const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH };
-  for (const [cmd, args] of [['vite', ['build', '--config', 'ui/vite.config.ts', '--logLevel', 'error']], ['tsup', ['--silent']]] as const) {
+  for (const [cmd, args] of [
+    ['vite', ['build', '--config', 'ui/vite.config.ts', '--logLevel', 'error']],
+    ['tsup', ['--silent']],
+  ] as const) {
     const r = spawnSync(cmd, [...args], { cwd: pkg, env, encoding: 'utf8', shell: process.platform === 'win32' });
     if (r.status !== 0) throw new Error(`${cmd} failed:\n${r.stdout}\n${r.stderr}`);
   }
@@ -28,7 +31,12 @@ function start(args: string[]) {
   let out = '';
   p.stdout.on('data', (d) => (out += d));
   p.stderr.on('data', (d) => (out += d));
-  const exited = new Promise<number | null>((res) => p.on('exit', (code) => { fs.rmSync(home, { recursive: true, force: true }); res(code); }));
+  const exited = new Promise<number | null>((res) =>
+    p.on('exit', (code) => {
+      fs.rmSync(home, { recursive: true, force: true });
+      res(code);
+    }),
+  );
   return { p, output: () => out, exited };
 }
 

@@ -1,8 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 import {
-  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, dmChannel, guestDmChannel, makeEvent, workspaceKeys, uploadFile, sha256Buf, seal,
-  type Ev, type KeyPair, type PeerStore, type WsTransport, type KeyedTransport, type WorkspacePeerOpts,
+  WorkspacePeer,
+  keyFromPhrase,
+  newRecoveryPhrase,
+  newNostrTransport,
+  dmChannel,
+  guestDmChannel,
+  makeEvent,
+  workspaceKeys,
+  uploadFile,
+  sha256Buf,
+  seal,
+  type Ev,
+  type KeyPair,
+  type PeerStore,
+  type WsTransport,
+  type KeyedTransport,
+  type WorkspacePeerOpts,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
 import { startBlossom, type TestBlossom } from './blossom-server';
@@ -18,11 +33,17 @@ function memStore(initial: Ev[] = [], mark = 0) {
   const blobs = new Map<string, ArrayBuffer>();
   const store: PeerStore = {
     getBlob: async (id) => blobs.get(id) ?? null,
-    putBlob: async (id, b) => { blobs.set(id, b); },
+    putBlob: async (id, b) => {
+      blobs.set(id, b);
+    },
     load: async () => [...evs.values()],
-    save: async (xs) => { xs.forEach((e) => evs.set(e.id, e)); },
+    save: async (xs) => {
+      xs.forEach((e) => evs.set(e.id, e));
+    },
     loadMark: async () => mark,
-    saveMark: async (_ws, s) => { mark = s; },
+    saveMark: async (_ws, s) => {
+      mark = s;
+    },
   };
   return { store, mark: () => mark };
 }
@@ -120,7 +141,7 @@ describe('nostr transport', () => {
     expect(c.events.has(dm.id)).toBe(false);
   });
 
-  it('carries a guest DM with someone else\'s agent to the member and the owner only', async () => {
+  it("carries a guest DM with someone else's agent to the member and the owner only", async () => {
     const a = await join(A);
     const b = await join(B);
     const c = await join(C);
@@ -134,7 +155,7 @@ describe('nostr transport', () => {
     expect(c.events.has(ask.id) || c.events.has(answer.id)).toBe(false);
   });
 
-  it('syncs DMs to the author\'s other devices', async () => {
+  it("syncs DMs to the author's other devices", async () => {
     const a1 = await join(A);
     const dm = a1.publish({ t: 'msg', ch: dmChannel(A.pub, B.pub), to: B.pub, b: { text: 'from my laptop' } });
     await until(() => a1.queued.size === 0);
@@ -283,9 +304,17 @@ describe('nostr transport', () => {
 
   it('opens no relay link when left while still loading', async () => {
     let release = () => {};
-    const gate = new Promise<void>((r) => { release = r; });
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
     const base = memStore().store;
-    const a = peer(A, transport, { ...base, load: async (ws) => { await gate; return base.load(ws); } });
+    const a = peer(A, transport, {
+      ...base,
+      load: async (ws) => {
+        await gate;
+        return base.load(ws);
+      },
+    });
     const starting = a.start();
     a.leave();
     release();
@@ -295,14 +324,24 @@ describe('nostr transport', () => {
     expect(a.relayStatus()).toEqual(new Map([[relay.url, false]]));
   });
 
-  it('reports each relay\'s connection', async () => {
+  it("reports each relay's connection", async () => {
     const down = 'ws://127.0.0.1:9';
     const a = await join(A, newNostrTransport([relay.url, down]));
-    expect(a.relayStatus()).toEqual(new Map([[relay.url, true], [down, false]]));
+    expect(a.relayStatus()).toEqual(
+      new Map([
+        [relay.url, true],
+        [down, false],
+      ]),
+    );
   });
 
   it('reports a failed save on this device', async () => {
-    const a = await join(A, transport, { ...memStore().store, save: async () => { throw new Error('disk full'); } });
+    const a = await join(A, transport, {
+      ...memStore().store,
+      save: async () => {
+        throw new Error('disk full');
+      },
+    });
     a.publish({ t: 'msg', ch: 'general', b: { text: 'x' } });
     await until(() => errors.some((m) => m.includes('disk full')));
     errors = [];
@@ -311,7 +350,9 @@ describe('nostr transport', () => {
 
 describe('files in relay workspaces', () => {
   let blossom: TestBlossom;
-  beforeEach(async () => { blossom = await startBlossom(); });
+  beforeEach(async () => {
+    blossom = await startBlossom();
+  });
   afterEach(() => blossom.close());
 
   async function attach(text: string) {

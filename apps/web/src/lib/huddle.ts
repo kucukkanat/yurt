@@ -3,11 +3,17 @@ import { getPeer } from './net';
 
 export const MAX_VIDEO = 4;
 
-interface RemoteMedia { mic?: MediaStream; cam?: MediaStream; screen?: MediaStream }
+interface RemoteMedia {
+  mic?: MediaStream;
+  cam?: MediaStream;
+  screen?: MediaStream;
+}
 export interface HuddleView {
   code: string | null;
   ch: string | null;
-  mic: boolean; cam: boolean; screen: boolean;
+  mic: boolean;
+  cam: boolean;
+  screen: boolean;
   local: { cam?: MediaStream; screen?: MediaStream };
   remote: Record<string, RemoteMedia>;
   error?: string;
@@ -24,8 +30,14 @@ class Huddle {
   private sentTo = new Set<string>();
   private listeners = new Set<Listener>();
 
-  subscribe(l: Listener) { this.listeners.add(l); return () => this.listeners.delete(l); }
-  private emit(p: Partial<HuddleView>) { this.view = { ...this.view, ...p }; this.listeners.forEach((l) => l(this.view)); }
+  subscribe(l: Listener) {
+    this.listeners.add(l);
+    return () => this.listeners.delete(l);
+  }
+  private emit(p: Partial<HuddleView>) {
+    this.view = { ...this.view, ...p };
+    this.listeners.forEach((l) => l(this.view));
+  }
 
   videoCount(peer: WorkspacePeer | undefined, ch: string): number {
     if (!peer) return 0;
@@ -38,14 +50,25 @@ class Huddle {
     if (this.view.ch) await this.leave();
     // Relay workspaces open their WebRTC room only on demand; ensureRoom is null only when WebRTC is off for them.
     const off = 'Turn on “Allow WebRTC for voice and video” in Settings → Network to join calls here.';
-    if (!target.ensureRoom()) { this.emit({ error: off }); return; }
+    if (!target.ensureRoom()) {
+      this.emit({ error: off });
+      return;
+    }
     let mic: MediaStream;
-    try { mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false }); }
-    catch { this.emit({ error: 'Allow microphone access to join the huddle.' }); return; }
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+    } catch {
+      this.emit({ error: 'Allow microphone access to join the huddle.' });
+      return;
+    }
     // The permission prompt can take a while: the workspace may have reconnected (new peer) or its room been left meanwhile.
     const peer = getPeer(target.code);
     const room = peer?.ensureRoom();
-    if (!peer || !room) { mic.getTracks().forEach((t) => t.stop()); this.emit({ error: peer ? off : 'You left this workspace.' }); return; }
+    if (!peer || !room) {
+      mic.getTracks().forEach((t) => t.stop());
+      this.emit({ error: peer ? off : 'You left this workspace.' });
+      return;
+    }
     this.peer = peer;
     this.streams = { mic };
     this.sentTo.clear();
@@ -78,13 +101,21 @@ class Huddle {
       }
     } else if (this.sentTo.has(peerId)) {
       this.sentTo.delete(peerId);
-      for (const s of Object.values(this.streams)) if (s) try { room.removeStream(s, { target: peerId }); } catch { /* peer gone */ }
+      for (const s of Object.values(this.streams))
+        if (s)
+          try {
+            room.removeStream(s, { target: peerId });
+          } catch {
+            /* peer gone */
+          }
       const { [peerId]: _gone, ...rest } = this.view.remote;
       this.emit({ remote: rest });
     }
   }
 
-  private targets() { return [...this.sentTo]; }
+  private targets() {
+    return [...this.sentTo];
+  }
 
   toggleMic() {
     const t = this.streams.mic?.getAudioTracks()[0];
@@ -97,11 +128,16 @@ class Huddle {
   async toggleCam() {
     if (!this.peer || !this.view.ch) return;
     if (this.streams.cam) return this.stopKind('cam');
-    if (this.videoCount(this.peer, this.view.ch) >= MAX_VIDEO) { this.emit({ error: `Video is capped at ${MAX_VIDEO} people. Audio still works.` }); return; }
+    if (this.videoCount(this.peer, this.view.ch) >= MAX_VIDEO) {
+      this.emit({ error: `Video is capped at ${MAX_VIDEO} people. Audio still works.` });
+      return;
+    }
     try {
       const cam = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360 }, audio: false });
       this.startKind('cam', cam);
-    } catch { this.emit({ error: 'Allow camera access to turn video on.' }); }
+    } catch {
+      this.emit({ error: 'Allow camera access to turn video on.' });
+    }
   }
 
   async toggleScreen() {
@@ -111,7 +147,9 @@ class Huddle {
       const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
       screen.getVideoTracks()[0].addEventListener('ended', () => this.stopKind('screen'));
       this.startKind('screen', screen);
-    } catch { /* picker dismissed */ }
+    } catch {
+      /* picker dismissed */
+    }
   }
 
   private startKind(k: 'cam' | 'screen', s: MediaStream) {
@@ -127,7 +165,12 @@ class Huddle {
     if (!s) return;
     s.getTracks().forEach((x) => x.stop());
     const t = this.targets();
-    if (t.length) try { this.peer?.room?.removeStream(s, { target: t }); } catch { /* ignore */ }
+    if (t.length)
+      try {
+        this.peer?.room?.removeStream(s, { target: t });
+      } catch {
+        /* ignore */
+      }
     delete this.streams[k];
     this.emit({ [k]: false, local: { ...this.view.local, [k]: undefined } });
     this.peer?.setHuddle({ [k]: false });
@@ -135,19 +178,31 @@ class Huddle {
 
   async leave() {
     const p = this.peer;
-    for (const s of Object.values(this.streams)) if (s) {
-      s.getTracks().forEach((x) => x.stop());
-      const t = this.targets();
-      if (p?.room && t.length) try { p.room.removeStream(s, { target: t }); } catch { /* ignore */ }
-    }
+    for (const s of Object.values(this.streams))
+      if (s) {
+        s.getTracks().forEach((x) => x.stop());
+        const t = this.targets();
+        if (p?.room && t.length)
+          try {
+            p.room.removeStream(s, { target: t });
+          } catch {
+            /* ignore */
+          }
+      }
     this.streams = {};
     this.sentTo.clear();
-    if (p) { p.setHuddle({ ch: null, mic: false, cam: false, screen: false }); p.onHuddle = undefined; if (p.room) p.room.onPeerStream = null; }
+    if (p) {
+      p.setHuddle({ ch: null, mic: false, cam: false, screen: false });
+      p.onHuddle = undefined;
+      if (p.room) p.room.onPeerStream = null;
+    }
     this.peer = null;
     this.emit(EMPTY);
   }
 
-  clearError() { this.emit({ error: undefined }); }
+  clearError() {
+    this.emit({ error: undefined });
+  }
 }
 
 export const huddle = new Huddle();

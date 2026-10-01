@@ -3,7 +3,20 @@ import path from 'node:path';
 import { joinRoom as joinNostr, selfId } from 'trystero';
 import { joinRoom as joinTorrent } from '@trystero-p2p/torrent';
 import { RTCPeerConnection } from 'werift';
-import { WorkspacePeer, agentKey, agentPrefs, keyFromPhrase, LEGACY_TRYSTERO, signalingOf, type WsTransport, type Ev, type PeerStore, type JoinRoom, type KeyPair, type AgentBody } from '@yurt/protocol';
+import {
+  WorkspacePeer,
+  agentKey,
+  agentPrefs,
+  keyFromPhrase,
+  LEGACY_TRYSTERO,
+  signalingOf,
+  type WsTransport,
+  type Ev,
+  type PeerStore,
+  type JoinRoom,
+  type KeyPair,
+  type AgentBody,
+} from '@yurt/protocol';
 import { WS_DIR, BLOB_DIR, saveConfig, type Config } from './config';
 import type { AgentHost } from './agents';
 import { log } from './log';
@@ -13,20 +26,39 @@ const safe = (s: string) => s.replace(/[^A-Za-z0-9]/g, '');
 const fileStore: PeerStore = {
   async load(ws) {
     try {
-      return fs.readFileSync(path.join(WS_DIR, safe(ws) + '.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as Ev);
-    } catch { return []; }
+      return fs
+        .readFileSync(path.join(WS_DIR, safe(ws) + '.jsonl'), 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as Ev);
+    } catch {
+      return [];
+    }
   },
   async save(evs) {
     fs.appendFileSync(path.join(WS_DIR, safe(evs[0]?.ws || 'x') + '.jsonl'), evs.map((e) => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
   },
   async getBlob(id) {
-    try { const b = fs.readFileSync(path.join(BLOB_DIR, safe(id))); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer; } catch { return null; }
+    try {
+      const b = fs.readFileSync(path.join(BLOB_DIR, safe(id)));
+      return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+    } catch {
+      return null;
+    }
   },
-  async putBlob(id, buf) { fs.writeFileSync(path.join(BLOB_DIR, safe(id)), Buffer.from(buf)); },
+  async putBlob(id, buf) {
+    fs.writeFileSync(path.join(BLOB_DIR, safe(id)), Buffer.from(buf));
+  },
   async loadMark(ws) {
-    try { return Number(fs.readFileSync(path.join(WS_DIR, safe(ws) + '.mark'), 'utf8')) || 0; } catch { return 0; }
+    try {
+      return Number(fs.readFileSync(path.join(WS_DIR, safe(ws) + '.mark'), 'utf8')) || 0;
+    } catch {
+      return 0;
+    }
   },
-  async saveMark(ws, sec) { fs.writeFileSync(path.join(WS_DIR, safe(ws) + '.mark'), String(sec), { mode: 0o600 }); },
+  async saveMark(ws, sec) {
+    fs.writeFileSync(path.join(WS_DIR, safe(ws) + '.mark'), String(sec), { mode: 0o600 });
+  },
 };
 
 /** The part of a transport members must share to meet: relays, or signaling (absent = Trystero's defaults). */
@@ -40,7 +72,10 @@ export class Workspaces {
   private stopping = new Map<string, ReturnType<typeof setTimeout>>();
   host!: AgentHost;
 
-  constructor(private cfg: Config, private changed: () => void) {}
+  constructor(
+    private cfg: Config,
+    private changed: () => void,
+  ) {}
 
   setIdentity(phrase: string | null) {
     const next = phrase ? keyFromPhrase(phrase) : null;
@@ -50,36 +85,59 @@ export class Workspaces {
     this.cfg.workspaces.forEach((w) => this.start(w.code));
   }
 
-  get me() { return this.kp?.pub || null; }
+  get me() {
+    return this.kp?.pub || null;
+  }
 
   private start(code: string) {
     const w = this.cfg.workspaces.find((x) => x.code === code);
     if (!this.kp || !w || this.peers.has(code)) return;
     const p = new WorkspacePeer({
-      code, kp: this.kp, selfId, creator: w.creator, isBridge: true, transport: w.transport ?? LEGACY_TRYSTERO,
+      code,
+      kp: this.kp,
+      selfId,
+      creator: w.creator,
+      isBridge: true,
+      transport: w.transport ?? LEGACY_TRYSTERO,
       // Relay workspaces are Nostr-only for the bridge: files come from Blossom, and it never joins calls.
       // Members only meet over the workspace's own signaling method, so pick the matching strategy.
-      joinRoom: (w.transport ?? LEGACY_TRYSTERO).kind === 'trystero'
-        ? ((signalingOf(w.transport ?? LEGACY_TRYSTERO).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom)
-        : undefined,
+      joinRoom:
+        (w.transport ?? LEGACY_TRYSTERO).kind === 'trystero'
+          ? ((signalingOf(w.transport ?? LEGACY_TRYSTERO).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom)
+          : undefined,
       store: fileStore,
       // No third-party TURN: it would see who the bridge connects to. The browser is usually on the same machine.
       rtc: { rtcPolyfill: RTCPeerConnection },
       onState: (s, fresh) => {
-        if (s.name && w.name !== s.name) { w.name = s.name; saveConfig(this.cfg); this.changed(); }
+        if (s.name && w.name !== s.name) {
+          w.name = s.name;
+          saveConfig(this.cfg);
+          this.changed();
+        }
         this.announce(code);
         this.host.onEvents(p, fresh);
       },
       onPeers: () => this.changed(),
-      onCreator: (pub) => { w.creator = pub; saveConfig(this.cfg); },
+      onCreator: (pub) => {
+        w.creator = pub;
+        saveConfig(this.cfg);
+      },
       // A key rotation: keep the newest key, which opens every earlier one, so the config matches the app's.
-      onKey: (key) => { if (w.transport?.kind === 'nostr') { w.transport = { ...w.transport, key }; saveConfig(this.cfg); } },
+      onKey: (key) => {
+        if (w.transport?.kind === 'nostr') {
+          w.transport = { ...w.transport, key };
+          saveConfig(this.cfg);
+        }
+      },
       onJoinError: (d) => log('warn', 'p2p', 'join error in ' + code + ': ' + JSON.stringify(d).slice(0, 300)),
       onError: (msg) => log('error', 'relay', code + ': ' + msg),
     });
     this.peers.set(code, p);
     p.start().then(
-      () => { this.presence(code); log('info', 'p2p', 'joined workspace ' + code); },
+      () => {
+        this.presence(code);
+        log('info', 'p2p', 'joined workspace ' + code);
+      },
       (e: unknown) => log('error', 'p2p', `couldn't start workspace ${code}: ${e instanceof Error ? e.message : String(e)}`),
     );
   }
@@ -99,16 +157,34 @@ export class Workspaces {
     const me = this.kp.pub;
     for (const a of this.cfg.agents) {
       // replyIn stays for peers that predate respondTo/postIn (they drop agent events without it).
-      const want: AgentBody = { id: a.id, name: a.name, handle: a.handle, runtime: a.runtime, model: a.model, replyIn: a.postIn.thread ? 'thread' : 'channel',
-        respondTo: a.respondTo, postIn: a.postIn, discoverable: a.discoverable, removed: w.agents.includes(a.id) ? undefined : true };
+      const want: AgentBody = {
+        id: a.id,
+        name: a.name,
+        handle: a.handle,
+        runtime: a.runtime,
+        model: a.model,
+        replyIn: a.postIn.thread ? 'thread' : 'channel',
+        respondTo: a.respondTo,
+        postIn: a.postIn,
+        discoverable: a.discoverable,
+        removed: w.agents.includes(a.id) ? undefined : true,
+      };
       const have = p.state.agents.get(agentKey(me, a.id));
       if (!have && want.removed) continue;
-      const same = have && have.name === want.name && have.handle === want.handle && have.runtime === want.runtime && (have.model || undefined) === want.model && have.replyIn === want.replyIn && !!have.removed === !!want.removed
-        && JSON.stringify(agentPrefs(have)) === JSON.stringify(agentPrefs(want));
+      const same =
+        have &&
+        have.name === want.name &&
+        have.handle === want.handle &&
+        have.runtime === want.runtime &&
+        (have.model || undefined) === want.model &&
+        have.replyIn === want.replyIn &&
+        !!have.removed === !!want.removed &&
+        JSON.stringify(agentPrefs(have)) === JSON.stringify(agentPrefs(want));
       if (!same) p.publish({ t: 'agent', b: want });
     }
     for (const have of p.state.agents.values()) {
-      if (have.owner === me && !have.removed && !this.cfg.agents.some((a) => a.id === have.id)) p.publish({ t: 'agent', b: { ...have, owner: undefined, ts: undefined, removed: true } });
+      if (have.owner === me && !have.removed && !this.cfg.agents.some((a) => a.id === have.id))
+        p.publish({ t: 'agent', b: { ...have, owner: undefined, ts: undefined, removed: true } });
     }
   }
 
@@ -123,7 +199,10 @@ export class Workspaces {
     clearTimeout(this.stopping.get(code));
     this.stopping.delete(code);
     let w = this.cfg.workspaces.find((x) => x.code === code);
-    if (!w) { w = { code, name, creator: creator || null, agents: [], transport }; this.cfg.workspaces.push(w); }
+    if (!w) {
+      w = { code, name, creator: creator || null, agents: [], transport };
+      this.cfg.workspaces.push(w);
+    }
     // Kind and key are fixed once known (only filled in for workspaces joined before transports existed),
     // but the app owns the rest: a relay list or signaling edited there needs a fresh peer on the new
     // servers, or the bridge waits where no member ever looks. (Key rotations reach the bridge by itself.)
@@ -137,21 +216,37 @@ export class Workspaces {
     if (edited) this.stop(code); // immediate, and clears any pending delayed stop
     const running = this.peers.has(code);
     this.start(code);
-    if (running) { this.announce(code); this.presence(code); } // a fresh peer announces after its log loads
+    if (running) {
+      this.announce(code);
+      this.presence(code);
+    } // a fresh peer announces after its log loads
     this.changed();
   }
 
   leave(code: string) {
     const w = this.cfg.workspaces.find((x) => x.code === code);
-    if (w) { w.agents = []; this.announce(code); }
+    if (w) {
+      w.agents = [];
+      this.announce(code);
+    }
     clearTimeout(this.stopping.get(code));
-    this.stopping.set(code, setTimeout(() => this.stop(code), 1500));
+    this.stopping.set(
+      code,
+      setTimeout(() => this.stop(code), 1500),
+    );
     this.cfg.workspaces = this.cfg.workspaces.filter((x) => x.code !== code);
     saveConfig(this.cfg);
     this.changed();
   }
 
-  refreshAll() { for (const code of this.peers.keys()) { this.announce(code); this.presence(code); } }
+  refreshAll() {
+    for (const code of this.peers.keys()) {
+      this.announce(code);
+      this.presence(code);
+    }
+  }
 
-  peerCount(code: string) { return this.peers.get(code)?.presence.size || 0; }
+  peerCount(code: string) {
+    return this.peers.get(code)?.presence.size || 0;
+  }
 }

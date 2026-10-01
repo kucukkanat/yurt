@@ -11,7 +11,12 @@ export function newInviteCode(): string {
 
 /** "k7qx-2mpd" → "K7QX2MPD"; returns null when it can't be a code. */
 export function normalizeCode(input: string): string | null {
-  const s = input.trim().replace(/^.*#\/w\//, '').split('/')[0].toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const s = input
+    .trim()
+    .replace(/^.*#\/w\//, '')
+    .split('/')[0]
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
   if (s.length !== 8) return null;
   for (const c of s) if (!ALPHA.includes(c)) return null;
   return s;
@@ -54,5 +59,10 @@ export function isPrivateChannel(ch: string): boolean {
 }
 
 export function slug(s: string): string {
-  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  return s
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
 }

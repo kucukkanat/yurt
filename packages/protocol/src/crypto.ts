@@ -4,7 +4,10 @@ import { bytesToHex, hexToBytes, utf8ToBytes, concatBytes } from '@noble/hashes/
 import { generateMnemonic, mnemonicToEntropy, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 
-export interface KeyPair { pub: string; sec: string }
+export interface KeyPair {
+  pub: string;
+  sec: string;
+}
 
 export function sha256hex(data: string | Uint8Array): string {
   return bytesToHex(sha256(typeof data === 'string' ? utf8ToBytes(data) : data));
@@ -35,7 +38,11 @@ export function sign(sec: string, msg: string): string {
 }
 
 export function verify(pub: string, msg: string, sig: string): boolean {
-  try { return ed25519.verify(hexToBytes(sig), utf8ToBytes(msg), hexToBytes(pub)); } catch { return false; }
+  try {
+    return ed25519.verify(hexToBytes(sig), utf8ToBytes(msg), hexToBytes(pub));
+  } catch {
+    return false;
+  }
 }
 
 /** Short fingerprint shown in the UI: 7F3A…C21E */

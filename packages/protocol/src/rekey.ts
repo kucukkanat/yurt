@@ -17,7 +17,11 @@ import { isWorkspaceKey, newWorkspaceKey, open, seal, workspaceKeys, type WsKeys
 const WRAP = 'yurt-rekey-v1';
 const HISTORY = 'yurt-rekey-history-v1';
 
-export interface RingKey { readonly key: string; readonly keys: WsKeys; epoch: number | null }
+export interface RingKey {
+  readonly key: string;
+  readonly keys: WsKeys;
+  epoch: number | null;
+}
 export type RawRekey = Pick<ValidRekey, 'id' | 'a' | 'epoch' | 'keys' | 'history'>;
 export interface Keyring {
   readonly keys: ReadonlyMap<string, RingKey>;
@@ -28,7 +32,11 @@ export interface Keyring {
 }
 
 const derived = new Map<string, WsKeys>();
-const keysOf = (key: string) => { let k = derived.get(key); if (!k) derived.set(key, (k = workspaceKeys(key))); return k; };
+const keysOf = (key: string) => {
+  let k = derived.get(key);
+  if (!k) derived.set(key, (k = workspaceKeys(key)));
+  return k;
+};
 
 function historyOf(k: WsKeys, r: RawRekey): { key: string; epoch: number | null }[] | null {
   const text = open(k.enc, HISTORY, r.history);
@@ -52,7 +60,11 @@ function unwrap(ring: Map<string, RingKey>, me: KeyPair, r: RawRekey): string | 
   if (!sealed || !/^[0-9a-f]{64}$/.test(r.a)) return null;
   for (const e of ring.values()) {
     let key: string | null;
-    try { key = open(e.keys.pair(me.sec, r.a), WRAP, sealed); } catch { continue; } // not a curve point: junk
+    try {
+      key = open(e.keys.pair(me.sec, r.a), WRAP, sealed);
+    } catch {
+      continue;
+    } // not a curve point: junk
     if (key && isWorkspaceKey(key) && historyOf(keysOf(key), r)) return key; // must be the key its history is sealed under
   }
   return null;
@@ -62,8 +74,14 @@ export function buildKeyring(invite: string, rekeys: readonly RawRekey[], valid:
   const ring = new Map<string, RingKey>();
   const add = (key: string, epoch: number | null) => {
     const e = ring.get(key);
-    if (!e) { ring.set(key, { key, keys: keysOf(key), epoch }); return true; }
-    if (e.epoch === null && epoch !== null) { e.epoch = epoch; return true; }
+    if (!e) {
+      ring.set(key, { key, keys: keysOf(key), epoch });
+      return true;
+    }
+    if (e.epoch === null && epoch !== null) {
+      e.epoch = epoch;
+      return true;
+    }
     return false;
   };
   add(invite, null);
@@ -84,11 +102,15 @@ export function buildKeyring(invite: string, rekeys: readonly RawRekey[], valid:
   }
   const inviteKey = ring.get(invite);
   if (!inviteKey) throw new Error('keyring lost the invite key'); // unreachable: it's added first
-  let write = inviteKey, epoch = inviteKey.epoch ?? 0;
+  let write = inviteKey,
+    epoch = inviteKey.epoch ?? 0;
   for (const r of valid) {
     const k = introduced.get(r.id);
     const e = k === undefined ? undefined : ring.get(k);
-    if (e && r.epoch > epoch) { write = e; epoch = r.epoch; }
+    if (e && r.epoch > epoch) {
+      write = e;
+      epoch = r.epoch;
+    }
   }
   return { keys: ring, write, lockedOut: valid.some((r) => r.epoch > epoch && !introduced.has(r.id)) };
 }

@@ -9,14 +9,30 @@ export function canonical(v: unknown): string {
   if (v === null || typeof v !== 'object') return JSON.stringify(v);
   if (Array.isArray(v)) return '[' + v.map((x) => (x === undefined ? 'null' : canonical(x))).join(',') + ']';
   const o = v as Record<string, unknown>;
-  return '{' + Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => JSON.stringify(k) + ':' + canonical(o[k])).join(',') + '}';
+  return (
+    '{' +
+    Object.keys(o)
+      .filter((k) => o[k] !== undefined)
+      .sort()
+      .map((k) => JSON.stringify(k) + ':' + canonical(o[k]))
+      .join(',') +
+    '}'
+  );
 }
 
 export function eventId(e: UnsignedEv): string {
   return sha256hex(canonical(e)).slice(0, 32);
 }
 
-export interface EventFields<B = any> { ws: string; t: EvType; b: B; ch?: string; to?: string; ag?: string; ts?: number }
+export interface EventFields<B = any> {
+  ws: string;
+  t: EvType;
+  b: B;
+  ch?: string;
+  to?: string;
+  ag?: string;
+  ts?: number;
+}
 
 // State is reduced in (ts, id) order, so two events in the same millisecond could apply out of
 // order (a message before its channel). Handing out strictly increasing timestamps keeps
@@ -33,16 +49,40 @@ export function makeEvent<B>(kp: KeyPair, f: EventFields<B>): Ev<B> {
   return { ...base, id, sig: sign(kp.sec, id) };
 }
 
-const EV_TYPES: ReadonlySet<string> = new Set<EvType>(['ws.create', 'profile', 'ch.create', 'ch.update', 'msg', 'edit', 'del', 'react', 'pin', 'role', 'ban', 'agent', 'approve', 'rekey']);
+const EV_TYPES: ReadonlySet<string> = new Set<EvType>([
+  'ws.create',
+  'profile',
+  'ch.create',
+  'ch.update',
+  'msg',
+  'edit',
+  'del',
+  'react',
+  'pin',
+  'role',
+  'ban',
+  'agent',
+  'approve',
+  'rekey',
+]);
 const optStr = (x: unknown) => x === undefined || typeof x === 'string';
 
 /** Structural check for untrusted input: the fields reduce and sortEvents rely on have the right types. */
 export function isEventShape(e: unknown): e is Ev {
   if (e === null || typeof e !== 'object') return false;
   const o = e as Record<string, unknown>;
-  return typeof o.id === 'string' && typeof o.ws === 'string' && typeof o.t === 'string' && EV_TYPES.has(o.t)
-    && typeof o.a === 'string' && typeof o.sig === 'string' && Number.isSafeInteger(o.ts)
-    && optStr(o.ch) && optStr(o.to) && optStr(o.ag);
+  return (
+    typeof o.id === 'string' &&
+    typeof o.ws === 'string' &&
+    typeof o.t === 'string' &&
+    EV_TYPES.has(o.t) &&
+    typeof o.a === 'string' &&
+    typeof o.sig === 'string' &&
+    Number.isSafeInteger(o.ts) &&
+    optStr(o.ch) &&
+    optStr(o.to) &&
+    optStr(o.ag)
+  );
 }
 
 export function verifyEvent(e: unknown): e is Ev {

@@ -1,6 +1,23 @@
 import React from 'react';
 
-const MAC = { mod: '⌘', cmd: '⌘', ctrl: '⌃', alt: '⌥', opt: '⌥', shift: '⇧', enter: '↵', return: '↵', esc: 'Esc', tab: '⇥', up: '↑', down: '↓', left: '←', right: '→', backspace: '⌫', space: 'Space' };
+const MAC = {
+  mod: '⌘',
+  cmd: '⌘',
+  ctrl: '⌃',
+  alt: '⌥',
+  opt: '⌥',
+  shift: '⇧',
+  enter: '↵',
+  return: '↵',
+  esc: 'Esc',
+  tab: '⇥',
+  up: '↑',
+  down: '↓',
+  left: '←',
+  right: '→',
+  backspace: '⌫',
+  space: 'Space',
+};
 
 export function Kbd({ keys, tone = 'default', size = 'md', style }) {
   const list = Array.isArray(keys) ? keys : String(keys).split('+');
@@ -14,11 +31,29 @@ export function Kbd({ keys, tone = 'default', size = 'md', style }) {
   return (
     <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center', ...style }} aria-label={list.join(' + ')}>
       {list.map((k, i) => (
-        <kbd key={i} aria-hidden="true" style={{
-          minWidth: h, height: h, padding: '0 5px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          fontFamily: 'var(--font-mono)', fontSize: size === 'sm' ? 10.5 : 11.5, fontWeight: 500, lineHeight: 1,
-          color: t.fg, background: t.bg, border: '1px solid ' + t.bd, borderBottomWidth: 2, borderRadius: 5,
-        }}>{MAC[k.trim().toLowerCase()] || k.trim().toUpperCase()}</kbd>
+        <kbd
+          key={i}
+          aria-hidden="true"
+          style={{
+            minWidth: h,
+            height: h,
+            padding: '0 5px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontFamily: 'var(--font-mono)',
+            fontSize: size === 'sm' ? 10.5 : 11.5,
+            fontWeight: 500,
+            lineHeight: 1,
+            color: t.fg,
+            background: t.bg,
+            border: '1px solid ' + t.bd,
+            borderBottomWidth: 2,
+            borderRadius: 5,
+          }}
+        >
+          {MAC[k.trim().toLowerCase()] || k.trim().toUpperCase()}
+        </kbd>
       ))}
     </span>
   );

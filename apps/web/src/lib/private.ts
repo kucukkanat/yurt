@@ -10,7 +10,13 @@ export const isDirect = (ch: string) => ch.startsWith('dm:') || ch.startsWith('g
  * message's `to`: that is me when the message came from the other side, so it would never leave my devices.
  */
 export function privateTarget(ch: string, me: string): string | undefined {
-  if (ch.startsWith('dm:')) return ch.slice(3).split(':').find((k) => k !== me) || me;
+  if (ch.startsWith('dm:'))
+    return (
+      ch
+        .slice(3)
+        .split(':')
+        .find((k) => k !== me) || me
+    );
   if (ch.startsWith('adm:')) return me;
   // A guest DM pairs the member with the agent's owner. Only the member writes here as a human (the owner's
   // side is the agent, posted by the bridge), so the conversation is read-only for the owner.

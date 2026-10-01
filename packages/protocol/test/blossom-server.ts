@@ -8,7 +8,9 @@ import { verifyEvent, type Event } from 'nostr-tools/pure';
  * for tests. `stored` is exactly what an operator would hold, for privacy assertions.
  */
 export interface TestBlossom {
-  url: string; port: number; stored: Map<string, Buffer>;
+  url: string;
+  port: number;
+  stored: Map<string, Buffer>;
   /** Hashes whose download the client stopped reading before the end. */
   aborted: string[];
   close(): Promise<void>;
@@ -54,11 +56,16 @@ export function startBlossom(port = 0, opts: BlossomOpts = {}): Promise<TestBlos
       const blob = stored.get(hash);
       if (req.method === 'GET' && blob) {
         res.writeHead(200, { 'Content-Type': 'application/octet-stream', ...(opts.chunked ? {} : { 'Content-Length': blob.length }) });
-        res.on('close', () => { if (!res.writableFinished) aborted.push(hash); });
+        res.on('close', () => {
+          if (!res.writableFinished) aborted.push(hash);
+        });
         // In 1 MiB chunks, honouring backpressure, so a client that stops reading stops the transfer.
         const write = (at: number): void => {
           if (res.destroyed) return;
-          if (at >= blob.length) { res.end(); return; }
+          if (at >= blob.length) {
+            res.end();
+            return;
+          }
           const next = at + CHUNK;
           if (res.write(blob.subarray(at, next))) write(next);
           else res.once('drain', () => write(next));
@@ -68,11 +75,23 @@ export function startBlossom(port = 0, opts: BlossomOpts = {}): Promise<TestBlos
       res.writeHead(404).end();
     });
   });
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => {
-    const addr = server.address();
-    port = typeof addr === 'object' && addr ? addr.port : port;
-    resolve({ url: `http://127.0.0.1:${port}`, port, stored, aborted, close: () => new Promise((r) => { server.closeAllConnections(); server.close(() => r()); }) });
-  }));
+  return new Promise((resolve) =>
+    server.listen(port, '127.0.0.1', () => {
+      const addr = server.address();
+      port = typeof addr === 'object' && addr ? addr.port : port;
+      resolve({
+        url: `http://127.0.0.1:${port}`,
+        port,
+        stored,
+        aborted,
+        close: () =>
+          new Promise((r) => {
+            server.closeAllConnections();
+            server.close(() => r());
+          }),
+      });
+    }),
+  );
 }
 
 // `npm run blossom -w packages/protocol` (PORT env) serves the E2E suite.

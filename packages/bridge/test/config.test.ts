@@ -31,7 +31,12 @@ describe('agent room settings', () => {
   const old = { id: 'a-1', name: 'A', handle: 'a', runtime: 'copilot', workdir: '/tmp/a', instructions: '', autoApprove: [], contextSize: 20 };
 
   it('migrates agents saved with only replyIn when loading the config', () => {
-    write({ agents: [{ ...old, replyIn: 'channel' }, { ...old, id: 'b-1', handle: 'b' }] });
+    write({
+      agents: [
+        { ...old, replyIn: 'channel' },
+        { ...old, id: 'b-1', handle: 'b' },
+      ],
+    });
     const [a, b] = loadConfig().agents;
     expect(a).toEqual({ ...old, respondTo: { mentions: true, replies: false }, postIn: { thread: false, channel: true }, discoverable: false });
     expect(b.postIn).toEqual({ thread: true, channel: false });

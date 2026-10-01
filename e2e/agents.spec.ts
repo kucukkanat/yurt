@@ -15,18 +15,22 @@ async function onboard(page: Page, name: string) {
 /** Point new relay workspaces at the local relay, through the same IndexedDB settings the Settings dialog writes. */
 async function useLocalRelay(page: Page) {
   await page.goto('./');
-  await page.evaluate((relays) => new Promise<void>((res, rej) => {
-    const r = indexedDB.open('yurt', 1);
-    r.onsuccess = () => {
-      const t = r.result.transaction('kv', 'readwrite');
-      const kv = t.objectStore('kv');
-      const get = kv.get('settings');
-      get.onsuccess = () => kv.put({ ...(get.result || {}), relays }, 'settings');
-      t.oncomplete = () => res();
-      t.onerror = () => rej(t.error);
-    };
-    r.onerror = () => rej(r.error);
-  }), RELAY);
+  await page.evaluate(
+    (relays) =>
+      new Promise<void>((res, rej) => {
+        const r = indexedDB.open('yurt', 1);
+        r.onsuccess = () => {
+          const t = r.result.transaction('kv', 'readwrite');
+          const kv = t.objectStore('kv');
+          const get = kv.get('settings');
+          get.onsuccess = () => kv.put({ ...(get.result || {}), relays }, 'settings');
+          t.oncomplete = () => res();
+          t.onerror = () => rej(t.error);
+        };
+        r.onerror = () => rej(r.error);
+      }),
+    RELAY,
+  );
   await page.reload();
 }
 
@@ -34,9 +38,16 @@ const memStore = (): PeerStore => {
   const evs = new Map<string, Ev>();
   let mark = 0;
   return {
-    getBlob: async () => null, putBlob: async () => {},
-    load: async () => [...evs.values()], save: async (xs) => { xs.forEach((e) => evs.set(e.id, e)); },
-    loadMark: async () => mark, saveMark: async (_ws, m) => { mark = m; },
+    getBlob: async () => null,
+    putBlob: async () => {},
+    load: async () => [...evs.values()],
+    save: async (xs) => {
+      xs.forEach((e) => evs.set(e.id, e));
+    },
+    loadMark: async () => mark,
+    saveMark: async (_ws, m) => {
+      mark = m;
+    },
   };
 };
 
@@ -61,8 +72,14 @@ test('members can find and DM discoverable agents, and are told the owner can re
   try {
     await expect.poll(() => owner.connected && owner.state.channels.has('general'), { timeout: 30_000 }).toBe(true);
     owner.publish({ t: 'profile', b: { name: 'Olu', handle: 'olu' } });
-    for (const [id, name, discoverable] of [['harvey', 'Harvey', true], ['mute', 'Mute', false]] as const) {
-      owner.publish({ t: 'agent', b: { id, name, handle: id, runtime: 'copilot', replyIn: 'thread', respondTo: { mentions: true, replies: true }, postIn: { thread: true, channel: true }, discoverable } });
+    for (const [id, name, discoverable] of [
+      ['harvey', 'Harvey', true],
+      ['mute', 'Mute', false],
+    ] as const) {
+      owner.publish({
+        t: 'agent',
+        b: { id, name, handle: id, runtime: 'copilot', replyIn: 'thread', respondTo: { mentions: true, replies: true }, postIn: { thread: true, channel: true }, discoverable },
+      });
       owner.publish({ t: 'msg', ch: 'general', ag: id, b: { text: name + ' says hi' } });
     }
 

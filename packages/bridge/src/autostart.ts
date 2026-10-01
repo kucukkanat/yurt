@@ -28,11 +28,16 @@ const WIN = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start 
 export function setStartOnLogin(on: boolean): boolean {
   const file = process.platform === 'darwin' ? MAC : process.platform === 'win32' ? WIN : LINUX;
   try {
-    if (!on) { fs.rmSync(file, { force: true }); return true; }
+    if (!on) {
+      fs.rmSync(file, { force: true });
+      return true;
+    }
     const { exe, args } = command(); // only needed to turn it on, so turning off works from any checkout
     fs.mkdirSync(path.dirname(file), { recursive: true });
     if (process.platform === 'darwin') {
-      fs.writeFileSync(MAC, `<?xml version="1.0" encoding="UTF-8"?>
+      fs.writeFileSync(
+        MAC,
+        `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>dev.yurt.bridge</string>
@@ -40,11 +45,15 @@ export function setStartOnLogin(on: boolean): boolean {
   <key>RunAtLoad</key><true/>
   <key>EnvironmentVariables</key><dict><key>PATH</key><string>${process.env.PATH}</string></dict>
 </dict></plist>
-`);
+`,
+      );
     } else if (process.platform === 'win32') {
       fs.writeFileSync(WIN, `@echo off\r\nstart "" /min "${exe}" ${args.map((a) => `"${a}"`).join(' ')}\r\n`);
     } else {
-      fs.writeFileSync(LINUX, `[Desktop Entry]\nType=Application\nName=Yurt bridge\nExec=${[exe, ...args].map((a) => `"${a}"`).join(' ')}\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n`);
+      fs.writeFileSync(
+        LINUX,
+        `[Desktop Entry]\nType=Application\nName=Yurt bridge\nExec=${[exe, ...args].map((a) => `"${a}"`).join(' ')}\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n`,
+      );
     }
     return true;
   } catch (e) {
