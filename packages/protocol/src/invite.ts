@@ -51,9 +51,15 @@ export function parseRelays(s: string): string[] {
 export const newTrysteroTransport = (signal?: Signaling): KeyedTransport =>
   signal && (signal.kind !== 'nostr' || signal.urls.length) ? { kind: 'trystero', key: newWorkspaceKey(), signal } : { kind: 'trystero', key: newWorkspaceKey() };
 
-/** Where this workspace's WebRTC room is signaled: relay workspaces use their own relays. */
+/**
+ * Where this workspace's WebRTC room is signaled: relay workspaces use their own relays. Nostr signaling
+ * without servers (older workspaces, emptied fields) means DEFAULT_SIGNAL_URLS, as the UI says: Trystero's
+ * own list is a key-seeded pick of public relays that can land on mostly dead ones, so members never meet.
+ */
 export function signalingOf(t: WsTransport): Signaling {
-  return t.kind === 'nostr' ? { kind: 'nostr', urls: t.relays } : t.signal ?? { kind: 'nostr', urls: [] };
+  if (t.kind === 'nostr') return { kind: 'nostr', urls: t.relays };
+  const s = t.signal ?? { kind: 'nostr', urls: [] };
+  return s.kind === 'nostr' && !s.urls.length ? { kind: 'nostr', urls: [...DEFAULT_SIGNAL_URLS] } : s;
 }
 
 export function newNostrTransport(relays: readonly string[] = DEFAULT_RELAYS): KeyedTransport {

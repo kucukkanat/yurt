@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { RTCPeerConnection } from 'werift';
 import {
-  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, newTrysteroTransport, signalingOf, dmChannel, sha256Buf, makeEvent, LEGACY_TRYSTERO,
+  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, newTrysteroTransport, signalingOf, dmChannel, sha256Buf, makeEvent,
   type Ev, type JoinRoom, type KeyPair, type PeerStore, type WsTransport, type HuddleState, type WsState,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
@@ -68,11 +68,13 @@ async function device(kp: KeyPair, opts: DeviceOpts = {}) {
 
 const pubs = (m: ReadonlyMap<string, { pub: string }>) => [...m.values()].map((x) => x.pub);
 
+// A keyless (code-only) workspace signaling over the local relay rather than the public default.
+const legacyLocal = (): WsTransport => ({ kind: 'trystero', signal: { kind: 'nostr', urls: [relay.url] } });
 const texts = (p: WorkspacePeer) => [...p.state.msgs.values()].map((m) => m.text);
 
 beforeAll(async () => { relay = await startRelay(); });
 afterAll(() => relay.close());
-beforeEach(() => { keyed = newTrysteroTransport(); errors = []; });
+beforeEach(() => { keyed = newTrysteroTransport({ kind: 'nostr', urls: [relay.url] }); errors = []; });
 afterEach(() => {
   open.splice(0).forEach((p) => p.leave());
   expect(errors).toEqual([]);
@@ -197,15 +199,15 @@ describe('rooms are keyed', () => {
     const { p: a } = await device(A);
     const { p: b } = await device(B);
     await until(() => a.peers.size === 1 && b.peers.size === 1);
-    const { p: outsider } = await device(C, { transport: LEGACY_TRYSTERO });
+    const { p: outsider } = await device(C, { transport: legacyLocal() });
     await new Promise((r) => setTimeout(r, 2000));
     expect(outsider.peers.size).toBe(0);
     expect([...a.peers.values()].map((x) => x.pub)).not.toContain(C.pub);
   }, 60_000);
 
   it('still connects legacy code-only workspaces for existing members', async () => {
-    const { p: a } = await device(A, { transport: LEGACY_TRYSTERO });
-    const { p: b } = await device(B, { transport: LEGACY_TRYSTERO });
+    const { p: a } = await device(A, { transport: legacyLocal() });
+    const { p: b } = await device(B, { transport: legacyLocal() });
     await until(() => a.peers.size === 1 && b.peers.size === 1);
   }, 60_000);
 });

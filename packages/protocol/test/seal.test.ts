@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   keyFromPhrase, newRecoveryPhrase, newWorkspaceKey, isWorkspaceKey, workspaceKeys, seal, open,
-  inviteHash, parseInvite, parseRelays, newNostrTransport, newTrysteroTransport, signalingOf, isLegacy, padSize, DEFAULT_RELAYS, LEGACY_TRYSTERO,
+  inviteHash, parseInvite, parseRelays, newNostrTransport, newTrysteroTransport, signalingOf, isLegacy, padSize, DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, LEGACY_TRYSTERO,
 } from '../src';
 
 const A = keyFromPhrase(newRecoveryPhrase());
@@ -79,7 +79,10 @@ describe('invite', () => {
     const nostrDefault = newTrysteroTransport({ kind: 'nostr', urls: [] });
     expect(nostrDefault).not.toHaveProperty('signal');
     expect(inviteHash({ code: 'K7QX2MPD', transport: nostrDefault })).not.toContain('/s/');
-    expect(signalingOf(nostrDefault)).toEqual({ kind: 'nostr', urls: [] });
+    // Nostr signaling with no servers means nos.lol at runtime too, for new and older workspaces alike.
+    expect(signalingOf(nostrDefault)).toEqual({ kind: 'nostr', urls: [...DEFAULT_SIGNAL_URLS] });
+    expect(signalingOf(LEGACY_TRYSTERO)).toEqual({ kind: 'nostr', urls: [...DEFAULT_SIGNAL_URLS] });
+    expect(signalingOf(newTrysteroTransport({ kind: 'torrent', urls: [] }))).toEqual({ kind: 'torrent', urls: [] });
     expect(signalingOf(newNostrTransport(['wss://r.example']))).toEqual({ kind: 'nostr', urls: ['wss://r.example'] });
   });
 
