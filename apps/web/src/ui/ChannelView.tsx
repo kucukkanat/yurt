@@ -8,7 +8,7 @@ import { privateTarget } from '../lib/private';
 import { fmtDay } from '../lib/format';
 import { MessageItem, type MsgCtx } from './Message';
 import { Composer, editLastMessage } from './Composer';
-import { HuddleStrip, HuddleStage, HuddleButton, HuddleDock } from './Huddle';
+import { HuddleStrip, HuddleButton, HuddleDock } from './Huddle';
 import { must } from './must';
 
 const GROUP_MS = 5 * 60 * 1000;
@@ -526,7 +526,6 @@ function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: stri
   const panel = useApp((s) => s.panel);
   const online = useApp((s) => s.online);
   const highlight = useApp((s) => s.highlight);
-  const hud = useApp((s) => s.huddle);
   const app = useApp.getState();
   const [, force] = useReducer((x: number) => x + 1, 0);
   const draftKey = code + '/' + ch;
@@ -578,7 +577,6 @@ function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: stri
       </header>
       <Banners c={c} online={online} />
       <HuddleStrip ch={ch} />
-      {hud.code === code && hud.ch === ch && <HuddleStage />}
       <MessageList key={code + ch} ids={ids} ctx={ctx} lastRead={entryRead} emptyState={ids.length ? null : <EmptyState c={c} relayed={relayed} />} highlight={highlight} />
       <ComposerArea c={c} code={code} ch={ch} draftKey={draftKey} narrow={narrow} people={people} dropFiles={drop.files} placeholder={composerPlaceholder(c, title)} note={note} />
       {drop.dragging && (

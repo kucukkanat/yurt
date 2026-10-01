@@ -10,6 +10,7 @@ import { RightPanel } from './ui/Panels';
 import { Dialogs } from './ui/Dialogs';
 import { HuddleAudio } from './ui/Huddle';
 import { IncomingCall } from './ui/Ringing';
+import { HuddlePanel } from './ui/HuddlePanel';
 import { useSwipe } from './ui/touch';
 
 /** How close to the left edge (px) a swipe must start to pull the sidebar out. */
@@ -130,6 +131,7 @@ function Shell() {
       <main data-testid="main" {...(narrow && !panel.type ? pullOut.handlers : {})} style={{ flex: 1, minWidth: 0, display: 'flex', height: '100%', touchAction: 'pan-y' }}>
         {route.code && route.ch ? <ChannelView narrow={narrow} /> : <Home narrow={narrow} />}
         {panel.type && route.code && <RightPanel narrow={narrow} />}
+        <HuddlePanel narrow={narrow} />
       </main>
       <Dialogs />
       <HuddleAudio />

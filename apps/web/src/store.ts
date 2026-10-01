@@ -82,6 +82,8 @@ export interface AppData {
   huddle: HuddleView;
   online: boolean;
   drawer: boolean;
+  /** The huddle panel is open, not collapsed to the dock; it opens whenever I join a huddle. */
+  huddleOpen: boolean;
   editing: string | null;
   /** Ticks every 30 s so time-based UI (like the edit window) stays current. */
   clock: number;
@@ -176,6 +178,7 @@ const initialState = (): AppData => ({
   huddle: huddle.view,
   online: navigator.onLine,
   drawer: false,
+  huddleOpen: false,
   editing: null,
   clock: Date.now(),
   highlight: null,
@@ -403,7 +406,9 @@ export const useApp = create<AppState>((set, get) => {
         reconciled = connected;
       });
       huddle.subscribe((v) => {
-        set({ huddle: v });
+        const was = get().huddle;
+        // Joining a huddle (or moving to another) opens its panel; staying in one keeps it as the user left it.
+        set({ huddle: v, ...(v.ch && (v.ch !== was.ch || v.code !== was.code) ? { huddleOpen: true } : {}) });
         // Outside a huddle there's no dock to show the error in (e.g. mic denied on join), so toast it.
         if (v.error && !v.ch) {
           get().toast({ tone: 'danger', title: 'Couldn’t join the huddle', description: v.error });

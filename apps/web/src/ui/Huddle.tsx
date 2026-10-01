@@ -1,4 +1,3 @@
-import type React from 'react';
 import { useEffect, useRef } from 'react';
 import { Icon, IconButton, Button, Tooltip, Avatar } from '@yurt/ui';
 import { useApp } from '../store';
@@ -65,7 +64,7 @@ export function HuddleStrip({ ch }: { ch: string }) {
   );
 }
 
-function Video({ stream, muted, label, mirror }: { stream: MediaStream; muted?: boolean; label: string; mirror?: boolean }) {
+export function Video({ stream, muted, label, mirror }: { stream: MediaStream; muted?: boolean; label: string; mirror?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     if (ref.current && ref.current.srcObject !== stream) {
@@ -120,51 +119,18 @@ export function HuddleAudio() {
   return <>{Object.entries(remote).map(([pid, r]) => r.mic && <Audio key={pid} stream={r.mic} />)}</>;
 }
 
-/** Video / screen tiles for the huddle you're in. */
-export function HuddleStage() {
-  const hud = useApp((s) => s.huddle);
-  const { state, identity } = useCurrent();
-  const peer = getPeer(hud.code);
-  const tiles: React.ReactNode[] = [];
-  if (hud.local.screen) tiles.push(<Video key="ls" stream={hud.local.screen} muted label="Your screen" />);
-  for (const [pid, r] of Object.entries(hud.remote)) {
-    const pub = peer?.peers.get(pid)?.pub || '';
-    const name = personFor(state, peer, pub, identity.pub).name;
-    if (r.screen) tiles.push(<Video key={pid + 's'} stream={r.screen} label={name + '’s screen'} />);
-    if (r.cam) tiles.push(<Video key={pid + 'c'} stream={r.cam} label={name} />);
-  }
-  if (hud.local.cam) tiles.push(<Video key="lc" stream={hud.local.cam} muted mirror label="You" />);
-  if (!tiles.length) return null;
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
-        gap: 8,
-        padding: 12,
-        borderBottom: '1px solid var(--border-subtle)',
-        maxHeight: '45%',
-        overflow: 'auto',
-        flexShrink: 0,
-      }}
-    >
-      {tiles}
-    </div>
-  );
-}
-
 /**
  * The video button: off when the huddle already shows MAX_VIDEO cameras (counting mine), unless mine is one of them.
  * `cameras` is huddle.videoCount: every camera that's on in this huddle.
  */
-function camButton(mine: boolean, cameras: number): { label: string; disabled: boolean } {
+export function camButton(mine: boolean, cameras: number): { label: string; disabled: boolean } {
   if (mine) return { label: 'Turn video off', disabled: false };
   if (cameras >= MAX_VIDEO) return { label: 'Video is full (' + MAX_VIDEO + ')', disabled: true };
   return { label: 'Turn video on', disabled: false };
 }
 
 /** An error while in a huddle (outside one, the store toasts it instead). */
-function HuddleError({ error }: { error?: string | undefined }) {
+export function HuddleError({ error }: { error?: string | undefined }) {
   if (!error) return null;
   return (
     <div role="alert" style={{ fontSize: 12, color: 'var(--danger-ink)' }}>
@@ -173,61 +139,80 @@ function HuddleError({ error }: { error?: string | undefined }) {
   );
 }
 
+/**
+ * The huddle I'm in, collapsed: where it is and how many, Mute and Leave. Tapping it opens the huddle panel (which has
+ * everything else); while that panel is open the dock isn't shown.
+ */
 export function HuddleDock() {
   const hud = useApp((s) => s.huddle);
+  const open = useApp((s) => s.huddleOpen);
   const states = useApp((s) => s.states);
   const identity = useApp((s) => s.identity);
   useApp((s) => s.tick);
-  if (!hud.ch || !hud.code || !identity) return null;
-  const code = hud.code;
-  const ch = hud.ch;
+  if (!hud.ch || !hud.code || !identity || open) return null;
   const peer = getPeer(hud.code);
-  const state = states[hud.code];
   const n = peer ? [...peer.huddles.values()].filter((h) => h.ch === hud.ch).length + 1 : 1;
-  const cam = camButton(hud.cam, huddle.videoCount(peer, hud.ch));
-  const where = hud.ch.includes(':') ? channelTitle(state, hud.ch, identity.pub) : '#' + channelTitle(state, hud.ch, identity.pub);
   return (
     <div
+      data-testid="huddle-dock"
       style={{
         display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-        padding: 10,
-        borderRadius: 16,
+        alignItems: 'center',
+        gap: 'var(--space-1)',
+        padding: 'var(--space-1) var(--space-1) var(--space-1) var(--space-3)',
+        borderRadius: 'var(--radius-md)',
         background: 'var(--surface-card)',
-        border: '1px solid var(--border-subtle)',
+        border: 'var(--border-width) solid var(--border-subtle)',
         boxShadow: 'var(--shadow-sm)',
         animation: 'ag-pop var(--dur-base) var(--ease-spring)',
       }}
     >
       <button
         type="button"
-        onClick={() => useApp.getState().go({ code, ch })}
-        style={{ display: 'flex', alignItems: 'center', gap: 8, border: 0, background: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}
+        data-testid="huddle-dock-open"
+        onClick={() => useApp.setState({ huddleOpen: true })}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-2)',
+          border: 0,
+          background: 'none',
+          padding: 'var(--space-1) 0',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
       >
-        <span
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: 9,
-            background: 'var(--volt-400)',
-            boxShadow: '0 0 0 3px rgba(210,255,46,.18)',
-            animation: 'ag-pulse 1.6s var(--ease-in-out) infinite',
-          }}
-        />
+        <LiveDot />
         <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          Huddle in {where}
+          Huddle in {huddleWhere(states[hud.code], hud.ch, identity.pub)}
         </span>
         <span style={{ font: '400 11px var(--font-mono)', color: 'var(--text-subtle)' }}>{n}</span>
       </button>
-      <HuddleError error={hud.error} />
-      <div style={{ display: 'flex', gap: 4 }}>
-        <IconButton icon={hud.mic ? 'mic' : 'mic-off'} label={hud.mic ? 'Mute' : 'Unmute'} size="sm" active={!hud.mic} onClick={() => huddle.toggleMic()} />
-        <IconButton icon={hud.cam ? 'video' : 'video-off'} label={cam.label} size="sm" active={hud.cam} disabled={cam.disabled} onClick={() => huddle.toggleCam()} />
-        <IconButton icon="monitor-up" label={hud.screen ? 'Stop sharing' : 'Share screen'} size="sm" active={hud.screen} onClick={() => huddle.toggleScreen()} />
-        <span style={{ flex: 1 }} />
-        <IconButton icon="phone-off" label="Leave huddle" size="sm" variant="danger" onClick={() => huddle.leave()} />
-      </div>
+      <IconButton icon={hud.mic ? 'mic' : 'mic-off'} label={hud.mic ? 'Mute' : 'Unmute'} size="sm" active={!hud.mic} onClick={() => huddle.toggleMic()} />
+      <IconButton icon="phone-off" label="Leave huddle" size="sm" variant="danger" onClick={() => huddle.leave()} />
     </div>
+  );
+}
+
+/** "#general" for a channel, the other person's name for a DM. */
+export const huddleWhere = (state: Parameters<typeof channelTitle>[0], ch: string, me: string) => (ch.includes(':') ? '' : '#') + channelTitle(state, ch, me);
+
+/** The pulsing dot that marks a live call. */
+export function LiveDot() {
+  return (
+    <span
+      aria-hidden
+      style={{
+        flexShrink: 0,
+        width: 8,
+        height: 8,
+        borderRadius: 'var(--radius-pill)',
+        background: 'var(--volt-400)',
+        boxShadow: '0 0 0 3px rgba(210,255,46,.18)',
+        animation: 'ag-pulse 1.6s var(--ease-in-out) infinite',
+      }}
+    />
   );
 }
