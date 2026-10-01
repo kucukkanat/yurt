@@ -551,6 +551,18 @@ describe('relay link edge cases', () => {
     await until(() => b.state.name === 'Slow' && s.mark() > 0);
   });
 
+  it('records no sync mark when it leaves while paging history', async () => {
+    await useRelay({ delayMs: 300 });
+    relay.stored.push(rawEvent(seal(k().enc, k().tag, JSON.stringify(makeEvent(A, { ws: CODE, t: 'ws.create', b: { name: 'Half' } }))), k().tag));
+    const s = memStore();
+    const b = peer(B, transport, s.store);
+    await b.start();
+    await until(() => b.state.name === 'Half'); // page one is in; page two is waiting on the slow relay
+    b.leave();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(s.mark()).toBe(0);
+  });
+
   it('writes with a rotation that becomes valid later, which needs no new keys', async () => {
     const a = await join(A);
     a.publish({ t: 'ws.create', b: { name: 'W' } });
