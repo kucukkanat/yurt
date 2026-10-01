@@ -43,10 +43,14 @@ export const bridgeRevokeOrigin: BrowserCommand<[origin: string]> = async (_ctx,
   testBridge().revokeOrigin(origin);
 };
 
+interface Cdp {
+  send(method: string, params: Record<string, unknown>): Promise<unknown>;
+  detach(): Promise<void>;
+}
 interface PageContext {
   page: {
     emulateMedia(o: { reducedMotion: 'reduce' | 'no-preference' }): Promise<void>;
-    context(): { newCDPSession(page: unknown): Promise<{ send(method: string, params: Record<string, unknown>): Promise<unknown> }> };
+    context(): { newCDPSession(page: unknown): Promise<Cdp> };
   };
 }
 const pageOf = (ctx: Parameters<BrowserCommand<[]>>[0]) => {
@@ -59,16 +63,24 @@ export const reduceMotion: BrowserCommand<[on: boolean]> = async (ctx, on) => {
   await pageOf(ctx).emulateMedia({ reducedMotion: on ? 'reduce' : 'no-preference' });
 };
 
-/** Emulates a touch screen, so `(pointer: coarse)` matches as on a phone (DevTools' device mode does the same). */
-export const emulateTouch: BrowserCommand<[on: boolean]> = async (ctx, on) => {
+/**
+ * One DevTools session per page and kind of emulation: Chromium keeps an emulation for as long as the session that set
+ * it is attached, so turning it off from another session would leave it on for every later test file.
+ */
+const sessions = new Map<string, Cdp>();
+async function emulate(ctx: Parameters<BrowserCommand<[]>>[0], kind: string, on: boolean, method: string, params: Record<string, unknown>) {
   const page = pageOf(ctx);
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: on, maxTouchPoints: on ? 5 : 1 });
-};
+  const cdp = sessions.get(kind) ?? (await page.context().newCDPSession(page));
+  sessions.set(kind, cdp);
+  await cdp.send(method, params);
+  if (on) return;
+  sessions.delete(kind);
+  await cdp.detach(); // and with it whatever it still emulates
+}
+
+/** Emulates a touch screen, so `(pointer: coarse)` matches as on a phone (DevTools' device mode does the same). */
+export const emulateTouch: BrowserCommand<[on: boolean]> = (ctx, on) =>
+  emulate(ctx, 'touch', on, 'Emulation.setTouchEmulationEnabled', { enabled: on, maxTouchPoints: on ? 5 : 1 });
 
 /** Emulates an iPhone's browser identity (its user agent), or the real one again with an empty string. */
-export const emulateUserAgent: BrowserCommand<[userAgent: string]> = async (ctx, userAgent) => {
-  const page = pageOf(ctx);
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Emulation.setUserAgentOverride', { userAgent });
-};
+export const emulateUserAgent: BrowserCommand<[userAgent: string]> = (ctx, userAgent) => emulate(ctx, 'ua', !!userAgent, 'Emulation.setUserAgentOverride', { userAgent });

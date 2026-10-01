@@ -46,7 +46,11 @@ async function longPress(text: string | RegExp) {
   await expect.element(sheet()).toBeVisible();
 }
 
-afterAll(() => commands.emulateTouch(false));
+afterAll(async () => {
+  await commands.emulateTouch(false);
+  // Later test files expect a mouse again (the composer only autofocuses for one).
+  await until(() => matchMedia('(pointer: fine)').matches, 10_000, 'a mouse again');
+});
 
 describe('on a touch screen', () => {
   it('long-pressing a message opens its actions instead of the hover bar', async () => {
