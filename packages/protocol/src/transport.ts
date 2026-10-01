@@ -17,6 +17,8 @@ export interface LinkTiming {
   retryMs: number;
   /** Relay links: check connectivity, catch up after reconnecting and expire presence. 5 s. */
   sweepMs: number;
+  /** Relay links: wait before reconnecting a dropped relay. Unset: nostr-tools' backoff, 10 s growing to 60 s. */
+  reconnectMs?: number;
 }
 
 /** What a data link may see and do in its workspace. Implemented by WorkspacePeer. */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import type { BridgeState } from '@yurt/protocol';
+import { bridge } from '../../../../src/lib/bridge';
 import { createWorkspace, expectText, getPeer, localNet, relayUrl, startApp, until, useApp } from '../app';
 
 let code = '';
@@ -109,8 +110,9 @@ describe('Settings', () => {
     await pin.fill('123 45');
     await expect.element(dlg().getByRole('button', { name: 'Pair' })).toBeDisabled();
     await pin.fill('123 456');
+    bridge.pairTimeoutMs = 300; // the real pairing timeout, ticking fast
     await dlg().getByRole('button', { name: 'Pair' }).click(); // no bridge socket open here: the attempt times out
-    await expect.element(dlg().getByText('That code didn’t match. Check the bridge page for the current one.'), { timeout: 12_000 }).toBeVisible();
+    await expect.element(dlg().getByText('That code didn’t match. Check the bridge page for the current one.')).toBeVisible();
     // Connected: version and agents, and a way to forget it.
     const bs: BridgeState = {
       version: '0.1.0',

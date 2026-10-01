@@ -37,6 +37,20 @@ export interface NostrOpts {
   timing?: Partial<LinkTiming> | undefined;
 }
 
+/** A pool whose relays reconnect after `reconnectMs` when it's given, instead of after nostr-tools' backoff. */
+class Pool extends SimplePool {
+  constructor(private reconnectMs: number | undefined) {
+    super({ enableReconnect: true });
+  }
+
+  // Every relay the pool uses passes through here, and reconnect() reads the backoff only once a connection drops.
+  override async ensureRelay(...args: Parameters<SimplePool['ensureRelay']>) {
+    const r = await super.ensureRelay(...args);
+    if (this.reconnectMs !== undefined) r.resubscribeBackoff = [this.reconnectMs];
+    return r;
+  }
+}
+
 const parse = (s: string | null): unknown => {
   if (s === null) return null;
   try {
@@ -66,7 +80,7 @@ const rejected = (r: PromiseSettledResult<unknown>): r is PromiseRejectedResult 
 export class NostrData implements DataLink {
   readonly presence = new Map<string, Presence>(); // keyed by the sender's session pubkey
   private seen = new Map<string, number>();
-  private pool = new SimplePool({ enableReconnect: true });
+  private pool: Pool;
   private sk = generateSecretKey();
   private self = getPublicKey(this.sk);
   /** The key new events are sealed with. */
@@ -102,6 +116,7 @@ export class NostrData implements DataLink {
     this.me = o.presence;
     const t = { ...TIMING, ...o.timing };
     this.timing = t;
+    this.pool = new Pool(t.reconnectMs);
     // Live first, then backfill, so nothing published in between slips through the gap.
     this.subscribe();
     void this.backfill();

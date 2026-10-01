@@ -26,16 +26,12 @@ const p2pWs = {
 const stranger = newInviteCode();
 
 beforeAll(async () => {
-  console.log('BOOT start');
   await resetDb();
-  console.log('BOOT reset');
   await kv.set('identity', { phrase, name: 'Ada', handle: 'ada', pub: 'stale', sec: 'stale' });
   await kv.set('workspaces', [relayWs, null, { name: 'no code' }, p2pWs]);
   await kv.set('settings', { theme: 'light', relays: 'wss://old.example', webrtc: 'yes' });
   location.hash = '#/w/' + stranger; // a pasted code-only link: no key, so it can't be joined
-  console.log('BOOT seeded');
-  await useApp.getState().init();
-  console.log('BOOT init');
+  await useApp.getState().init({ clockMs: 100 }); // the real interval, ticking fast
 });
 
 afterAll(() => {
@@ -96,6 +92,6 @@ describe('starting up', () => {
 
   it('keeps time-based views current', async () => {
     const before = useApp.getState().clock;
-    await until(() => useApp.getState().clock > before, 'the 30-second clock', 35_000);
-  }, 40_000);
+    await until(() => useApp.getState().clock > before, 'the clock to tick');
+  });
 });

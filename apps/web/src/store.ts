@@ -91,7 +91,8 @@ export interface AppData {
 }
 
 export interface AppState extends AppData {
-  init(): Promise<void>;
+  /** Starts the app. `clockMs` (how often time-based views refresh) is only shortened by tests, like LinkTiming. */
+  init(opts?: { clockMs?: number }): Promise<void>;
   createIdentity(phrase: string, name: string, handle: string): Promise<void>;
   updateProfile(name: string, handle: string): Promise<void>;
   /** Saves and applies at once; returns how many workspaces were reconnected to pick up the change. */
@@ -330,7 +331,7 @@ export const useApp = create<AppState>((set, get) => {
   return {
     ...initialState(),
 
-    async init() {
+    async init({ clockMs = 30_000 } = {}) {
       const [identity, workspaces, settings] = await Promise.all([
         kv.get('identity').then(loadIdentity),
         kv.get('workspaces').then(loadWorkspaces),
@@ -361,7 +362,7 @@ export const useApp = create<AppState>((set, get) => {
           huddle.clearError();
         }
       });
-      setInterval(() => set({ clock: Date.now() }), 30_000);
+      setInterval(() => set({ clock: Date.now() }), clockMs);
       window.addEventListener('hashchange', onRoute);
       window.addEventListener('online', () => set({ online: true }));
       window.addEventListener('offline', () => set({ online: false }));

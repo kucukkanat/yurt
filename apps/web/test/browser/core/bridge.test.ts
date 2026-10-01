@@ -15,6 +15,9 @@ beforeAll(async () => {
   // Other files allow this page's origin on the shared test bridge; start from a bridge that refuses it.
   await commands.bridgeRevokeOrigin(location.origin);
   bridge.url = inject('bridgeUrl');
+  // The real redial and pairing timers, ticking fast (a local bridge answers in milliseconds).
+  bridge.retryMs = 50;
+  bridge.pairTimeoutMs = 1000;
 });
 afterAll(async () => {
   unsubscribe();
@@ -32,7 +35,7 @@ describe('the local bridge client', () => {
     bridge.start(); // already dialling: no second socket
     await until(() => bridge.status === 'missing', 'the refusal');
     await commands.bridgeAllowOrigin(location.origin); // the user allows this web app in the bridge
-    await until(() => bridge.status === 'unpaired', 'a retry that reaches the bridge', 10_000);
+    await until(() => bridge.status === 'unpaired', 'a retry that reaches the bridge');
   });
 
   it('pairs only with the code the bridge shows, then shares the identity', async () => {
@@ -54,7 +57,7 @@ describe('the local bridge client', () => {
     const pairing = bridge.pair('123456');
     await until(() => bridge.status === 'connected', 'the token to be accepted');
     expect(await pairing).toBe(false);
-  }, 20_000);
+  });
 
   it('ignores another program on the bridge’s port', async () => {
     bridge.stop();

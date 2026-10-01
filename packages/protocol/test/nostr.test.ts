@@ -219,16 +219,17 @@ describe('nostr transport', () => {
   it('queues events while no relay is reachable and sends them when one comes back', async () => {
     const { port } = relay;
     await relay.close();
-    const a = peer(A);
+    // A relay that is down at start is dropped by nostr-tools, not reconnected: the next retry reaches it.
+    const a = peer(A, transport, memStore().store, { timing: { retryMs: 200 } });
     await a.start();
     const e = a.publish({ t: 'msg', ch: 'general', b: { text: 'offline draft' } });
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 300)); // past a retry: still offline, still queued
     expect(a.queued.has(e.id)).toBe(true);
     expect(a.connected).toBe(false);
     relay = await startRelay(port);
-    await until(() => a.queued.size === 0, 25_000);
+    await until(() => a.queued.size === 0, 4_000);
     expect(relay.stored).toHaveLength(1);
-  }, 30_000);
+  });
 
   it('skips private wrappers naming invalid keys and still finishes the backfill', async () => {
     const k = workspaceKeys(transport.key);
@@ -260,17 +261,18 @@ describe('nostr transport', () => {
         return 'blocked: members of the relay only';
       },
     });
-    const a = await join(A);
+    const retryMs = 200;
+    const a = await join(A, transport, memStore().store, { timing: { retryMs } });
     const e = a.publish({ t: 'msg', ch: 'general', b: { text: 'refused' } });
-    await until(() => errors.length > 0, 45_000);
+    await until(() => errors.length > 0, 4_000);
     expect(refusals).toBe(3); // retried a bounded number of times first
     expect(errors).toEqual([expect.stringContaining('blocked: members of the relay only')]);
-    await new Promise((r) => setTimeout(r, 16_000)); // a full retry period: nothing more is sent or reported
+    await new Promise((r) => setTimeout(r, 3 * retryMs)); // several retry periods: nothing more is sent or reported
     expect(refusals).toBe(3);
     expect(errors).toHaveLength(1);
     expect(a.queued.has(e.id)).toBe(true);
     errors = [];
-  }, 70_000);
+  });
 
   it('does not re-send own events whose fuzzed relay copy predates the sync window', async () => {
     const k = workspaceKeys(transport.key);
@@ -535,13 +537,13 @@ describe('relay link edge cases', () => {
   });
 
   it('catches up on what it missed after the relay connection drops and comes back', async () => {
-    const b = await join(B, transport, memStore().store, { timing: { sweepMs: 100 } });
+    const b = await join(B, transport, memStore().store, { timing: { sweepMs: 100, reconnectMs: 100 } });
     relay.dropClients();
     await until(() => !b.connected, 5_000);
     // Written while B was cut off (through another connection): only a backfill brings it.
     relay.stored.push(rawEvent(seal(k().enc, k().tag, JSON.stringify(makeEvent(A, { ws: CODE, t: 'ws.create', b: { name: 'Missed it' } }))), k().tag));
-    await until(() => b.state.name === 'Missed it', 25_000); // nostr-tools reconnects after 10 s
-  }, 30_000);
+    await until(() => b.state.name === 'Missed it', 4_000);
+  });
 
   it('runs one backfill at a time, even when checks come faster than a slow relay answers', async () => {
     await useRelay({ delayMs: 300 });

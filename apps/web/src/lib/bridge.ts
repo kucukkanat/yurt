@@ -18,9 +18,12 @@ class BridgeClient {
   /** Where the bridge listens. Tests point it at a bridge on another port, so they never touch the user's own. */
   url = BRIDGE_URL;
   state: BridgeState | null = null;
+  /** First redial delay (it backs off from there) and how long a pairing waits for an answer; tests shorten them. */
+  retryMs = 2000;
+  pairTimeoutMs = 8000;
   private ws: WebSocket | null = null;
   private token: string | null = null;
-  private retry = 2000;
+  private retries = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private listeners = new Set<Listener>();
   private waiters: ((m: FromBridge) => void)[] = [];
@@ -57,7 +60,7 @@ class BridgeClient {
     }
     this.ws = ws;
     ws.onopen = () => {
-      this.retry = 2000;
+      this.retries = 0;
       this.send(this.token ? { t: 'hello', token: this.token } : { t: 'hello' });
     };
     // Anything that isn't a known message (another program on the port, a newer bridge) is ignored.
@@ -88,11 +91,11 @@ class BridgeClient {
   }
 
   private later() {
+    const delay = Math.min(this.retryMs * 1.6 ** this.retries++, 30000);
     this.timer = setTimeout(() => {
       this.timer = null;
       this.start();
-    }, this.retry);
-    this.retry = Math.min(this.retry * 1.6, 30000);
+    }, delay);
   }
 
   private onMsg(m: FromBridge) {
@@ -130,7 +133,7 @@ class BridgeClient {
       const w = (m: FromBridge) => {
         if (m.t === 'paired' || m.t === 'error') done(m.t === 'paired');
       };
-      const timer = setTimeout(() => done(false), 8000);
+      const timer = setTimeout(() => done(false), this.pairTimeoutMs);
       this.waiters.push(w);
       this.send({ t: 'pair', code });
     });
