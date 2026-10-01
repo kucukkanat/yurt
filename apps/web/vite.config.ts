@@ -15,7 +15,7 @@ export default defineConfig(({ command }) => ({
       filename: 'sw.ts',
       injectRegister: false,
       registerType: 'prompt',
-      injectManifest: { globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'] },
+      injectManifest: { globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2,wav}'] },
       pwaAssets: { image: 'public/icon.svg', preset: 'minimal-2023', overrideManifestIcons: true, htmlPreset: '2023', injectThemeColor: false },
       manifest: {
         id: './',

@@ -110,8 +110,8 @@ export function Rail() {
   );
 }
 
-/** One conversation in the sidebar: bold when unread, a badge for mentions, headphones when a call is on. */
-function ChannelRow({ ch, label, icon, inCall }: { ch: string; label: React.ReactNode; icon: React.ReactNode; inCall: boolean }) {
+/** One conversation in the sidebar: bold when unread, a badge for mentions, headphones and a count while a huddle is on. */
+function ChannelRow({ ch, label, icon, inCall }: { ch: string; label: React.ReactNode; icon: React.ReactNode; inCall: number }) {
   const { route, state, rec, identity } = useCurrent();
   const active = route.ch === ch;
   const muted = rec?.muted.includes(ch);
@@ -133,7 +133,17 @@ function ChannelRow({ ch, label, icon, inCall }: { ch: string; label: React.Reac
       >
         {label}
       </span>
-      {inCall && <Icon name="headphones" size={14} style={{ color: 'var(--agent-ink)' }} />}
+      {inCall > 0 && (
+        <span
+          role="img"
+          aria-label={`Huddle: ${inCall} ${inCall === 1 ? 'person' : 'people'}`}
+          data-testid="huddle-indicator"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-0-5)', color: 'var(--agent-ink)', fontSize: 12, fontWeight: 600 }}
+        >
+          <Icon name="headphones" size={14} />
+          {inCall}
+        </span>
+      )}
       {u.m > 0 && !muted && (
         <Badge tone="human" variant="solid" size="sm">
           {u.m}
@@ -261,6 +271,7 @@ function WorkspaceMenu({ name, relayed, others }: { name: string; relayed: boole
 export function Sidebar() {
   const { route, state, rec, identity, peer } = useCurrent();
   const bridgeStatus = useApp((s) => s.bridgeStatus);
+  const hud = useApp((s) => s.huddle);
   const bridgeState = useApp((s) => s.bridgeState);
   const { setDialog, openSettings } = useApp.getState();
   const me = identity.pub;
@@ -278,8 +289,11 @@ export function Sidebar() {
     [state, me],
   );
   const myAgents = state ? liveAgents(state).filter((a) => a.owner === me) : [];
-  const huddleChs = new Set<string>();
-  if (peer) for (const h of peer.huddles.values()) if (h.ch) huddleChs.add(h.ch);
+  // How many are in each conversation's huddle, me included.
+  const inHuddle = new Map<string, number>();
+  const count = (ch: string | null) => ch && inHuddle.set(ch, (inHuddle.get(ch) ?? 0) + 1);
+  if (peer) for (const h of peer.huddles.values()) count(h.ch);
+  if (hud.code === route.code) count(hud.ch);
   const code = must(route.code, 'The sidebar only shows inside a workspace');
   const wsName = state?.name || rec?.name || formatCode(code);
   const daemon = bridgeStatus === 'connected' ? 'connected' : bridgeStatus === 'connecting' ? 'connecting' : 'missing';
@@ -287,7 +301,7 @@ export function Sidebar() {
   const relayed = rec?.transport.kind === 'nostr';
   const others = othersOnline(peer, me);
 
-  const chRow = (ch: string, label: React.ReactNode, icon: React.ReactNode) => <ChannelRow key={ch} ch={ch} label={label} icon={icon} inCall={huddleChs.has(ch)} />;
+  const chRow = (ch: string, label: React.ReactNode, icon: React.ReactNode) => <ChannelRow key={ch} ch={ch} label={label} icon={icon} inCall={inHuddle.get(ch) ?? 0} />;
 
   return (
     <aside

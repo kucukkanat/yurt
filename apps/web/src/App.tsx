@@ -9,6 +9,7 @@ import { Home } from './ui/Home';
 import { RightPanel } from './ui/Panels';
 import { Dialogs } from './ui/Dialogs';
 import { HuddleAudio } from './ui/Huddle';
+import { IncomingCall } from './ui/Ringing';
 import { useSwipe } from './ui/touch';
 
 /** How close to the left edge (px) a swipe must start to pull the sidebar out. */
@@ -132,6 +133,7 @@ function Shell() {
       </main>
       <Dialogs />
       <HuddleAudio />
+      <IncomingCall />
     </div>
   );
 }
