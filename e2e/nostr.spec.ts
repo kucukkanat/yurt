@@ -335,3 +335,46 @@ test('the tab icon shows unread messages on top of whatever favicon is set, and 
   await a.getByRole('button', { name: /general/ }).first().click();
   await expect.poll(icon).toBe(custom);
 });
+
+test('the create step sets the new workspace’s own network settings for the chosen mode', async ({ browser }) => {
+  const page = await (await browser.newContext()).newPage();
+  await useLocalRelay(page);
+  await onboard(page, 'Ky', 'Start chatting');
+
+  // Peer-to-peer: collapsed by default with a summary of the defaults; expand to pick trackers.
+  await page.getByLabel('Workspace name').fill('Trackers ' + Date.now());
+  await expect(page.getByTestId('create-net-summary')).toHaveText('Signaling: Nostr relays · wss://nos.lol');
+  await expect(page.getByTestId('create-signal-urls')).toHaveCount(0);
+  await page.getByTestId('create-net-toggle').click();
+  await page.getByTestId('create-signal-torrent').click();
+  await page.getByTestId('create-signal-urls').fill('not a url');
+  await page.getByRole('button', { name: 'Create workspace' }).click();
+  await expect(page.getByText('Not a ws:// or wss:// server: not')).toBeVisible();
+  await page.getByTestId('create-signal-urls').fill('wss://tracker.example');
+  await expect(page.getByTestId('create-net-summary')).toHaveText('Signaling: BitTorrent trackers · wss://tracker.example');
+  await page.getByRole('button', { name: 'Create workspace' }).click();
+  await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
+  await page.getByRole('button', { name: 'Invite people' }).first().click();
+  expect(decodeURIComponent(await page.getByTestId('invite-link').inputValue())).toContain('/s/torrent,wss://tracker.example');
+  await page.getByTestId('invite-link').press('Escape');
+  await openConnection(page);
+  await expect(page.getByTestId('ws-signal-torrent')).toBeChecked();
+  await expect(page.getByTestId('ws-signal-urls')).toHaveValue('wss://tracker.example');
+  await expect(page.getByTestId('connection-relay-list')).toHaveCount(0); // only this workspace's mode
+  await page.getByTestId('ws-signal-urls').press('Escape');
+
+  // Relay workspace: its relays and file servers come from the same step.
+  await page.getByRole('button', { name: 'Create or join a workspace' }).click();
+  await page.getByLabel('Workspace name').fill('Relays ' + Date.now());
+  await page.getByText('Encrypted on Nostr relays').click();
+  await expect(page.getByTestId('create-net-summary')).toHaveText(`Relays: ${RELAY} · Files: ${BLOSSOM}`);
+  await page.getByTestId('create-net-toggle').click();
+  await page.getByTestId('create-relays').fill(`${RELAY}, ws://127.0.0.1:7779`);
+  await page.getByRole('button', { name: 'Create workspace' }).click();
+  await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
+  await openConnection(page);
+  await expect(page.getByTestId('connection-kind')).toHaveText('Nostr relays');
+  await expect(page.getByTestId('connection-relays')).toHaveValue(`${RELAY}, ws://127.0.0.1:7779`);
+  await expect(page.getByTestId('connection-blossom')).toHaveValue(BLOSSOM);
+  await expect(page.getByTestId('ws-signal')).toHaveCount(0);
+});

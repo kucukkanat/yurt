@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useReducer, useState } from 'react';
 import { Dialog, Button, Input, Tabs, Switch, Checkbox, Radio, Icon, Kbd, Avatar } from '@yurt/ui';
-import { formatCode, fingerprint, dmChannel, agentDmChannel, liveAgents, inviteHash, parseRelays, parseServers, signalingOf, type WsTransport, type SignalKind } from '@yurt/protocol';
-import { useApp, type Settings } from '../store';
+import { formatCode, fingerprint, dmChannel, agentDmChannel, liveAgents, inviteHash, parseRelays, parseServers, signalingOf, DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, type WsTransport, type SignalKind } from '@yurt/protocol';
+import { useApp, defaultNewNet, type Settings } from '../store';
 import { useCurrent, roster } from '../model';
 import { bridge } from '../lib/bridge';
 import type { NetSettings } from '../lib/net';
@@ -43,15 +43,58 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
   const [code, setCode] = useState('');
   const [err, setErr] = useState('');
   const app = useApp.getState();
+  // The new workspace's own network settings, prefilled from Settings → Network; edits apply to it only.
+  const settings = useApp((x) => x.settings);
+  const [p2p] = useState(() => defaultNewNet(settings, 'trystero'));
+  const [relay] = useState(() => defaultNewNet(settings, 'nostr'));
+  const [sigKind, setSigKind] = useState<SignalKind>(p2p.kind === 'trystero' ? p2p.signal.kind : 'nostr');
+  const [sigUrls, setSigUrls] = useState(p2p.kind === 'trystero' ? p2p.signal.urls.join(', ') : '');
+  const [relays, setRelays] = useState(relay.kind === 'nostr' ? relay.relays.join(', ') : '');
+  const [blossom, setBlossom] = useState(relay.kind === 'nostr' ? relay.blossom.join(', ') : '');
+  const [netOpen, setNetOpen] = useState(false);
+  const [netErr, setNetErr] = useState<{ signal?: string; relays?: string; blossom?: string }>({});
+  const list = (urls: string[], none: string) => (urls.length ? urls.join(', ') : none);
+  const summary = kind === 'nostr'
+    ? 'Relays: ' + list(parseRelays(relays), DEFAULT_RELAYS.join(', ')) + ' · Files: ' + list(parseServers(blossom), 'default servers')
+    : 'Signaling: ' + (sigKind === 'nostr' ? 'Nostr relays · ' + list(parseRelays(sigUrls), DEFAULT_SIGNAL_URLS.join(', ')) : 'BitTorrent trackers · ' + list(parseRelays(sigUrls), 'built-in'));
+  const create = async () => {
+    if (!name.trim()) return setErr('Give it a name people will recognize.');
+    const errs = kind === 'nostr'
+      ? { relays: listError(rejected(relays, parseRelays), 'a ws:// or wss:// relay'), blossom: listError(rejected(blossom, parseServers), 'an http(s) server') }
+      : { signal: listError(rejected(sigUrls, parseRelays), 'a ws:// or wss:// server') };
+    setNetErr(errs);
+    if (Object.values(errs).some(Boolean)) { setNetOpen(true); return; }
+    // The form's values through the same rules as Settings → Network: emptied fields mean the built-in defaults.
+    const net = defaultNewNet({ ...settings, relays, blossom, signalKind: sigKind, signalUrls: sigUrls }, kind);
+    await app.createWorkspace(name, net);
+    onDone?.();
+  };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <Tabs items={[{ id: 'create', label: 'Start a workspace', icon: 'plus' }, { id: 'join', label: 'Join with a link', icon: 'log-in' }]} value={tab} onChange={(t) => { setTab(t); setErr(''); }} fullWidth label="Create or join" />
       {tab === 'create' ? (
-        <form onSubmit={async (e) => { e.preventDefault(); if (!name.trim()) return setErr('Give it a name people will recognize.'); await app.createWorkspace(name, kind); onDone?.(); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <form onSubmit={async (e) => { e.preventDefault(); await create(); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <Input label="Workspace name" placeholder="Northwind design" value={name} onChange={(e) => setName(e.target.value)} error={err || undefined} autoFocus data-autofocus />
           <div role="radiogroup" aria-label="How messages travel" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <Radio name="transport" value="trystero" label="Live, peer to peer" description="Messages go straight between members’ browsers and are stored nowhere else. Members need to be online together to sync." checked={kind === 'trystero'} onChange={() => setKind('trystero')} data-testid="transport-trystero" />
-            <Radio name="transport" value="nostr" label="Encrypted on Nostr relays" description="Relays keep end-to-end encrypted history, so messages arrive even when no one else is online. Relays can’t read them." checked={kind === 'nostr'} onChange={() => setKind('nostr')} data-testid="transport-nostr" />
+            <Radio name="transport" value="trystero" label="Live, peer to peer" description="Messages go straight between members’ browsers and are stored nowhere else. Members need to be online together to sync." checked={kind === 'trystero'} onChange={() => { setKind('trystero'); setNetErr({}); }} data-testid="transport-trystero" />
+            <Radio name="transport" value="nostr" label="Encrypted on Nostr relays" description="Relays keep end-to-end encrypted history, so messages arrive even when no one else is online. Relays can’t read them." checked={kind === 'nostr'} onChange={() => { setKind('nostr'); setNetErr({}); }} data-testid="transport-nostr" />
+          </div>
+          <div data-testid="create-net" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', border: 'var(--border-width) solid var(--border-subtle)', background: 'var(--surface-sunken)' }}>
+            <button type="button" data-testid="create-net-toggle" aria-expanded={netOpen} onClick={() => setNetOpen(!netOpen)}
+              style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 0, border: 0, background: 'none', cursor: 'pointer', textAlign: 'left', color: 'var(--text-body)' }}>
+              <Icon name={netOpen ? 'chevron-down' : 'chevron-right'} size={16} />
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                <span style={{ fontSize: 'var(--fs-body-sm)', fontWeight: 'var(--weight-semibold)', color: 'var(--text-strong)' }}>Network settings</span>
+                <span data-testid="create-net-summary" style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-subtle)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{summary}</span>
+              </span>
+            </button>
+            {netOpen && (kind === 'nostr' ? <>
+              <Input label="Relays" placeholder="wss://nos.lol" data-testid="create-relays" error={netErr.relays} value={relays}
+                hint="ws:// or wss:// URLs, separated by spaces or commas. Empty means wss://nos.lol." onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRelays(e.target.value)} />
+              <Input label="File servers (Blossom)" optional placeholder="https://blossom.example.com" data-testid="create-blossom" error={netErr.blossom} value={blossom}
+                hint="Where your uploads in this workspace go. Leave empty for the defaults." onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBlossom(e.target.value)} />
+            </> : <SignalFields prefix="create" kind={sigKind} urls={sigUrls} error={netErr.signal} onKind={setSigKind} onUrls={setSigUrls} />)}
+            {netOpen && <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-subtle)' }}>Members need {kind === 'nostr' ? 'a relay' : 'a server'} in common; the invite link carries these. Starts from your defaults in Settings → Network.</span>}
           </div>
           <Button type="submit" variant="primary" iconRight="arrow-right" fullWidth>Create workspace</Button>
           <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>{kind === 'nostr'

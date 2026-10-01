@@ -11,6 +11,22 @@ import { huddle, type HuddleView } from './lib/huddle';
 import { notify } from './lib/format';
 
 interface Identity extends KeyPair { phrase: string; name: string; handle: string }
+/** What a new workspace starts with: shared by its members, so it travels in the invite link (except file servers). */
+export type NewWorkspaceNet =
+  | { kind: 'trystero'; signal: Signaling }
+  | { kind: 'nostr'; relays: string[]; blossom: string[] };
+
+/** The create step's starting point: Settings → Network defaults, emptied fields falling back to the built-ins. */
+export function defaultNewNet(s: Settings, kind: WsTransport['kind']): NewWorkspaceNet {
+  if (kind === 'nostr') {
+    const relays = parseRelays(s.relays);
+    return { kind, relays: relays.length ? relays : [...DEFAULT_RELAYS], blossom: parseServers(s.blossom) };
+  }
+  const urls = parseRelays(s.signalUrls);
+  // Nostr signaling with no servers means nos.lol; trackers with none means the built-in public ones.
+  return { kind, signal: { kind: s.signalKind, urls: urls.length || s.signalKind !== 'nostr' ? urls : [...DEFAULT_SIGNAL_URLS] } };
+}
+
 export type ConnectionChange =
   | { kind: 'nostr'; relays: string[]; blossom: string[] }
   | { kind: 'trystero'; signal: Signaling };
@@ -83,7 +99,8 @@ export interface AppState {
   setDialog(d: DialogType): void;
   toast(t: Omit<ToastT, 'id'>): void;
   dismiss(id: number): void;
-  createWorkspace(name: string, transport: WsTransport['kind']): Promise<string>;
+  /** A new workspace with its own network settings (the create step starts from `defaultNewNet`). */
+  createWorkspace(name: string, net: NewWorkspaceNet): Promise<string>;
   joinWorkspace(input: string): Promise<boolean>;
   leaveWorkspace(code: string): Promise<void>;
   markRead(code: string, ch: string): void;
@@ -300,15 +317,12 @@ export const useApp = create<AppState>((set, get) => {
       t.onDismiss?.();
     },
 
-    async createWorkspace(name, kind) {
+    async createWorkspace(name, net) {
       const code = newInviteCode();
       const me = get().identity!;
-      const { relays, signalKind, signalUrls } = get().settings;
-      // Emptied fields fall back to the defaults (nos.lol); torrent with no trackers uses the built-in ones.
-      const urls = parseRelays(signalUrls);
-      const signal = { kind: signalKind, urls: urls.length || signalKind !== 'nostr' ? urls : [...DEFAULT_SIGNAL_URLS] };
-      const transport = kind === 'nostr' ? newNostrTransport(parseRelays(relays)) : newTrysteroTransport(signal);
-      const rec: WsRecord = { code, name: name.trim(), transport, creator: me.pub, lastRead: {}, muted: [] };
+      const transport = net.kind === 'nostr' ? newNostrTransport(net.relays) : newTrysteroTransport(net.signal);
+      const rec: WsRecord = { code, name: name.trim(), transport, creator: me.pub, lastRead: {}, muted: [],
+        ...(net.kind === 'nostr' && net.blossom.length ? { blossom: net.blossom } : {}) };
       saveWs([...get().workspaces, rec]);
       connectWs(rec);
       const p = getPeer(code)!;
