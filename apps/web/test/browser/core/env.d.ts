@@ -6,8 +6,6 @@ declare module 'vitest/browser' {
     bridgeAllowOrigin(origin: string): Promise<void>;
     bridgeRevokeOrigin(origin: string): Promise<void>;
     reduceMotion(on: boolean): Promise<void>;
-    emulateTouch(on: boolean): Promise<void>;
-    emulateUserAgent(userAgent: string): Promise<void>;
   }
 }
 export {};

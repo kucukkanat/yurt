@@ -1,12 +1,17 @@
 import react from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
-import { bridgeAllowOrigin, bridgePairingCode, bridgeRevokeOrigin, emulateTouch, emulateUserAgent, reduceMotion, setPermissions } from './test/browser/core/commands.ts';
+import { bridgeAllowOrigin, bridgePairingCode, bridgeRevokeOrigin, reduceMotion, setPermissions } from './test/browser/core/commands.ts';
 
-// Two projects, one coverage report:
+/** An iPhone's Safari, for the phone project (the app tells iOS apart by it: Add to Home Screen instead of Install). */
+const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+
+// Three projects, one coverage report:
 // - unit: pure modules in Node.
 // - browser: components and app flows in real Chromium (real React, IndexedDB, WebSocket) against the local test
 //   relay and file server started by globalSetup. No mocks.
+// - phone: the same, in a browser that is a phone from the start (touch screen, iPhone user agent), for gestures and
+//   installing. Its own browser: touch emulation can't be switched off reliably once on (Linux reports no pointer).
 export default defineConfig({
   plugins: [react({ include: /\.(jsx|tsx)$/ })],
   resolve: { dedupe: ['react', 'react-dom'] },
@@ -18,6 +23,7 @@ export default defineConfig({
         test: {
           name: 'browser',
           include: ['test/browser/**/*.test.{ts,tsx}'],
+          exclude: ['test/browser/phone/**'],
           globalSetup: ['test/browser/global-setup.ts', 'test/browser/core/bridge-setup.ts'],
           // Test files share one page origin, so IndexedDB and the store are shared: run them one at a time.
           fileParallelism: false,
@@ -32,7 +38,23 @@ export default defineConfig({
             }),
             instances: [{ browser: 'chromium' }],
             screenshotFailures: false,
-            commands: { setPermissions, bridgePairingCode, bridgeAllowOrigin, bridgeRevokeOrigin, reduceMotion, emulateTouch, emulateUserAgent },
+            commands: { setPermissions, bridgePairingCode, bridgeAllowOrigin, bridgeRevokeOrigin, reduceMotion },
+          },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'phone',
+          include: ['test/browser/phone/**/*.test.{ts,tsx}'],
+          globalSetup: ['test/browser/global-setup.ts'],
+          fileParallelism: false,
+          browser: {
+            enabled: true,
+            headless: true,
+            provider: playwright({ contextOptions: { hasTouch: true, userAgent: IPHONE } }),
+            instances: [{ browser: 'chromium' }],
+            screenshotFailures: false,
           },
         },
       },

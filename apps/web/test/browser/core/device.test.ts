@@ -8,7 +8,7 @@ import { trackViewport } from '../../../src/lib/viewport';
 import { resetDb, until } from './harness';
 
 // What the app does with the device it runs on, in real Chromium: vibration, the install offer, the icon badge and
-// the visible viewport. Touch and reduced motion are Chromium's own emulation (DevTools' device mode).
+// the visible viewport. Reduced motion is Chromium's own emulation.
 
 beforeAll(async () => {
   await resetDb();
@@ -16,10 +16,7 @@ beforeAll(async () => {
   // Browsers only vibrate once the user has interacted with the page, as they have whenever the app buzzes.
   await userEvent.click(document.body);
 });
-afterAll(async () => {
-  await commands.reduceMotion(false);
-  await commands.emulateTouch(false);
-});
+afterAll(() => commands.reduceMotion(false));
 
 describe('haptics', () => {
   it('vibrate unless turned off or the user prefers reduced motion', async () => {
@@ -76,32 +73,10 @@ describe('installing', () => {
     expect(isIos('Mozilla/5.0 (Linux; Android 15)', 5)).toBe(false);
   });
 
-  it('suggests installing once, on a touch screen, and points to Settings', async () => {
-    await commands.emulateTouch(true);
-    await until(() => matchMedia('(pointer: coarse)').matches, 'touch emulation');
-    offerInstall(); // nobody to install it for yet (onboarding)
-    expect(useApp.getState().toasts).toEqual([]);
+  it('suggests nothing on a desktop', async () => {
     await useApp.getState().createIdentity(newRecoveryPhrase(), 'Ada', 'ada');
-    useApp.setState({ standalone: true });
-    offerInstall(); // already installed
+    offerInstall(); // a mouse: installing is the browser's menu, not worth a toast (test/browser/phone covers phones)
     expect(useApp.getState().toasts).toEqual([]);
-    useApp.setState({ standalone: false });
-    await commands.emulateTouch(false);
-    await until(() => !matchMedia('(pointer: coarse)').matches, 'a mouse again');
-    offerInstall(); // a desktop pointer: nothing to suggest
-    expect(useApp.getState().toasts).toEqual([]);
-    await commands.emulateTouch(true);
-    await until(() => matchMedia('(pointer: coarse)').matches, 'touch emulation');
-    offerInstall();
-    const [t] = useApp.getState().toasts;
-    expect(t?.title).toBe('Install Yurt');
-    t?.onAction?.();
-    expect([useApp.getState().dialog, useApp.getState().settingsSection]).toEqual(['settings', 'app']);
-    useApp.setState({ dialog: null, toasts: [] });
-    await until(() => useApp.getState().settings.installHint, 'the hint remembered');
-    offerInstall(); // never twice
-    expect(useApp.getState().toasts).toEqual([]);
-    await commands.emulateTouch(false);
   });
 
   it('badges the app icon with what needs me, and clears it', () => {

@@ -1,9 +1,10 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { commands, page, userEvent } from 'vitest/browser';
+import { describe, expect, it } from 'vitest';
+import { page, userEvent } from 'vitest/browser';
 import { EDIT_WINDOW_MS } from '@yurt/protocol';
-import { createWorkspace, expectText, getPeer, me, member, startApp, until, useApp } from '../app';
+import { createWorkspace, expectText, getPeer, me, member, startApp, until, useApp } from '../ui/app';
 
-// A phone: Chromium's touch emulation (so `(pointer: coarse)` matches) and touch pointer events on the real UI.
+// On a phone (the `phone` test project: a touch screen, so `(pointer: coarse)` matches): touch pointer events on the
+// real UI.
 
 let code = '';
 let bo: Awaited<ReturnType<typeof member>>;
@@ -46,15 +47,8 @@ async function longPress(text: string | RegExp) {
   await expect.element(sheet()).toBeVisible();
 }
 
-afterAll(async () => {
-  await commands.emulateTouch(false);
-  // Later test files expect a mouse again (the composer only autofocuses for one).
-  await until(() => matchMedia('(pointer: fine)').matches, 10_000, 'a mouse again');
-});
-
 describe('on a touch screen', () => {
   it('long-pressing a message opens its actions instead of the hover bar', async () => {
-    await commands.emulateTouch(true);
     await startApp({ as: 'Ada' });
     await until(() => matchMedia('(pointer: coarse)').matches, 10_000, 'touch emulation');
     await userEvent.click(document.body); // a person touched the page: vibration is allowed from here on
