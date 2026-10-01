@@ -21,6 +21,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@trystero-p2p/torrent": "0.25.4",
     "trystero": "~0.25.4",
     "werift": "^0.24.4",
     "ws": "^8.18.0"

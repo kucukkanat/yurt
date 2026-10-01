@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import {
   keyFromPhrase, newInviteCode, normalizeCode, formatCode, slug, mentions, sha256Buf, MAX_FILE_BYTES,
-  parseInvite, parseRelays, newNostrTransport, newTrysteroTransport, LEGACY_TRYSTERO, uploadFile, parseServers, DEFAULT_BLOSSOM,
-  type KeyPair, type WsTransport, type WorkspacePeer, type WsState, type Ev, type FileRef, type EventFields, type BridgeState,
+  parseInvite, parseRelays, DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, newNostrTransport, newTrysteroTransport, LEGACY_TRYSTERO, uploadFile, parseServers, DEFAULT_BLOSSOM,
+  type KeyPair, type WsTransport, type Signaling, type WorkspacePeer, type WsState, type Ev, type FileRef, type EventFields, type BridgeState,
 } from '@yurt/protocol';
 import { kv, eventsDb, blobsDb } from './lib/db';
 import { connect, getPeer, allPeers, disconnect, type NetSettings } from './lib/net';
@@ -11,6 +11,9 @@ import { huddle, type HuddleView } from './lib/huddle';
 import { notify } from './lib/format';
 
 interface Identity extends KeyPair { phrase: string; name: string; handle: string }
+export type ConnectionChange =
+  | { kind: 'nostr'; relays: string[]; blossom: string[] }
+  | { kind: 'trystero'; signal: Signaling };
 export interface WsRecord {
   code: string; name: string; transport: WsTransport; creator: string | null; lastRead: Record<string, number>; muted: string[];
   /** Blossom servers for this workspace's uploads; falls back to Settings, then the defaults. */
@@ -25,7 +28,7 @@ type DialogType = null | 'workspace' | 'channel' | 'invite' | 'agent' | 'bridge'
 interface ToastT { id: number; tone?: 'neutral' | 'success' | 'agent' | 'human' | 'danger'; title: string; description?: string; actionLabel?: string; onAction?: () => void; onDismiss?: () => void; duration?: number }
 
 // No TURN by default: a third-party relay would see who connects to whom. Opt in under Settings → Network.
-const DEFAULT_SETTINGS: Settings = { theme: 'dark', notifications: false, turn: 'off', turnUrls: '', turnUser: '', turnPass: '', relays: '', webrtc: false, blossom: '' };
+const DEFAULT_SETTINGS: Settings = { theme: 'dark', notifications: false, turn: 'off', turnUrls: '', turnUser: '', turnPass: '', relays: DEFAULT_RELAYS.join(', '), webrtc: false, blossom: '', signalKind: 'nostr', signalUrls: DEFAULT_SIGNAL_URLS.join(', ') };
 
 function parseHash(h = location.hash): Route {
   const p = h.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
@@ -45,7 +48,7 @@ function buildHash(r: Route): string {
   return h;
 }
 
-interface AppState {
+export interface AppState {
   ready: boolean;
   identity: Identity | null;
   workspaces: WsRecord[];
@@ -65,6 +68,8 @@ interface AppState {
   online: boolean;
   drawer: boolean;
   editing: string | null;
+  /** Ticks every 30 s so time-based UI (like the edit window) stays current. */
+  clock: number;
   highlight: string | null;
 
   init(): Promise<void>;
@@ -92,7 +97,8 @@ interface AppState {
   /** Resolves false when the attachment couldn't be fetched. */
   fetchBlob(code: string, id: string): Promise<boolean>;
   setAgents(code: string, agentIds: string[]): void;
-  updateConnection(code: string, relays: string[], blossom: string[] | undefined): Promise<void>;
+  /** A workspace's own network settings: relays and file servers, or signaling. Saves and reconnects it. */
+  updateConnection(code: string, change: ConnectionChange): Promise<void>;
 }
 
 let typingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -149,6 +155,8 @@ export const useApp = create<AppState>((set, get) => {
       },
       onPeers: () => set((st) => ({ tick: st.tick + 1 })),
       onCreator: (code, pub) => patchWs(code, { creator: pub }),
+      // After a rotation, remember the newest key: invite links use it, and it opens all earlier ones.
+      onKey: (code, key) => { const w = get().workspaces.find((x) => x.code === code); if (w?.transport.kind === 'nostr') patchWs(code, { transport: { ...w.transport, key } }); },
       onBlob: (id) => set((st) => ({ blobVer: { ...st.blobVer, [id]: (st.blobVer[id] ?? 0) + 1 } })),
       onBlobProgress: (id, p) => set((st) => ({ blobProgress: { ...st.blobProgress, [id]: p } })),
     });
@@ -194,7 +202,7 @@ export const useApp = create<AppState>((set, get) => {
 
   return {
     ready: false, identity: null, workspaces: [], settings: DEFAULT_SETTINGS, route: parseHash(), states: {}, tick: 0, blobVer: {}, blobProgress: {},
-    panel: { type: null }, dialog: null, toasts: [], bridgeStatus: 'off', bridgeState: null, huddle: huddle.view, online: navigator.onLine, drawer: false, editing: null, highlight: null,
+    panel: { type: null }, dialog: null, toasts: [], bridgeStatus: 'off', bridgeState: null, huddle: huddle.view, online: navigator.onLine, drawer: false, editing: null, clock: Date.now(), highlight: null,
 
     async init() {
       const [identity, workspaces, settings] = await Promise.all([kv.get<Identity>('identity'), kv.get<WsRecord[]>('workspaces'), kv.get<Settings>('settings')]);
@@ -217,6 +225,7 @@ export const useApp = create<AppState>((set, get) => {
         // Outside a huddle there's no dock to show the error in (e.g. mic denied on join), so toast it.
         if (v.error && !v.ch) { get().toast({ tone: 'danger', title: 'Couldn’t join the huddle', description: v.error }); huddle.clearError(); }
       });
+      setInterval(() => set({ clock: Date.now() }), 30_000);
       window.addEventListener('hashchange', onRoute);
       window.addEventListener('online', () => set({ online: true }));
       window.addEventListener('offline', () => set({ online: false }));
@@ -251,12 +260,11 @@ export const useApp = create<AppState>((set, get) => {
       set({ settings });
       await kv.set('settings', settings);
       // Reconnect just the workspaces whose live connection depends on what changed, so nothing needs a reload.
-      // Relay and Blossom defaults only shape new workspaces and uploads; Trystero signals over the relay list.
+      // Relay, file server and signaling defaults only shape new workspaces and uploads; TURN and the calls
+      // switch are how this device connects now.
       const changed = (k: keyof NetSettings) => p[k] !== undefined && p[k] !== prev[k];
       const turn = changed('turn') || changed('turnUrls') || changed('turnUser') || changed('turnPass');
-      const affected = get().workspaces.filter((w) => w.transport.kind === 'trystero'
-        ? turn || changed('relays')
-        : changed('webrtc') || (settings.webrtc && (turn || changed('relays')))).map((w) => w.code);
+      const affected = get().workspaces.filter((w) => w.transport.kind === 'trystero' ? turn : changed('webrtc') || (settings.webrtc && turn)).map((w) => w.code);
       if (affected.length) await reconnect(affected);
       if (p.theme) applyTheme(p.theme);
       if (p.notifications && 'Notification' in window && Notification.permission === 'default') {
@@ -295,7 +303,11 @@ export const useApp = create<AppState>((set, get) => {
     async createWorkspace(name, kind) {
       const code = newInviteCode();
       const me = get().identity!;
-      const transport = kind === 'nostr' ? newNostrTransport(parseRelays(get().settings.relays)) : newTrysteroTransport();
+      const { relays, signalKind, signalUrls } = get().settings;
+      // Emptied fields fall back to the defaults (nos.lol); torrent with no trackers uses the built-in ones.
+      const urls = parseRelays(signalUrls);
+      const signal = { kind: signalKind, urls: urls.length || signalKind !== 'nostr' ? urls : [...DEFAULT_SIGNAL_URLS] };
+      const transport = kind === 'nostr' ? newNostrTransport(parseRelays(relays)) : newTrysteroTransport(signal);
       const rec: WsRecord = { code, name: name.trim(), transport, creator: me.pub, lastRead: {}, muted: [] };
       saveWs([...get().workspaces, rec]);
       connectWs(rec);
@@ -413,11 +425,20 @@ export const useApp = create<AppState>((set, get) => {
       bridge.send({ t: 'ws.join', code, name: get().states[code]?.name || rec.name, transport: rec.transport, creator: rec.creator, agents: agentIds });
     },
 
-    async updateConnection(code, relays, blossom) {
+    async updateConnection(code, change) {
       const rec = get().workspaces.find((w) => w.code === code);
-      if (!rec || rec.transport.kind !== 'nostr') throw new Error('Only relay workspaces have relays to edit');
-      if (!relays.length) throw new Error('A relay workspace needs at least one relay');
-      patchWs(code, { transport: { ...rec.transport, relays }, blossom: blossom?.length ? blossom : undefined });
+      if (!rec) throw new Error('Unknown workspace');
+      const t = rec.transport;
+      if (t.kind === 'nostr') {
+        if (change.kind !== 'nostr') throw new Error('A relay workspace’s settings are its relays and file servers');
+        if (!change.relays.length) throw new Error('A relay workspace needs at least one relay');
+        patchWs(code, { transport: { ...t, relays: change.relays }, blossom: change.blossom.length ? change.blossom : undefined });
+      } else {
+        if (change.kind !== 'trystero') throw new Error('A peer-to-peer workspace’s setting is its signaling');
+        // The default (Nostr, built-in servers) is stored as no signal, matching new workspaces and short links.
+        const { signal: _old, ...rest } = t;
+        patchWs(code, { transport: change.signal.kind === 'nostr' && !change.signal.urls.length ? rest : { ...rest, signal: change.signal } });
+      }
       await reconnect([code]);
     },
   };

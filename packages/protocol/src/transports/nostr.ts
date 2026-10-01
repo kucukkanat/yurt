@@ -4,7 +4,7 @@ import { normalizeURL } from 'nostr-tools/utils';
 import type { Event as NostrEvent } from 'nostr-tools/core';
 import type { Filter } from 'nostr-tools/filter';
 import type { Ev } from '../types';
-import type { DataLink, LinkHost, Presence } from '../transport';
+import type { DataLink, LinkHost, LinkKeys, Presence } from '../transport';
 import { sign, verify } from '../crypto';
 import { open, seal, workspaceKeys, type WsKeys } from '../seal';
 
@@ -27,7 +27,7 @@ const SKEW_S = 86_400;
 const EOSE = 'closed automatically on eose';
 
 export interface NostrOpts {
-  key: string;
+  keys: LinkKeys;
   relays: readonly string[];
   /** Unix seconds of the last completed backfill (0 = fetch full history). */
   mark: number;
@@ -50,7 +50,9 @@ const refusals = (err: unknown): string[] =>
     e instanceof Error && /^[a-z-]+:/.test(e.message) && !e.message.startsWith('rate-limited:') ? [e.message] : []);
 
 /**
- * Events and presence through Nostr relays, end-to-end encrypted with the workspace key.
+ * Events and presence through Nostr relays, end-to-end encrypted with the workspace key. After key
+ * rotations a member holds several keys: it reads with all of them (each has its own tags) and
+ * writes with the newest.
  * What a relay sees: an opaque tag, ciphertext, timestamps and a throwaway per-session pubkey.
  * Private events are additionally sealed with the pair's X25519 key, so other members can't read them.
  */
@@ -60,7 +62,11 @@ export class NostrData implements DataLink {
   private pool = new SimplePool({ enableReconnect: true });
   private sk = generateSecretKey();
   private self = getPublicKey(this.sk);
+  /** The key new events are sealed with. */
   private k: WsKeys;
+  /** Every tag I listen on → the key its events are sealed with. */
+  private byTag = new Map<string, WsKeys>();
+  private epochs = new Map<WsKeys, number>();
   private relays: string[];
   /** Events still being retried, as their wrapped copies. */
   private pending = new Map<string, NostrEvent[]>();
@@ -71,8 +77,7 @@ export class NostrData implements DataLink {
   private onRelay = new Set<string>();
   private me: Presence | null = null;
   private timers: ReturnType<typeof setInterval>[];
-  private closeSub: () => void;
-  private tags: string[];
+  private closeSub: () => void = () => {};
   private mark: number;
   private wasConnected = false;
   private needSync = true;
@@ -80,13 +85,11 @@ export class NostrData implements DataLink {
   private closed = false;
 
   constructor(private host: LinkHost, private o: NostrOpts) {
-    this.k = workspaceKeys(o.key);
+    this.k = this.useKeys(o.keys);
     this.relays = [...o.relays];
-    this.tags = [this.k.tag, this.k.inbox(host.kp.pub)];
     this.mark = o.mark;
     // Live first, then backfill, so nothing published in between slips through the gap.
-    const sub = this.pool.subscribe(this.relays, { kinds: [KIND_EVENT, KIND_PRESENCE], '#y': this.tags, since: now() - FUZZ_S - 60 }, { onevent: (e) => this.onNostr(e) });
-    this.closeSub = () => sub.close();
+    this.subscribe();
     void this.backfill();
     this.timers = [
       // Heartbeats only while the member is actually here, or needs the WebRTC room.
@@ -94,6 +97,46 @@ export class NostrData implements DataLink {
       setInterval(() => { for (const [id, e] of this.pending) this.publish(id, e); }, RETRY_MS),
       setInterval(() => this.sweep(), 5_000),
     ];
+  }
+
+  private get tags() { return [...this.byTag.keys()]; }
+
+  private useKeys(keys: LinkKeys): WsKeys {
+    this.byTag.clear();
+    this.epochs.clear();
+    let write: WsKeys | undefined;
+    for (const { key, epoch } of keys.all) {
+      const k = workspaceKeys(key);
+      this.byTag.set(k.tag, k).set(k.inbox(this.host.kp.pub), k);
+      this.epochs.set(k, epoch ?? 0);
+      if (key === keys.write) write = k;
+    }
+    if (!write) throw new Error('the write key must be one of the keys');
+    return write;
+  }
+
+  private subscribe() {
+    this.closeSub();
+    const sub = this.pool.subscribe(this.relays, { kinds: [KIND_EVENT, KIND_PRESENCE], '#y': this.tags, since: now() - FUZZ_S - 60 }, { onevent: (e) => this.onNostr(e) });
+    this.closeSub = () => sub.close();
+  }
+
+  /** A rotation: listen on the new keys' tags too, and fetch their whole history (they're new to me). */
+  setKeys(keys: LinkKeys) {
+    const before = new Set(this.byTag.keys());
+    this.k = this.useKeys(keys);
+    const added = this.tags.filter((t) => !before.has(t));
+    if (!added.length || this.closed) return;
+    this.subscribe();
+    void this.fetchAll(added);
+  }
+
+  private async fetchAll(tags: string[]) {
+    try {
+      await Promise.all(this.relays.map((url) => this.pageRelay(url, 0, now(), tags)));
+    } catch (err) {
+      this.host.error(`Relay sync failed: ${errMsg(err)}`);
+    }
   }
 
   get connected() { return [...this.relayStatus().values()].some(Boolean); }
@@ -106,7 +149,7 @@ export class NostrData implements DataLink {
 
   send(evs: readonly Ev[]) {
     for (const e of evs) {
-      const nes = e.to ? this.wrapPrivate(e) : [this.wrap(KIND_EVENT, this.k.tag, seal(this.k.enc, this.k.tag, JSON.stringify(e)))];
+      const nes = e.to ? this.wrapPrivate(e) : this.sealFor(e).map((k) => this.wrap(KIND_EVENT, k.tag, seal(k.enc, k.tag, JSON.stringify(e))));
       this.abandoned.delete(e.id);
       this.refused.delete(e.id);
       this.pending.set(e.id, nes);
@@ -125,6 +168,15 @@ export class NostrData implements DataLink {
     this.closeSub();
     this.pool.destroy();
     this.presence.clear();
+  }
+
+  // A rekey goes out under the key it replaces, so current members get it, and under the new one, so
+  // someone joining later with the new key finds the history it carries.
+  private sealFor(e: Ev): WsKeys[] {
+    const epoch = e.t === 'rekey' && isObj(e.b) && typeof e.b.epoch === 'number' ? e.b.epoch : null;
+    if (epoch === null) return [this.k];
+    const ks = [...this.epochs].filter(([, n]) => n === epoch || n === epoch - 1).map(([k]) => k);
+    return ks.length ? ks : [this.k];
   }
 
   private wrap(kind: number, tag: string, content: string, sk = this.sk): NostrEvent {
@@ -190,7 +242,7 @@ export class NostrData implements DataLink {
   private async syncHistory() {
     const started = now();
     const since = Math.max(0, this.mark - SKEW_S);
-    const results = await Promise.all(this.relays.map((url) => this.pageRelay(url, since, started)));
+    const results = await Promise.all(this.relays.map((url) => this.pageRelay(url, since, started, this.tags)));
     // The mark only moves once every reachable relay was read to the end; otherwise the next
     // backfill (sweep retries while needSync) would skip what we didn't get to.
     if (this.closed || results.includes('partial') || !results.includes('done')) return;
@@ -209,11 +261,11 @@ export class NostrData implements DataLink {
    * can't tell which relay ran out. Relays may cap `limit` below PAGE, so a short page doesn't mean
    * done; a relay is done when a page brings nothing new.
    */
-  private async pageRelay(url: string, since: number, until: number): Promise<'done' | 'down' | 'partial'> {
+  private async pageRelay(url: string, since: number, until: number, tags: string[]): Promise<'done' | 'down' | 'partial'> {
     const got = new Set<string>();
     for (let first = true; ; first = false) {
       if (this.closed) return 'partial';
-      const evs = await this.query(url, { kinds: [KIND_EVENT], '#y': this.tags, since, until, limit: PAGE });
+      const evs = await this.query(url, { kinds: [KIND_EVENT], '#y': tags, since, until, limit: PAGE });
       if (!evs) return first ? 'down' : 'partial';
       const fresh = evs.filter((e) => !got.has(e.id));
       if (!fresh.length) return 'done';
@@ -246,22 +298,26 @@ export class NostrData implements DataLink {
 
   private handle(ne: NostrEvent) {
     if (ne.pubkey === this.self) return;
-    const outer = parse(open(this.k.enc, this.k.tag, ne.content));
+    // Which key sealed it follows from the tag it was published under.
+    const tag = ne.tags.find((t) => t[0] === 'y')?.[1];
+    const k = tag === undefined ? undefined : this.byTag.get(tag);
+    if (!k) return;
+    const outer = parse(open(k.enc, k.tag, ne.content));
     if (ne.kind === KIND_PRESENCE) return this.onPresence(ne.pubkey, outer);
     if (isObj(outer) && typeof outer.a === 'string' && typeof outer.to === 'string' && typeof outer.c === 'string') {
       const me = this.host.kp.pub;
       if (outer.a !== me && outer.to !== me) return;
-      const pair = this.pairWith(outer.a === me ? outer.to : outer.a);
-      return pair ? this.accept(parse(open(pair, this.k.tag, outer.c))) : undefined;
+      const pair = this.pairWith(k, outer.a === me ? outer.to : outer.a);
+      return pair ? this.accept(parse(open(pair, k.tag, outer.c))) : undefined;
     }
     this.accept(outer);
   }
 
   /** The pair key with `pub`, or null if it isn't a valid public key: any key holder can write the wrapper naming it. */
-  private pairWith(pub: string): Uint8Array | null {
+  private pairWith(k: WsKeys, pub: string): Uint8Array | null {
     if (!/^[0-9a-f]{64}$/.test(pub)) return null;
     try {
-      return this.k.pair(this.host.kp.sec, pub);
+      return k.pair(this.host.kp.sec, pub);
     } catch {
       return null; // well-formed hex that isn't a curve point: foreign junk, like any unopenable event
     }

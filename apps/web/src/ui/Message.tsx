@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ChatMessage, MentionText, ApprovalCard, Button, Kbd, Icon, IconButton } from '@yurt/ui';
 import { EDIT_WINDOW_MS, mentions, type Msg, type WsState, type WorkspacePeer, type FileRef } from '@yurt/protocol';
+import { editLeft, editLeftLabel, EDIT_CLOSED } from '../lib/editWindow';
 import { useApp } from '../store';
 import { personFor, authorKey, type Person } from '../model';
 import { blobsDb } from '../lib/db';
@@ -59,7 +60,7 @@ function Attachment({ f, code }: { f: FileRef; code: string }) {
   );
 }
 
-function InlineEditor({ initial, onSave, onCancel }: { initial: string; onSave: (t: string) => void; onCancel: () => void }) {
+function InlineEditor({ initial, left, onSave, onCancel }: { initial: string; left: number; onSave: (t: string) => void; onCancel: () => void }) {
   const [v, setV] = useState(initial);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -70,6 +71,7 @@ function InlineEditor({ initial, onSave, onCancel }: { initial: string; onSave: 
         <Button size="sm" variant="primary" onClick={() => v.trim() && onSave(v.trim())}>Save</Button>
         <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Kbd keys="enter" size="sm" /> save <Kbd keys="esc" size="sm" /> cancel</span>
+        <span data-testid="edit-time-left" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 'auto', color: left < 120_000 ? 'var(--warning-ink)' : 'var(--text-subtle)' }}><Icon name="clock" size={12} />{editLeftLabel(left)}</span>
       </div>
     </div>
   );
@@ -82,6 +84,8 @@ export interface MsgCtx {
 
 export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean; ctx: MsgCtx }) {
   const editing = useApp((s) => s.editing);
+  // Re-render my own messages as their edit window counts down (and once just after it closes); others never change.
+  useApp((s) => (m.a === ctx.me && !m.ag && s.clock - m.ts < EDIT_WINDOW_MS + 60_000 ? s.clock : 0));
   const highlight = useApp((s) => s.highlight);
   const { state, peer, me, code } = ctx;
   const app = useApp.getState();
@@ -91,7 +95,8 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
   }
   const author = personFor(state, peer, authorKey(m), me);
   const mine = m.a === me && !m.ag;
-  const canEdit = mine && Date.now() - m.ts < EDIT_WINDOW_MS;
+  const left = mine ? editLeft(m.ts, Date.now()) : 0;
+  const canEdit = left > 0;
   const text = m.text;
   const mentionsMe = !mine && mentions(text).includes(ctx.handle);
   const agentTalk = author.kind === 'agent' && mentions(text).some((h) => ctx.roster.some((p) => p.kind === 'agent' && p.handle.toLowerCase() === h));
@@ -114,6 +119,13 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
       onAction: () => { undone = true; pendingDeletes.delete(m.id); ctx.forceRender(); },
       onDismiss: () => { if (undone) return; pendingDeletes.delete(m.id); app.publish(code, { t: 'del', b: { target: m.id }, ch: m.ch, to: m.to }); } });
   };
+  const explainClosed = () => app.toast({ ...EDIT_CLOSED, duration: 8000, ...(ctx.inThread ? {} : { actionLabel: 'Reply in thread', onAction: openThread }) });
+  const saveEdit = (t: string) => {
+    useApp.setState({ editing: null });
+    // The window can close while the editor is open; say so instead of publishing an edit nobody will apply.
+    if (editLeft(m.ts, Date.now()) === 0) { explainClosed(); return; }
+    app.publish(code, { t: 'edit', ch: m.ch, to: m.to, b: { target: m.id, text: t } });
+  };
   const approval = m.approval;
   const decided = approval ? state.approvals.get(approval.req) : undefined;
   const decidedKind = approval && decided ? approval.options.find((o) => o.id === decided)?.kind || '' : '';
@@ -129,10 +141,11 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
         onReplies={openThread} onReply={ctx.inThread ? undefined : openThread}
         onEdit={canEdit ? () => useApp.setState({ editing: m.id }) : undefined}
         onDelete={canEdit ? onDelete : undefined}
+        editLabel={'Edit · ' + editLeftLabel(left)} locked={mine && !canEdit} lockedLabel="Edit window closed" onLocked={explainClosed}
         onAuthor={() => app.setPanel({ type: 'profile', id: authorKey(m) })}
         onMention={(mm) => app.setPanel({ type: 'profile', id: mm.id })}
         activity={activity} highlighted={highlight === m.id}
-        editor={editing === m.id ? <InlineEditor initial={text} onSave={(t) => { app.publish(code, { t: 'edit', ch: m.ch, to: m.to, b: { target: m.id, text: t } }); useApp.setState({ editing: null }); }} onCancel={() => useApp.setState({ editing: null })} /> : undefined}
+        editor={editing === m.id ? <InlineEditor initial={text} left={left} onSave={saveEdit} onCancel={() => useApp.setState({ editing: null })} /> : undefined}
       >
         {text && <MentionText text={text} members={ctx.roster.map((p) => ({ id: p.id, handle: p.handle, kind: p.kind }))} meId={me} onMention={(mm) => app.setPanel({ type: 'profile', id: mm.id })} />}
         {m.files.length > 0 && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: text ? 6 : 0 }}>{m.files.map((f) => <Attachment key={f.id} f={f} code={code} />)}</div>}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { agentKey, fingerprint, liveAgents, members, mentions, type WsState, type WorkspacePeer, type Msg } from '@yurt/protocol';
-import { useApp, type WsRecord } from './store';
+import { useApp, type WsRecord, type AppState } from './store';
+import { CALM, type FaviconState } from './lib/favicon';
 import { getPeer } from './lib/net';
 
 export interface Person {
@@ -94,4 +95,30 @@ export function channelTitle(state: WsState | undefined, ch: string, me: string)
   if (ch.startsWith('dm:')) { const other = ch.slice(3).split(':').find((k) => k !== me) || me; return state?.profiles.get(other)?.name || fingerprint(other); }
   if (ch.startsWith('adm:')) { const [, owner, id] = ch.split(':'); return state?.agents.get(owner + '/' + id)?.name || id; }
   return state?.channels.get(ch)?.name || ch;
+}
+
+/**
+ * What the tab icon should show (see lib/favicon.ts): unread mentions and DMs across every workspace,
+ * other unread messages, calls, and whether we're cut off. The channel on screen doesn't count while
+ * the tab is visible, matching the sidebar.
+ */
+export function faviconStateOf(s: AppState, peerOf: (code: string) => WorkspacePeer | undefined, visible: boolean): FaviconState {
+  const me = s.identity;
+  if (!me) return CALM;
+  let mentionCount = 0, unreadAny = false, callNearby = false;
+  for (const w of s.workspaces) {
+    const st = s.states[w.code];
+    if (st) for (const ch of st.channelMsgs.keys()) {
+      if (w.muted.includes(ch) || (visible && s.route.code === w.code && s.route.ch === ch)) continue;
+      const u = unread(st, w, ch, me.pub, me.handle);
+      mentionCount += u.m;
+      if (u.n) unreadAny = true;
+    }
+    const p = peerOf(w.code);
+    if (p) for (const h of p.huddles.values()) if (h.ch && !(s.huddle.code === w.code && s.huddle.ch === h.ch)) callNearby = true;
+  }
+  const cur = s.route.code ? peerOf(s.route.code) : undefined;
+  // Peer-to-peer workspaces are often alone, which isn't being offline; relay workspaces are offline without relays.
+  const offline = !s.online || (cur?.transport.kind === 'nostr' && !cur.connected);
+  return { mentions: mentionCount, unread: unreadAny, inCall: !!s.huddle.ch, callNearby, offline };
 }

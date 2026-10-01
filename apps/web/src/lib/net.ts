@@ -1,5 +1,6 @@
-import { joinRoom, selfId } from 'trystero';
-import { WorkspacePeer, parseRelays, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport } from '@yurt/protocol';
+import { joinRoom as joinNostr, selfId } from 'trystero';
+import { joinRoom as joinTorrent } from '@trystero-p2p/torrent';
+import { WorkspacePeer, signalingOf, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport, type SignalKind } from '@yurt/protocol';
 import { peerStore } from './db';
 
 export interface NetSettings {
@@ -7,10 +8,14 @@ export interface NetSettings {
   turnUrls: string;
   turnUser: string;
   turnPass: string;
-  relays: string; // optional Nostr relay list, one per line
+  /** Defaults for new relay workspaces: Nostr relays and Blossom file servers (free text, parsed when used). */
+  relays: string;
+  blossom: string;
   /** Relay workspaces use WebRTC (voice and video) only when this is on. Trystero workspaces always use it. */
   webrtc: boolean;
-  blossom: string; // optional Blossom file servers for relay workspaces, one per line
+  /** Defaults for new peer-to-peer workspaces: how members find each other (empty urls = built-in servers). */
+  signalKind: SignalKind;
+  signalUrls: string;
 }
 
 // Free public TURN (Open Relay by Metered). Rate-limited; set your own in Settings → Network.
@@ -24,8 +29,7 @@ function rtcOptions(n: NetSettings): Record<string, unknown> {
   const o: Record<string, unknown> = {};
   if (n.turn === 'default') o.turnConfig = DEFAULT_TURN;
   if (n.turn === 'custom' && n.turnUrls.trim()) o.turnConfig = [{ urls: n.turnUrls.split(/[\s,]+/).filter(Boolean), username: n.turnUser, credential: n.turnPass }];
-  const relays = parseRelays(n.relays); // same rules as new relay workspaces, so a ws:// test relay works for both
-  if (relays.length) o.relayConfig = { urls: relays };
+  // Signaling servers aren't here: they belong to each workspace (members must share them).
   return o;
 }
 
@@ -33,6 +37,7 @@ interface NetHandlers {
   onState(code: string, s: WsState, fresh: Ev[]): void;
   onPeers(code: string): void;
   onCreator(code: string, pub: string): void;
+  onKey(code: string, key: string): void;
   onBlob(id: string): void;
   onBlobProgress(id: string, p: number): void;
 }
@@ -44,13 +49,17 @@ export function connect(code: string, kp: KeyPair, creator: string | null, trans
   if (existing) return existing;
   const p = new WorkspacePeer({
     code, kp, selfId, creator, transport,
-    // No mixing: a relay workspace gets no WebRTC at all unless the user opted in.
-    joinRoom: transport.kind === 'trystero' || net.webrtc ? (joinRoom as unknown as JoinRoom) : undefined,
+    // No mixing: a relay workspace gets no WebRTC at all unless the user opted in. The Trystero strategy
+    // follows the workspace's signaling method, since members only meet over the same one.
+    joinRoom: transport.kind === 'trystero' || net.webrtc
+      ? ((signalingOf(transport).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom)
+      : undefined,
     store: peerStore,
     rtc: rtcOptions(net),
     onState: (s, fresh) => h.onState(code, s, fresh),
     onPeers: () => h.onPeers(code),
     onCreator: (pub) => h.onCreator(code, pub),
+    onKey: (key) => h.onKey(code, key),
     onBlob: h.onBlob,
     onBlobProgress: h.onBlobProgress,
     onJoinError: (d) => console.warn('[yurt] join error', d),

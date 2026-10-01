@@ -13,7 +13,7 @@
     "build": "bun run --filter @yurt/web build",
     "bridge": "bun run --filter yurt-bridge dev",
     "bridge:build": "bun run --filter yurt-bridge build",
-    "test": "bun run --filter @yurt/protocol test && bun run --filter yurt-bridge test",
+    "test": "bun run --filter @yurt/protocol test && bun run --filter yurt-bridge test && bun run --filter @yurt/web test",
     "e2e": "playwright test",
     "typecheck": "bun run --filter '*' typecheck"
   },

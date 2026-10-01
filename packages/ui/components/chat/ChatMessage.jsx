@@ -8,11 +8,12 @@ import { Badge } from '../display/Badge.jsx';
 const TINT = { default: 'transparent', agent: 'color-mix(in oklab, var(--agent) 6%, transparent)', mention: 'color-mix(in oklab, var(--human) 9%, transparent)' };
 const PICK = ['thumbs-up', 'heart', 'circle-check', 'eye', 'zap', 'flag'];
 
-function Act({ icon, label, onClick, tone }) {
+function Act({ icon, label, onClick, tone, testId }) {
   const [h, setH] = React.useState(false);
+  const muted = tone === 'muted';
   return (
-    <button type="button" aria-label={label} title={label} onClick={onClick} onPointerEnter={() => setH(true)} onPointerLeave={() => setH(false)}
-      style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: 8, cursor: 'pointer', background: h ? 'var(--surface-press)' : 'transparent', color: tone === 'danger' && h ? 'var(--danger-ink)' : 'var(--text-muted)' }}>
+    <button type="button" aria-label={label} title={label} onClick={onClick} data-testid={testId} onPointerEnter={() => setH(true)} onPointerLeave={() => setH(false)}
+      style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: 8, cursor: muted ? 'help' : 'pointer', background: h ? 'var(--surface-press)' : 'transparent', color: tone === 'danger' && h ? 'var(--danger-ink)' : muted ? 'var(--text-subtle)' : 'var(--text-muted)' }}>
       <span style={{ display: 'flex', transform: h ? 'scale(1.08)' : 'none', transition: 'transform var(--dur-fast) var(--ease-spring)' }}><Icon name={icon} size={15} /></span>
     </button>
   );
@@ -30,7 +31,7 @@ export function Reaction({ icon, count, mine = false, onClick }) {
 }
 
 export function ChatMessage({ author, time, text, children, members = [], meId, onMention, tone = 'default', continued = false, edited = false, pinned = false,
-  status = 'sent', reactions = [], onReact, onPin, editor, replies, onReplies, attachments = [], activity, actions = true, onReply, onEdit, onDelete, onAuthor, highlighted = false, style }) {
+  status = 'sent', reactions = [], onReact, onPin, editor, replies, onReplies, attachments = [], activity, actions = true, onReply, onEdit, onDelete, editLabel = 'Edit', locked = false, lockedLabel = 'Edit window closed', onLocked, onAuthor, highlighted = false, style }) {
   const [h, setH] = React.useState(false);
   const [picker, setPicker] = React.useState(false);
   const agent = author.kind === 'agent';
@@ -94,8 +95,10 @@ export function ChatMessage({ author, time, text, children, members = [], meId, 
           <Act icon="smile-plus" label="Add reaction" onClick={() => setPicker((p) => !p)} />
           {onPin && <Act icon="pin" label={pinned ? 'Unpin' : 'Pin'} onClick={onPin} />}
           <Act icon="reply" label="Reply in thread" onClick={onReply} />
-          {author.self && <Act icon="pencil" label="Edit" onClick={onEdit} />}
-          {author.self && <Act icon="trash-2" label="Delete" tone="danger" onClick={onDelete} />}
+          {/* Past the edit window, one muted lock replaces Edit and Delete and explains why when clicked. */}
+          {author.self && !locked && <Act icon="pencil" label={editLabel} onClick={onEdit} testId="msg-edit" />}
+          {author.self && !locked && <Act icon="trash-2" label="Delete" tone="danger" onClick={onDelete} testId="msg-delete" />}
+          {author.self && locked && <Act icon="lock" label={lockedLabel} tone="muted" onClick={onLocked} testId="msg-edit-locked" />}
           {picker && (
             <div role="menu" aria-label="Pick a reaction" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, display: 'flex', gap: 2, padding: 4, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)', animation: 'ag-rise var(--dur-fast) var(--ease-out)', zIndex: 5 }}>
               {PICK.map((ic) => <Act key={ic} icon={ic} label={ic.replace('circle-', '')} onClick={() => { onReact && onReact(ic); setPicker(false); }} />)}

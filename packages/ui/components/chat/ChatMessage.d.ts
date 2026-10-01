@@ -43,6 +43,12 @@ export interface ChatMessageProps {
   onReply?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  /** Label for the Edit action, e.g. with the time left to edit. */
+  editLabel?: string;
+  /** The author can no longer edit or delete: Edit and Delete become one muted lock that calls `onLocked`. */
+  locked?: boolean;
+  lockedLabel?: string;
+  onLocked?: () => void;
   onAuthor?: () => void;
   /** Jumped-to / search hit */
   highlighted?: boolean;

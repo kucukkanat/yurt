@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { joinRoom, selfId } from 'trystero';
+import { joinRoom as joinNostr, selfId } from 'trystero';
+import { joinRoom as joinTorrent } from '@trystero-p2p/torrent';
 import { RTCPeerConnection } from 'werift';
-import { WorkspacePeer, agentKey, keyFromPhrase, LEGACY_TRYSTERO, type WsTransport, type Ev, type PeerStore, type JoinRoom, type KeyPair, type AgentBody } from '@yurt/protocol';
+import { WorkspacePeer, agentKey, keyFromPhrase, LEGACY_TRYSTERO, signalingOf, type WsTransport, type Ev, type PeerStore, type JoinRoom, type KeyPair, type AgentBody } from '@yurt/protocol';
 import { WS_DIR, BLOB_DIR, saveConfig, type Config } from './config';
 import type { AgentHost } from './agents';
 import { log } from './log';
@@ -54,7 +55,10 @@ export class Workspaces {
     const p = new WorkspacePeer({
       code, kp: this.kp, selfId, creator: w.creator, isBridge: true, transport: w.transport ?? LEGACY_TRYSTERO,
       // Relay workspaces are Nostr-only for the bridge: files come from Blossom, and it never joins calls.
-      joinRoom: (w.transport ?? LEGACY_TRYSTERO).kind === 'trystero' ? (joinRoom as unknown as JoinRoom) : undefined,
+      // Members only meet over the workspace's own signaling method, so pick the matching strategy.
+      joinRoom: (w.transport ?? LEGACY_TRYSTERO).kind === 'trystero'
+        ? ((signalingOf(w.transport ?? LEGACY_TRYSTERO).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom)
+        : undefined,
       store: fileStore,
       // No third-party TURN: it would see who the bridge connects to. The browser is usually on the same machine.
       rtc: { rtcPolyfill: RTCPeerConnection },
@@ -65,6 +69,8 @@ export class Workspaces {
       },
       onPeers: () => this.changed(),
       onCreator: (pub) => { w.creator = pub; saveConfig(this.cfg); },
+      // A key rotation: keep the newest key, which opens every earlier one, so the config matches the app's.
+      onKey: (key) => { if (w.transport?.kind === 'nostr') { w.transport = { ...w.transport, key }; saveConfig(this.cfg); } },
       onJoinError: (d) => log('warn', 'p2p', 'join error in ' + code + ': ' + JSON.stringify(d).slice(0, 300)),
       onError: (msg) => log('error', 'relay', code + ': ' + msg),
     });

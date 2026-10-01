@@ -33,7 +33,7 @@ export function makeEvent<B>(kp: KeyPair, f: EventFields<B>): Ev<B> {
   return { ...base, id, sig: sign(kp.sec, id) };
 }
 
-const EV_TYPES: ReadonlySet<string> = new Set<EvType>(['ws.create', 'profile', 'ch.create', 'ch.update', 'msg', 'edit', 'del', 'react', 'pin', 'role', 'ban', 'agent', 'approve']);
+const EV_TYPES: ReadonlySet<string> = new Set<EvType>(['ws.create', 'profile', 'ch.create', 'ch.update', 'msg', 'edit', 'del', 'react', 'pin', 'role', 'ban', 'agent', 'approve', 'rekey']);
 const optStr = (x: unknown) => x === undefined || typeof x === 'string';
 
 /** Structural check for untrusted input: the fields reduce and sortEvents rely on have the right types. */

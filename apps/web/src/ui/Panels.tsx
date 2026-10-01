@@ -62,6 +62,25 @@ function Profile({ id }: { id: string }) {
   const app = useApp.getState();
   const p = personFor(state, peer, id, identity.pub);
   const me = identity.pub;
+  // Relay workspaces rotate the key on ban, which can't be undone, so the ban asks for a second click.
+  const relayed = peer?.transport.kind === 'nostr';
+  const [confirmBan, setConfirmBan] = useState(false);
+  const ban = () => {
+    setConfirmBan(false);
+    const e = app.publish(code, { t: 'ban', b: { target: p.pub, on: true } });
+    const pids = peer?.peerIdsFor([p.pub]) || [];
+    pids.forEach((pid) => (peer?.room?.getPeers()[pid] as RTCPeerConnection | undefined)?.close());
+    if (!relayed) {
+      app.toast({ title: p.name + ' is banned', description: 'All their messages are hidden and they’re disconnected.', actionLabel: 'Undo', onAction: () => e && app.publish(code, { t: 'ban', b: { target: p.pub, on: false } }) });
+      return;
+    }
+    try {
+      peer?.rotate();
+      app.toast({ tone: 'success', title: p.name + ' was removed', description: 'The workspace key was rotated: they can’t read anything new, and old invite links no longer work.' });
+    } catch (err) {
+      app.toast({ tone: 'danger', title: 'Banned, but the key wasn’t rotated', description: err instanceof Error ? err.message : String(err), duration: 10_000 });
+    }
+  };
   const iAmCreator = state?.creator === me;
   const iAmAdmin = !!state?.admins.has(me);
   const code = route.code!;
@@ -107,12 +126,10 @@ function Profile({ id }: { id: string }) {
             {p.admin && <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'role', b: { target: p.pub, admin: false } })}>Remove admin</Button>}
             {p.banned
               ? <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'ban', b: { target: p.pub, on: false } })}>Unban</Button>
-              : <Button size="sm" variant="danger" iconLeft="ban" onClick={() => {
-                  const e = app.publish(code, { t: 'ban', b: { target: p.pub, on: true } });
-                  const pids = peer?.peerIdsFor([p.pub]) || [];
-                  pids.forEach((pid) => (peer?.room?.getPeers()[pid] as RTCPeerConnection | undefined)?.close());
-                  app.toast({ title: p.name + ' is banned', description: 'Their new messages are dropped by every member.', actionLabel: 'Undo', onAction: () => e && app.publish(code, { t: 'ban', b: { target: p.pub, on: false } }) });
-                }}>Ban</Button>}
+              : relayed && !confirmBan
+                ? <Button size="sm" variant="danger" iconLeft="ban" data-testid="ban-button" onClick={() => setConfirmBan(true)}>Ban</Button>
+                : <Button size="sm" variant="danger" iconLeft="ban" data-testid={relayed ? 'ban-confirm' : 'ban-button'} onClick={ban}>{relayed ? 'Ban and rotate key' : 'Ban'}</Button>}
+            {relayed && confirmBan && <span data-testid="ban-warning" style={{ flexBasis: '100%', fontSize: 12.5, color: 'var(--text-subtle)' }}>They keep what they’ve already read. Everyone else moves to a new key; old invite links stop working.</span>}
           </div>
         </div>
       )}

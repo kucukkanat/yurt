@@ -12,10 +12,11 @@ Version 1. All code in `packages/protocol`.
 - Workspace id: 8 chars from `ABCDEFGHJKMNPQRSTVWXYZ23456789`, shown as `K7QX-2MPD`. It is **not a secret** and can't be used to join.
 - Workspace key `wk`: 32 random bytes made at creation. Every secret below derives from it (see [Keys](#keys)).
 - Each workspace has a **transport**, chosen at creation and fixed: `trystero` (events travel peer to peer; history lives only on members' devices) or `nostr` (events are end-to-end encrypted and stored on relays; see [Nostr transport](#nostr-transport)).
-- Invites are links only: `…/#/w/<id>/k/<key>` (Trystero) or `…/#/w/<id>/k/<key>/n/<relays>` (Nostr), optionally followed by `/o/<creator pub>`. `<key>` is `wk` in base64url; `<relays>` is a URI-encoded comma list, or `-` for the defaults. Links without a valid key are refused.
+- Invites are links only: `…/#/w/<id>/k/<key>[/s/<method>,<urls>]` (Trystero) or `…/#/w/<id>/k/<key>/n/<relays>` (Nostr), optionally followed by `/o/<creator pub>`. `<key>` is `wk` in base64url; `<relays>` is a URI-encoded comma list, or `-` for the defaults (`wss://nos.lol`). Links without a valid key, or with an unknown signaling method, are refused.
+- `/s/` is a Trystero workspace's **signaling**: how members find each other. `<method>` is `nostr` (Nostr relays) or `torrent` (WebSocket BitTorrent trackers), followed by optional server URLs (none = the strategy's built-in public servers). New workspaces default to `nostr,wss://nos.lol`; absent means `nostr` with Trystero's built-in relays (older links). Members only meet over the same method and a shared server, so it belongs to the workspace, not to each member.
 - `/o/` pins the creator: joiners take the creator from the link instead of trusting the first `ws.create` they see, so a forged or backdated `ws.create` can't make someone else the creator. Links without it fall back to trust on first use.
 - The key lives only in the `#` fragment, which browsers never send to a server. On load the app keeps the invite in memory and removes it from the address bar and history (`history.replaceState`), so it can't end up in synced browser history.
-- WebRTC room (Trystero, Nostr signaling strategy): `appId = HKDF(wk, "app")`, `roomId = HKDF(wk, "room")`, `password = HKDF(wk, "room-pw")`. Nothing in the signaling identifies the app or the workspace, and the room can't be found or joined without the key.
+- WebRTC room (Trystero, using the workspace's signaling; relay workspaces signal calls over their own relays): `appId = HKDF(wk, "app")`, `roomId = HKDF(wk, "room")`, `password = HKDF(wk, "room-pw")`. Nothing in the signaling identifies the app or the workspace, and the room can't be found or joined without the key.
 - **Legacy workspaces** (created before keys) have only the code: `appId = "yurt.p2p.v1"`, `password = code`, `roomId = sha256("yurt-room:" + code)[0:24]`. That's brute-forceable from public relay traffic (~39 bits), so they keep working for existing members but can't be joined anew; the app asks members to recreate them.
 - Handshake (`onPeerHandshake`): each side sends `{pub, sig}` where `sig = sign("yurt-hs:" + code + ":" + selfId + ">" + remotePeerId)`. The receiver verifies against its own ids and rejects banned keys.
 
@@ -46,6 +47,7 @@ Every change is an immutable, signed event:
 | `ban` | `{target, on}` | Admins ban non-admins; only the creator bans an admin; never the creator or self. **All** of a banned key's events are ignored whatever their timestamps (so backdating can't slip past a ban), connected peers are dropped, and it fails the handshake. Un-ban restores them. |
 | `agent` | `{id, name, handle, runtime, model?, replyIn, removed?}` | Declares one of the author's agents. |
 | `approve` | `{req, option}` | Owner's answer to an agent permission request (private, `to` = owner). |
+| `rekey` | `{epoch, keys, history}` | Relay workspaces: replaces the workspace key (see [Key rotation](#key-rotation)). Counts when its author has ever been made an admin (or is the creator) and isn't banned; the earliest `(ts, id)` wins an epoch. |
 
 State is `reduce(events)`: roles and bans are computed first, then the remaining events are applied in `(ts, id)` order, skipping banned authors. Every peer with the same events computes the same state. Events must be well formed (string fields, integer `ts`, known `t`) and bodies are treated as untrusted: a malformed field is ignored, and no single event can abort the reduction. Messages in `dm:`/`adm:` channels must be addressed (`to`) to the other party and written by one of them; approvals count only from the owner (no `ag`).
 
@@ -107,6 +109,21 @@ Nostr workspaces keep attachments on [Blossom](https://github.com/hzrd149/blosso
 - **Reference.** The message's `FileRef` carries `blob: {key, hash, servers}` next to `id = sha256(plaintext)`. It travels inside the encrypted event, so only people who can read the message can fetch and open the file; DM files stay within the pair.
 - **Download.** `GET /<hash>` from the listed servers in turn (with `t=get` auth for servers that want it), each with a 60 s timeout, abandoning bodies larger than a sealed 25 MB file. The ciphertext must hash to `hash`, decrypt under `key`, and the plaintext must hash to `id`, so a server can't substitute content. Malformed references from other members are ignored.
 
+### Key rotation
+
+Banning someone in a relay workspace also rotates the workspace key, so they can't read anything posted afterwards.
+
+- **Chain.** A workspace's keys form a chain: the invite key, then one key per `rekey`. Each device rebuilds its chain from the key it holds plus the rekeys in its log; nothing else is stored.
+- **Rekey body.** The admin picks a fresh random key `wk'` and publishes `{epoch: n+1, keys, history}`:
+  - `keys[pub] = seal(pair(adminSec, pub; salt = current key), "yurt-rekey-v1", wk')` for every remaining member (`members(state)`: everyone with a profile who isn't banned, plus the admin).
+  - `history = seal(enc(wk'), "yurt-rekey-history-v1", JSON([{key, epoch}…]))`: every earlier key, so whoever holds `wk'` can read the whole history.
+- **Publishing.** The rekey is sent under the key it replaces, so current members receive it, and under `wk'`, so someone who joins later with an invite carrying `wk'` finds it (and through `history`, every earlier key).
+- **Adopting.** A member opens its entry with the pair key salted by any key it holds, and accepts `wk'` only if `wk'` opens `history`. It then listens on the tags of every key it holds (fetching new tags' history in full) and writes with the key of the highest-epoch valid rekey it can open. Keys from rekeys that don't count are still used for reading, which is harmless.
+- **Concurrent rotations.** If two admins rotate at once, the earliest `(ts, id)` rekey wins the epoch for writing. The loser's key still reads, so nothing either wrote is lost.
+- **Removed.** A member who can't open a valid rekey newer than its write key is locked out (`WorkspacePeer.lockedOut`). The app says so; the fix is a fresh invite link.
+- **WebRTC.** The call room's credentials derive from the write key, so a rotation also moves calls to a room the removed member can't find.
+- **Limits.** Nothing takes back what a removed member already read or downloaded, and relays keep old ciphertext. Unbanning doesn't restore access; send a new invite. Rotation isn't used in Trystero workspaces, where a ban already stops all delivery.
+
 ### Threat model
 
 **A relay operator** sees IP addresses, when events arrive, coarse size buckets, backdated `created_at`, the workspace tag, inbox tags that receive private events, and throwaway pubkeys (one per session, one per private copy). It does **not** see the id or key, names, channels, contents, member identities, or which inboxes talk to each other, beyond what arrival timing suggests.
@@ -117,10 +134,10 @@ Nostr workspaces keep attachments on [Blossom](https://github.com/hzrd149/blosso
 
 **Signaling relays and STUN/TURN servers** (WebRTC: always in Trystero workspaces, only during opted-in calls in Nostr ones) see IP addresses and connection timing. Signaling topics derive from the key and don't identify Yurt. TURN is off by default; the bridge never uses it. STUN servers (Trystero's defaults) see your IP address whenever a room is joined.
 
-**Members** see everything in the workspace, and each other's IP addresses while in the same WebRTC room. They can tell which inboxes receive private events and, by opening the outer wrapper, who the pair is, but never the contents. DM files only go to the pair.
+**Members** see everything in the workspace while they're members, and each other's IP addresses while in the same WebRTC room. A removed member keeps what it already had, but nothing written after its removal's key rotation. They can tell which inboxes receive private events and, by opening the outer wrapper, who the pair is, but never the contents. DM files only go to the pair.
 
 **Known limits.**
-- Removing someone doesn't revoke the key. A banned member's events are ignored, but they can still decrypt what's posted afterwards. Key rotation on ban is future work.
+- Removal is forward-only: a removed member keeps everything from before its ban, and the relays keep the old ciphertext. A member who never published a profile when a rotation happens isn't among the recipients and needs a new invite.
 - Relays see arrival times and IP addresses; use a VPN or Tor to hide the latter.
 - The kinds `4344`/`24344` are specific to Yurt, so a relay can tell that *some* Yurt workspace uses it, though not which or whose.
 - Relays can drop or withhold events. Use several; clients publish to all of them. Retention is up to each relay's and Blossom server's policy: a file can disappear even though its message remains.

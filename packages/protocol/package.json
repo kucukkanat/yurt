@@ -22,8 +22,10 @@
     "nostr-tools": "^2.25.2"
   },
   "devDependencies": {
+    "@trystero-p2p/torrent": "0.25.4",
     "@types/ws": "^8.18.2",
     "@vitest/coverage-v8": "2",
+    "bittorrent-tracker": "^11.2.3",
     "trystero": "~0.25.4",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",

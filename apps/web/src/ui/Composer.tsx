@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { IconButton, Kbd, MemberRow, Tag } from '@yurt/ui';
+import { editLeft, EDIT_CLOSED } from '../lib/editWindow';
 import { useApp } from '../store';
 import type { Person } from '../model';
 
@@ -61,7 +62,7 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
       const s = useApp.getState();
       const st = s.route.code ? s.states[s.route.code] : undefined;
       const ids = st && s.route.ch ? st.channelMsgs.get(s.route.ch) || [] : [];
-      for (let i = ids.length - 1; i >= 0; i--) { const m = st!.msgs.get(ids[i])!; if (m.a === s.identity?.pub && !m.ag && !m.deleted) { if (Date.now() - m.ts < 15 * 60 * 1000) { e.preventDefault(); useApp.setState({ editing: m.id }); } break; } }
+      for (let i = ids.length - 1; i >= 0; i--) { const m = st!.msgs.get(ids[i])!; if (m.a === s.identity?.pub && !m.ag && !m.deleted) { e.preventDefault(); if (editLeft(m.ts, Date.now()) > 0) useApp.setState({ editing: m.id }); else s.toast({ ...EDIT_CLOSED, title: 'Your last message can’t be edited anymore', duration: 6000 }); break; } }
     }
   };
   const onPaste = (e: React.ClipboardEvent) => {

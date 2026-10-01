@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   keyFromPhrase, newRecoveryPhrase, newWorkspaceKey, isWorkspaceKey, workspaceKeys, seal, open,
-  inviteHash, parseInvite, parseRelays, newNostrTransport, newTrysteroTransport, isLegacy, padSize, DEFAULT_RELAYS, LEGACY_TRYSTERO,
+  inviteHash, parseInvite, parseRelays, newNostrTransport, newTrysteroTransport, signalingOf, isLegacy, padSize, DEFAULT_RELAYS, LEGACY_TRYSTERO,
 } from '../src';
 
 const A = keyFromPhrase(newRecoveryPhrase());
@@ -70,6 +70,23 @@ describe('seal', () => {
 });
 
 describe('invite', () => {
+  it('carries a WebRTC workspace’s signaling, and leaves the default out', () => {
+    const torrent = { code: 'K7QX2MPD', transport: newTrysteroTransport({ kind: 'torrent', urls: ['wss://t.example', 'ws://127.0.0.1:8000'] }) };
+    expect(inviteHash(torrent)).toContain('/s/');
+    expect(parseInvite(inviteHash(torrent))).toEqual(torrent);
+    const builtIn = { code: 'K7QX2MPD', transport: newTrysteroTransport({ kind: 'torrent', urls: [] }) };
+    expect(parseInvite(inviteHash(builtIn))).toEqual(builtIn);
+    const nostrDefault = newTrysteroTransport({ kind: 'nostr', urls: [] });
+    expect(nostrDefault).not.toHaveProperty('signal');
+    expect(inviteHash({ code: 'K7QX2MPD', transport: nostrDefault })).not.toContain('/s/');
+    expect(signalingOf(nostrDefault)).toEqual({ kind: 'nostr', urls: [] });
+    expect(signalingOf(newNostrTransport(['wss://r.example']))).toEqual({ kind: 'nostr', urls: ['wss://r.example'] });
+  });
+
+  it('refuses a link with an unknown signaling method', () => {
+    expect(parseInvite('#/w/K7QX2MPD/k/' + newWorkspaceKey() + '/s/carrier-pigeon')).toBeNull();
+  });
+
   it('round-trips a Trystero invite, key included', () => {
     const inv = { code: 'K7QX2MPD', transport: newTrysteroTransport() };
     const h = inviteHash(inv);

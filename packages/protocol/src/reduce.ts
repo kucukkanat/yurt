@@ -9,6 +9,8 @@ export interface Msg {
   reactions: Record<string, string[]>; // icon → reactor keys ("pub" or "pub/agentId"); null-prototype, so any icon is a safe key
   replies: string[];
 }
+/** A rekey that counts: by someone who has been an admin and isn't banned. Earliest (ts, id) wins an epoch. */
+export interface ValidRekey { id: string; a: string; ts: number; epoch: number; keys: Record<string, string>; history: string }
 export interface Channel { id: string; name: string; topic: string; ts: number; a: string }
 export interface Agent extends AgentBody { owner: string; ts: number }
 export interface Profile extends ProfileBody { ts: number }
@@ -26,13 +28,14 @@ export interface WsState {
   channelMsgs: Map<string, string[]>;  // top-level messages per channel, chronological
   pins: Map<string, Set<string>>;
   approvals: Map<string, string>;      // req → optionId
+  rekeys: ValidRekey[];                // chronological
 }
 
 export const agentKey = (owner: string, id: string) => owner + '/' + id;
 export const reactorKey = (e: Pick<Ev, 'a' | 'ag'>) => (e.ag ? agentKey(e.a, e.ag) : e.a);
 
 export function emptyState(ws: string): WsState {
-  return { ws, name: '', creator: null, admins: new Set(), bans: new Set(), channels: new Map(), profiles: new Map(), agents: new Map(), msgs: new Map(), channelMsgs: new Map(), pins: new Map(), approvals: new Map() };
+  return { ws, name: '', creator: null, admins: new Set(), bans: new Set(), channels: new Map(), profiles: new Map(), agents: new Map(), msgs: new Map(), channelMsgs: new Map(), pins: new Map(), approvals: new Map(), rekeys: [] };
 }
 
 // Bodies are attacker-controlled JSON, so every field is read through these: wrong types are ignored, never coerced.
@@ -101,11 +104,16 @@ export function reduce(ws: string, events: Ev[], opts: { creator?: string | null
   // Roles and bans first, so a ban removes everything its target ever wrote: authors pick their own
   // timestamps, so "events after the ban" would let a banned key backdate its way back in.
   for (const e of evs) if (e.t === 'role' || e.t === 'ban') guarded(() => authority(s, e));
+  // Rekeys stay valid if their author is later demoted: members already moved to that key, and
+  // voiding it would put everyone back on an older key a banned member still holds.
+  const everAdmins = new Set(s.creator ? [s.creator] : []);
+  for (const e of evs) if (e.t === 'role' && e.a === s.creator && obj(e.b)?.admin === true) { const t = str(obj(e.b)?.target); if (t) everAdmins.add(t); }
   const approves: Ev[] = [];
   for (const e of evs) {
     if (s.bans.has(e.a) || e.t === 'role' || e.t === 'ban') continue;
     // Approvals are checked against the request message, which may sort after the answer when clocks disagree.
     if (e.t === 'approve') approves.push(e);
+    else if (e.t === 'rekey') guarded(() => { const r = parseRekey(e); if (r && everAdmins.has(e.a)) s.rekeys.push(r); });
     else guarded(() => apply(s, e));
   }
   const reqOwners = new Map<string, Set<string>>();
@@ -117,6 +125,17 @@ export function reduce(ws: string, events: Ev[], opts: { creator?: string | null
     if (req && option !== undefined && !e.ag && reqOwners.get(req)?.has(e.a)) s.approvals.set(req, option);
   }
   return s;
+}
+
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/** A rekey event's body, validated; undefined if malformed. Authority is checked separately. */
+export function parseRekey(e: Ev): ValidRekey | undefined {
+  const b = obj(e.b), keys = obj(b?.keys), history = str(b?.history);
+  if (!b || !keys || history === undefined || !Number.isSafeInteger(b.epoch) || (b.epoch as number) < 1) return;
+  const clean: Record<string, string> = Object.create(null);
+  for (const [pub, k] of Object.entries(keys)) if (HEX64.test(pub) && typeof k === 'string') clean[pub] = k;
+  return { id: e.id, a: e.a, ts: e.ts, epoch: b.epoch as number, keys: clean, history };
 }
 
 // Every member reduces the same log, so an event that throws would break the workspace for all of

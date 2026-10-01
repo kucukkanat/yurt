@@ -37,6 +37,9 @@ export interface LinkHost {
  * room, which also carries files and huddles. Nostr stores them encrypted on relays, with files
  * on Blossom; a Nostr workspace uses WebRTC only for opted-in voice and video.
  */
+/** Every workspace key a member holds (epoch null = not yet known), and the one new events use. */
+export interface LinkKeys { readonly all: readonly { key: string; epoch: number | null }[]; readonly write: string }
+
 export interface DataLink {
   /** Who is online, keyed by a link-specific id. Every entry's `pub` is authenticated. */
   readonly presence: ReadonlyMap<string, Presence>;
@@ -46,6 +49,8 @@ export interface DataLink {
   setPresence(p: Presence): void;
   /** Relay links: each configured relay → connected. */
   relayStatus?(): ReadonlyMap<string, boolean>;
+  /** Relay links: the workspace keys changed (a rotation). Read with all of them, write with `write`. */
+  setKeys?(keys: LinkKeys): void;
   onPeerJoin?(peerId: string, pub: string): void;
   onPeerLeave?(peerId: string): void;
   leave(): void;

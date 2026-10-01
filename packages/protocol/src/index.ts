@@ -10,3 +10,4 @@ export * from './seal';
 export * from './invite';
 export * from './transport';
 export * from './blossom';
+export * from './rekey';

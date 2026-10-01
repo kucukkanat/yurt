@@ -2,7 +2,7 @@ import type { BlobRef } from './blossom';
 export type EvType =
   | 'ws.create' | 'profile' | 'ch.create' | 'ch.update'
   | 'msg' | 'edit' | 'del' | 'react' | 'pin'
-  | 'role' | 'ban' | 'agent' | 'approve';
+  | 'role' | 'ban' | 'agent' | 'approve' | 'rekey';
 
 /** A signed, immutable workspace event. Everything in a workspace is a log of these. */
 export interface Ev<B = any> {
@@ -64,6 +64,12 @@ export interface ProfileBody { name: string; handle: string }
 export interface ChannelBody { id: string; name: string; topic?: string }
 export interface RoleBody { target: string; admin: boolean }
 export interface BanBody { target: string; on: boolean }
+/**
+ * Relay workspaces: an admin replaces the workspace key (after a ban). `keys` maps each remaining
+ * member's pubkey to the new key sealed with the admin↔member pair key; `history` seals every earlier
+ * key under the new one, so whoever holds the new key can still read the whole history.
+ */
+export interface RekeyBody { epoch: number; keys: Record<string, string>; history: string }
 export interface ReactBody { target: string; icon: string; on: boolean }
 export interface PinBody { target: string; on: boolean }
 export interface EditBody { target: string; text: string }

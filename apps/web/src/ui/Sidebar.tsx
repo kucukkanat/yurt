@@ -115,7 +115,7 @@ export function Sidebar() {
             <div data-testid="ws-online" style={{ padding: '6px 10px 8px', font: '400 11.5px/1.4 var(--font-mono)', color: 'var(--text-subtle)' }}>{others ? others + (others === 1 ? ' other member' : ' other members') + ' online' : 'No other members online'}</div>
             <Row onClick={() => { setMenu(false); setDialog('invite'); }}><Icon name="user-plus" size={16} /><span>Invite people</span></Row>
             <Row onClick={() => { setMenu(false); setDialog('channel'); }}><Icon name="hash" size={16} /><span>New channel</span></Row>
-            <Row testId="menu-connection" onClick={() => { setMenu(false); setDialog('connection'); }}><Icon name="globe" size={16} /><span>Connection</span></Row>
+            <Row testId="menu-connection" onClick={() => { setMenu(false); setDialog('connection'); }}><Icon name="globe" size={16} /><span>Network settings</span></Row>
             <Row onClick={() => { setMenu(false); setLeaving(true); }}><Icon name="log-out" size={16} /><span style={{ color: 'var(--danger-ink)' }}>Leave workspace</span></Row>
           </div>
         )}

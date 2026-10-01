@@ -1,12 +1,13 @@
-import type { Ev, FileRef, MsgBody } from './types';
+import type { Ev, FileRef, MsgBody, RekeyBody } from './types';
 import { makeEvent, verifyEvent, visibleTo, MAX_FILE_BYTES, type EventFields } from './events';
-import { reduce, type WsState } from './reduce';
+import { reduce, members, parseRekey, type WsState, type ValidRekey } from './reduce';
+import { buildKeyring, makeRekey, type Keyring } from './rekey';
 import { APP_ID, roomIdFor } from './codes';
 import { sign, verify, type KeyPair } from './crypto';
 import { workspaceKeys } from './seal';
 import { downloadFile } from './blossom';
-import { LEGACY_TRYSTERO, type WsTransport } from './invite';
-import type { DataLink, LinkHost, Presence } from './transport';
+import { LEGACY_TRYSTERO, signalingOf, type WsTransport } from './invite';
+import type { DataLink, LinkHost, LinkKeys, Presence } from './transport';
 import { TrysteroData } from './transports/trystero';
 import { NostrData } from './transports/nostr';
 
@@ -51,12 +52,14 @@ export interface WorkspacePeerOpts {
   transport?: WsTransport;
   /**
    * WebRTC room. Required for Trystero, which carries events, files and huddles over it. Relay
-   * workspaces use it only for voice and video, and only when given (the user's opt-in).
+   * workspaces use it only for voice and video, and only when given (the user's opt-in). Must be the
+   * Trystero strategy named by `signalingOf(transport).kind`.
    */
   joinRoom?: JoinRoom;
   store: PeerStore;
   creator?: string | null;
-  rtc?: Record<string, unknown>;   // turnConfig / rtcConfig / rtcPolyfill / relayConfig
+  /** This device's WebRTC config: turnConfig / rtcConfig / rtcPolyfill. Signaling servers come from the transport. */
+  rtc?: Record<string, unknown>;
   isBridge?: boolean;
   /** Relay workspaces leave the WebRTC room after it's been unneeded this long. Default 60 s. */
   roomIdleMs?: number;
@@ -72,6 +75,8 @@ export interface WorkspacePeerOpts {
   onJoinError?(d: unknown): void;
   /** Failures the user should hear about: relays refusing an event, a failed save or download. */
   onError(msg: string): void;
+  /** Relay workspaces: the key new events are written with changed (a rotation); invite links should use it. */
+  onKey?(key: string): void;
 }
 
 const hsMsg = (code: string, from: string, to: string) => `yurt-hs:${code}:${from}>${to}`;
@@ -153,6 +158,56 @@ export class WorkspacePeer implements LinkHost {
   /** Whether this peer may open WebRTC for voice and video. Relay workspaces only with the user's opt-in (joinRoom given). */
   get calls(): boolean { return !!this.o.joinRoom; }
 
+  /** Relay workspaces: the key chain (see rekey.ts); null for Trystero. */
+  private ring: Keyring | null = null;
+
+  /** The workspace key to put in invite links: after a rotation, the newest one. */
+  get inviteKey(): string | undefined { return this.ring?.write.key ?? this.transport.key; }
+
+  /** Removed from this workspace: banned, or the key was rotated without me, so nothing new reaches me. */
+  get lockedOut(): boolean { return this.state.bans.has(this.me) || !!this.ring?.lockedOut; }
+
+  /**
+   * Relay workspaces: replace the workspace key so removed members can't read anything new (they keep
+   * what they already had). Admins only. The rekey goes out under the old key, for current members,
+   * and the new one, for people who join later with a fresh invite.
+   */
+  rotate(): Ev<RekeyBody> {
+    // Apply what's pending first: a ban published a moment ago must already exclude its target.
+    this.recompute();
+    const ring = this.ring;
+    if (this.transport.kind !== 'nostr' || !ring) throw new Error('Only relay workspaces rotate their key.');
+    if (!this.state.admins.has(this.me)) throw new Error('Only admins can rotate the workspace key.');
+    if (ring.lockedOut) throw new Error('This device no longer holds the current workspace key.');
+    const e = makeEvent(this.o.kp, { ws: this.o.code, t: 'rekey', b: makeRekey(ring, this.o.kp, members(this.state)).body });
+    this.events.set(e.id, e);
+    this.save([e]);
+    this.queued.add(e.id);
+    this.fresh.push(e);
+    this.recompute(); // adopt the new key before sending, so the rekey itself goes out under both keys
+    this.data?.send([e]);
+    return e;
+  }
+
+  private linkKeys(ring: Keyring): LinkKeys {
+    return { all: [...ring.keys.values()].map((k) => ({ key: k.key, epoch: k.epoch })), write: ring.write.key };
+  }
+
+  private updateKeyring() {
+    const t = this.transport;
+    if (t.kind !== 'nostr') return;
+    const raw = [...this.events.values()].flatMap((e) => (e.t === 'rekey' ? [parseRekey(e)] : [])).filter((r): r is ValidRekey => !!r);
+    const before = this.ring;
+    const ring = (this.ring = buildKeyring(t.key, raw, this.state.rekeys, this.o.kp));
+    if (before && before.write.key === ring.write.key && before.keys.size === ring.keys.size) return;
+    this.data?.setKeys?.(this.linkKeys(ring));
+    if (before?.write.key !== ring.write.key) {
+      // The WebRTC room's credentials derive from the write key; rejoin on the new one when needed.
+      if (before && this.room) this.leaveMedia();
+      if (before) this.o.onKey?.(ring.write.key);
+    }
+  }
+
   async start() {
     const evs = await this.o.store.load(this.o.code);
     // Left while loading: opening a link or room now would leak it, since nobody will leave it again.
@@ -165,7 +220,9 @@ export class WorkspacePeer implements LinkHost {
       const mark = (await store.loadMark?.(code)) ?? 0;
       if (this.closed) return;
       const saveMark = (sec: number) => { store.saveMark?.(code, sec).catch((err: unknown) => this.error(`Couldn't save the sync mark: ${errMsg(err)}`)); };
-      this.data = new NostrData(this, { key: t.key, relays: t.relays, mark, saveMark });
+      const ring = this.ring;
+      if (!ring) throw new Error('keyring missing after the first recompute'); // unreachable: recompute builds it
+      this.data = new NostrData(this, { keys: this.linkKeys(ring), relays: t.relays, mark, saveMark });
       if (this.o.joinRoom) this.roomTimer = setInterval(() => this.syncRoom(), Math.min(5_000, this.o.roomIdleMs ?? 5_000));
     } else {
       const room = this.joinMedia();
@@ -185,11 +242,14 @@ export class WorkspacePeer implements LinkHost {
     if (!joinRoom) return null;
     const t = this.transport;
     // Keyed workspaces derive every room credential from the 256-bit key; only legacy ones use the code.
-    const k = t.key ? workspaceKeys(t.key) : null;
+    const key = t.kind === 'nostr' ? this.inviteKey : t.key;
+    const signal = signalingOf(t);
+    const k = key ? workspaceKeys(key) : null;
     const config = {
       appId: k?.app ?? APP_ID, password: k?.password ?? code, ...(this.o.rtc || {}),
-      // Relay workspaces signal over their own relays, so no other relay learns anything about them.
-      ...(t.kind === 'nostr' ? { relayConfig: { urls: [...t.relays] } } : {}),
+      // Signaling servers belong to the workspace (members must share them); relay workspaces use
+      // their own relays, so no other relay learns anything about them. Empty = strategy defaults.
+      ...(signal.urls.length ? { relayConfig: { urls: [...signal.urls] } } : {}),
     };
     const room = joinRoom(config, k?.room ?? roomIdFor(code), {
       onJoinError: (d: unknown) => this.o.onJoinError?.(d),
@@ -409,6 +469,7 @@ export class WorkspacePeer implements LinkHost {
     this.state = reduce(this.o.code, [...this.events.values()], { creator: this.o.creator });
     if (!hadCreator && this.state.creator) { this.o.creator = this.state.creator; this.o.onCreator?.(this.state.creator); }
     this.dropBanned();
+    this.updateKeyring();
     const fresh = this.fresh;
     this.fresh = [];
     this.o.onState?.(this.state, fresh);

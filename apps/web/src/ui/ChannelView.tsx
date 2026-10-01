@@ -170,6 +170,9 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
           </button>
         )}
       </header>
+      {peer?.lockedOut && <div role="status" data-testid="removed-banner" style={{ padding: '6px 16px', background: 'var(--surface-raised)', borderBottom: '1px solid var(--border-subtle)', font: '500 13px/1.3 var(--font-body)', color: 'var(--text-body)' }}>
+        You no longer receive new messages here: you were removed, or your invite predates a key change. Ask a member for a new invite link.
+      </div>}
       {rec && !rec.transport.key && <div role="status" data-testid="legacy-warning" style={{ padding: '6px 16px', background: 'var(--surface-raised)', borderBottom: '1px solid var(--border-subtle)', font: '500 13px/1.3 var(--font-body)', color: 'var(--text-body)' }}>
         This workspace uses a short code anyone on the network can guess. Create a new workspace to keep conversations private.
       </div>}

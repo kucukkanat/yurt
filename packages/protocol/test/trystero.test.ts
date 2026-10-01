@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { RTCPeerConnection } from 'werift';
 import {
-  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, newTrysteroTransport, dmChannel, sha256Buf, makeEvent, LEGACY_TRYSTERO,
+  WorkspacePeer, keyFromPhrase, newRecoveryPhrase, newNostrTransport, newTrysteroTransport, signalingOf, dmChannel, sha256Buf, makeEvent, LEGACY_TRYSTERO,
   type Ev, type JoinRoom, type KeyPair, type PeerStore, type WsTransport, type HuddleState, type WsState,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
@@ -44,13 +44,15 @@ interface DeviceOpts {
 /** One simulated device: its own Trystero instance (own selfId), store and peer. */
 async function device(kp: KeyPair, opts: DeviceOpts = {}) {
   vi.resetModules();
-  const { joinRoom, selfId } = await import('trystero');
+  const transport = opts.transport ?? keyed;
+  // Like the app: the workspace's signaling method picks the Trystero strategy.
+  const { joinRoom, selfId } = signalingOf(transport).kind === 'torrent' ? await import('@trystero-p2p/torrent') : await import('trystero');
   const store = memStore(opts.blobs);
   if (opts.events) await store.save(opts.events);
   const { loading } = opts;
   const blobsSeen: string[] = [];
   const p = new WorkspacePeer({
-    code: opts.code ?? CODE, kp, selfId, transport: opts.transport ?? keyed, roomIdleMs: 1_500, fetchMs: opts.fetchMs,
+    code: opts.code ?? CODE, kp, selfId, transport, roomIdleMs: 1_500, fetchMs: opts.fetchMs,
     store: loading ? { ...store, load: async (ws) => { await loading; return store.load(ws); } } : store,
     // `webrtc: false` is a relay workspace without the user's opt-in: no WebRTC at all.
     joinRoom: opts.webrtc === false ? undefined : (joinRoom as unknown as JoinRoom),
@@ -295,5 +297,32 @@ describe('relay workspaces open WebRTC only on demand', () => {
     await new Promise((r) => setTimeout(r, 2000));
     expect(quiet.room).toBeNull();
     expect(caller.peers.size).toBe(0);
+  }, 60_000);
+});
+
+describe('BitTorrent signaling', () => {
+  it('connects members through the workspace’s own trackers', async () => {
+    const { default: Server } = await import('bittorrent-tracker/server'); // server only: the client needs a native WebRTC build
+    const tracker = new Server({ udp: false, http: true, ws: true, stats: false });
+    await new Promise<void>((r) => tracker.listen(0, '127.0.0.1', r));
+    const sockets = new Set<import('node:net').Socket>();
+    tracker.http?.on('connection', (sock) => sockets.add(sock));
+    const addr = tracker.http?.address();
+    const url = `ws://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
+    try {
+      const transport = newTrysteroTransport({ kind: 'torrent', urls: [url] });
+      const { p: a } = await device(A, { transport });
+      const { p: b } = await device(B, { transport });
+      await until(() => a.peers.size === 1 && b.peers.size === 1, 20_000, 'peers over torrent signaling');
+      a.publish({ t: 'ch.create', b: { id: 'general', name: 'general' } });
+      a.publish({ t: 'msg', ch: 'general', b: { text: 'via trackers' } });
+      await until(() => texts(b).includes('via trackers'), 20_000, 'message');
+    } finally {
+      // The torrent strategy keeps tracker sockets in a module-wide pool that outlives rooms, and the
+      // tracker only closes once its sockets do: drop them from the server side.
+      open.splice(0).forEach((p) => p.leave());
+      sockets.forEach((sock) => sock.destroy());
+      await new Promise<void>((r) => tracker.close(() => r()));
+    }
   }, 60_000);
 });

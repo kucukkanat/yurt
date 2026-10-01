@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useReducer, useState } from 'react';
 import { Dialog, Button, Input, Tabs, Switch, Checkbox, Radio, Icon, Kbd, Avatar } from '@yurt/ui';
-import { formatCode, fingerprint, dmChannel, agentDmChannel, liveAgents, inviteHash, parseRelays, parseServers, type WsTransport } from '@yurt/protocol';
+import { formatCode, fingerprint, dmChannel, agentDmChannel, liveAgents, inviteHash, parseRelays, parseServers, signalingOf, type WsTransport, type SignalKind } from '@yurt/protocol';
 import { useApp, type Settings } from '../store';
 import { useCurrent, roster } from '../model';
 import { bridge } from '../lib/bridge';
@@ -9,7 +9,11 @@ import type { NetSettings } from '../lib/net';
 /** Entries of a free-text URL list that `parse` rejects, so a typo is reported instead of silently dropped. */
 const rejected = (text: string, parse: (s: string) => string[]) => text.split(/[\s,]+/).filter((t) => t && !parse(t).length);
 const listError = (bad: string[], what: string) => (bad.length ? 'Not ' + what + ': ' + bad.join(', ') : undefined);
-const pickNet = (s: Settings): NetSettings => ({ turn: s.turn, turnUrls: s.turnUrls, turnUser: s.turnUser, turnPass: s.turnPass, relays: s.relays, webrtc: s.webrtc, blossom: s.blossom });
+const pickNet = (s: Settings): NetSettings => ({ turn: s.turn, turnUrls: s.turnUrls, turnUser: s.turnUser, turnPass: s.turnPass, relays: s.relays, webrtc: s.webrtc, blossom: s.blossom, signalKind: s.signalKind, signalUrls: s.signalUrls });
+type Turn = Pick<NetSettings, 'turn' | 'turnUrls' | 'turnUser' | 'turnPass'>;
+const pickTurn = (s: Turn): Turn => ({ turn: s.turn, turnUrls: s.turnUrls, turnUser: s.turnUser, turnPass: s.turnPass });
+const sameTurn = (a: Turn, b: Turn) => a.turn === b.turn && a.turnUrls === b.turnUrls && a.turnUser === b.turnUser && a.turnPass === b.turnPass;
+const MODE_LABEL = { webrtc: 'Peer-to-peer (WebRTC)', nostr: 'Nostr relays' } as const;
 
 export function Dialogs() {
   const dialog = useApp((s) => s.dialog);
@@ -87,7 +91,7 @@ function ChannelDialog({ onClose }: { onClose: () => void }) {
 }
 
 function InviteDialog({ onClose }: { onClose: () => void }) {
-  const { route, state, rec } = useCurrent();
+  const { route, state, rec, peer } = useCurrent();
   const code = route.code!;
   const transport = rec?.transport;
   const title = 'Invite to ' + (state?.name || rec?.name);
@@ -99,7 +103,8 @@ function InviteDialog({ onClose }: { onClose: () => void }) {
       </div>
     </Dialog>
   );
-  const link = location.origin + location.pathname + inviteHash({ code, transport: { ...transport, key: transport.key }, creator: rec?.creator ?? undefined });
+  // A rotation may have landed before the record caught up; the peer always knows the current key.
+  const link = location.origin + location.pathname + inviteHash({ code, transport: { ...transport, key: peer?.inviteKey ?? transport.key }, creator: rec?.creator ?? undefined });
   const description = transport.kind === 'nostr'
     ? 'This link contains the key that decrypts the workspace. Share it privately: anyone with it can read the whole history.'
     : 'This link contains the workspace key. Share it privately: anyone with it can join and sync the history.';
@@ -206,7 +211,10 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [reset, setReset] = useState(false);
   // Only the network fields: saving them must never write back a stale copy of the other tabs' settings.
   const [net, setNet] = useState(() => pickNet(settings));
-  const [netErr, setNetErr] = useState<{ relays?: string; blossom?: string }>({});
+  const [netErr, setNetErr] = useState<{ relays?: string; blossom?: string; signal?: string }>({});
+  // Open on the mode of the workspace you're in: those are the settings you most likely came for.
+  const current = useCurrent().rec;
+  const [mode, setMode] = useState<'webrtc' | 'nostr'>(current?.transport.kind === 'nostr' ? 'nostr' : 'webrtc');
   const perm = 'Notification' in window ? Notification.permission : 'denied';
   return (
     <Dialog open onClose={onClose} title="Settings" width={600}>
@@ -259,35 +267,39 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
         {tab === 'network' && (
           <form data-testid="network-form" onSubmit={async (e) => {
             e.preventDefault();
-            const errs = { relays: listError(rejected(net.relays, parseRelays), 'a ws:// or wss:// relay'), blossom: listError(rejected(net.blossom, parseServers), 'an http(s) server') };
+            const errs = mode === 'webrtc'
+              ? { signal: listError(rejected(net.signalUrls, parseRelays), 'a ws:// or wss:// server') }
+              : { relays: listError(rejected(net.relays, parseRelays), 'a ws:// or wss:// relay'), blossom: listError(rejected(net.blossom, parseServers), 'an http(s) server') };
             setNetErr(errs);
-            if (errs.relays || errs.blossom) return;
+            if (Object.values(errs).some(Boolean)) return;
             const n = await app.updateSettings(net);
             app.toast({ tone: 'success', title: 'Network settings saved', duration: 5000,
-              description: (n ? 'Reconnected ' + n + (n === 1 ? ' workspace' : ' workspaces') + ' with them. ' : '') + 'Relay and file server defaults apply to new relay workspaces; each workspace keeps its own under Connection.' });
-          }} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
-            <NetSection testId="network-nostr" title="Nostr (relay workspaces)" intro="Encrypted relay workspaces keep history on Nostr relays and files on Blossom servers. These are the defaults for new ones; change an existing workspace under its menu → Connection.">
-              <Input label="Nostr relays" optional placeholder="wss://relay.example.com" data-testid="settings-relays" error={netErr.relays}
-                hint="Relays for new relay workspaces. WebRTC also uses them to find peers. Leave empty for the defaults."
-                value={net.relays} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNet({ ...net, relays: e.target.value })} />
-              <Input label="Blossom file servers" optional placeholder="https://blossom.example.com" data-testid="blossom-servers" error={netErr.blossom}
-                hint="Where relay workspaces keep encrypted files. Leave empty for the defaults."
-                value={net.blossom} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNet({ ...net, blossom: e.target.value })} />
-              <Switch checked={net.webrtc} onChange={(on) => setNet({ ...net, webrtc: on })} label="Allow WebRTC for voice and video in relay workspaces" data-testid="webrtc-switch"
-                description="Off: relay workspaces use only Nostr, and calls are unavailable. On: calls connect directly, so people in a call see each other’s IP addresses." />
-            </NetSection>
-            <NetSection testId="network-webrtc" title="WebRTC (peer-to-peer workspaces and calls)" intro="Some networks block direct connections. A TURN relay forwards encrypted traffic when that happens, but whoever runs it sees your IP address and who you talk to. Off by default.">
-              <Radio name="turn" value="default" data-testid="turn-default" label="Free public relay" description="Open Relay by Metered. Its operator sees your IP address and who you connect to (not content). Rate-limited." checked={net.turn === 'default'} onChange={() => setNet({ ...net, turn: 'default' })} />
-              <Radio name="turn" value="custom" data-testid="turn-custom" label="My own TURN server" checked={net.turn === 'custom'} onChange={() => setNet({ ...net, turn: 'custom' })} />
-              {net.turn === 'custom' && <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', paddingLeft: 'var(--space-8)' }}>
-                <Input label="TURN URLs" placeholder="turn:turn.example.com:3478" data-testid="turn-urls" value={net.turnUrls} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNet({ ...net, turnUrls: e.target.value })} />
-                <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-                  <Input label="Username" data-testid="turn-user" value={net.turnUser} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNet({ ...net, turnUser: e.target.value })} />
-                  <Input label="Credential" type="password" data-testid="turn-pass" value={net.turnPass} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNet({ ...net, turnPass: e.target.value })} />
-                </div>
-              </div>}
-              <Radio name="turn" value="off" data-testid="turn-off" label="Direct only (STUN)" checked={net.turn === 'off'} onChange={() => setNet({ ...net, turn: 'off' })} />
-            </NetSection>
+              description: (n ? 'Reconnected ' + n + (n === 1 ? ' workspace' : ' workspaces') + '. ' : '') + 'Defaults apply to new workspaces; each workspace keeps its own under its menu → Network settings.' });
+          }} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+            <span style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>Defaults for new workspaces, and how this device connects. A workspace’s own settings are in its menu → Network settings.</span>
+            <Tabs items={[{ id: 'webrtc', label: MODE_LABEL.webrtc }, { id: 'nostr', label: MODE_LABEL.nostr }]} value={mode} onChange={(m: string) => { setMode(m === 'nostr' ? 'nostr' : 'webrtc'); setNetErr({}); }} fullWidth size="sm" label="Network mode" />
+            {mode === 'webrtc' ? (
+              <NetSection testId="network-webrtc" title={MODE_LABEL.webrtc} intro="Members connect browser to browser; history lives only on members’ devices.">
+                <SubHead>Signaling for new workspaces</SubHead>
+                <SignalFields prefix="settings" kind={net.signalKind} urls={net.signalUrls} error={netErr.signal}
+                  onKind={(k) => setNet({ ...net, signalKind: k })} onUrls={(u) => setNet({ ...net, signalUrls: u })} />
+                <SubHead>This device</SubHead>
+                <TurnFields value={net} onChange={(t) => setNet({ ...net, ...t })} />
+              </NetSection>
+            ) : (
+              <NetSection testId="network-nostr" title={MODE_LABEL.nostr} intro="History is end-to-end encrypted on Nostr relays and files on Blossom servers, so messages arrive even when nobody else is online.">
+                <SubHead>Defaults for new workspaces</SubHead>
+                <Input label="Nostr relays" placeholder="wss://nos.lol" data-testid="settings-relays" error={netErr.relays}
+                  hint="ws:// or wss:// URLs, separated by spaces or commas. Empty means wss://nos.lol."
+                  value={net.relays} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNet({ ...net, relays: e.target.value })} />
+                <Input label="Blossom file servers" optional placeholder="https://blossom.example.com" data-testid="blossom-servers" error={netErr.blossom}
+                  hint="Where encrypted files go. Leave empty for the defaults."
+                  value={net.blossom} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNet({ ...net, blossom: e.target.value })} />
+                <SubHead>This device</SubHead>
+                <CallsSwitch on={net.webrtc} onChange={(on) => setNet({ ...net, webrtc: on })} />
+                {net.webrtc && <TurnFields value={net} onChange={(t) => setNet({ ...net, ...t })} />}
+              </NetSection>
+            )}
             <div><Button type="submit" variant="primary" data-testid="network-save">Save network settings</Button></div>
           </form>
         )}
@@ -364,7 +376,7 @@ function JumpDialog({ onClose }: { onClose: () => void }) {
 
 function NetSection({ testId, title, intro, children }: { testId: string; title: string; intro: string; children: React.ReactNode }) {
   return (
-    <section data-testid={testId} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', paddingTop: 'var(--space-4)', borderTop: 'var(--border-width) solid var(--border-subtle)' }}>
+    <section data-testid={testId} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <h3 style={{ margin: 0, font: 'var(--weight-bold) var(--fs-body-lg)/1.2 var(--font-display)', color: 'var(--text-strong)' }}>{title}</h3>
       <span style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>{intro}</span>
       {children}
@@ -372,60 +384,119 @@ function NetSection({ testId, title, intro, children }: { testId: string; title:
   );
 }
 
-/** Per-workspace transport details; relay workspaces can edit their relays and file servers here. */
+const SubHead = ({ children }: { children: React.ReactNode }) => (
+  <span style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-caption)', fontWeight: 'var(--weight-semibold)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>{children}</span>
+);
+
+/** TURN is a device setting: it applies to every peer-to-peer workspace and to calls. */
+function TurnFields({ value: v, onChange }: { value: Turn; onChange: (t: Turn) => void }) {
+  const set = (p: Partial<Turn>) => onChange({ ...pickTurn(v), ...p });
+  return (
+    <div data-testid="turn-fields" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+      <span style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>Some networks block direct connections. A TURN relay forwards encrypted traffic when that happens, but whoever runs it sees your IP address and who you talk to.</span>
+      <Radio name="turn" value="off" data-testid="turn-off" label="Direct only (STUN)" description="No relay in the middle. Fails on some strict networks." checked={v.turn === 'off'} onChange={() => set({ turn: 'off' })} />
+      <Radio name="turn" value="default" data-testid="turn-default" label="Free public TURN relay" description="Open Relay by Metered. Its operator sees your IP address and who you connect to (not content). Rate-limited." checked={v.turn === 'default'} onChange={() => set({ turn: 'default' })} />
+      <Radio name="turn" value="custom" data-testid="turn-custom" label="My own TURN server" checked={v.turn === 'custom'} onChange={() => set({ turn: 'custom' })} />
+      {v.turn === 'custom' && <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', paddingLeft: 'var(--space-8)' }}>
+        <Input label="TURN URLs" placeholder="turn:turn.example.com:3478" data-testid="turn-urls" value={v.turnUrls} onChange={(e: React.ChangeEvent<HTMLInputElement>) => set({ turnUrls: e.target.value })} />
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <Input label="Username" data-testid="turn-user" value={v.turnUser} onChange={(e: React.ChangeEvent<HTMLInputElement>) => set({ turnUser: e.target.value })} />
+          <Input label="Credential" type="password" data-testid="turn-pass" value={v.turnPass} onChange={(e: React.ChangeEvent<HTMLInputElement>) => set({ turnPass: e.target.value })} />
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+/** How peer-to-peer members find each other (Trystero signaling). */
+function SignalFields({ prefix, kind, urls, error, onKind, onUrls }: { prefix: string; kind: SignalKind; urls: string; error?: string; onKind: (k: SignalKind) => void; onUrls: (u: string) => void }) {
+  return (
+    <div data-testid={prefix + '-signal'} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+      <Radio name={prefix + '-signal-kind'} value="nostr" data-testid={prefix + '-signal-nostr'} label="Nostr relays" description="Connection offers travel through Nostr relays." checked={kind === 'nostr'} onChange={() => onKind('nostr')} />
+      <Radio name={prefix + '-signal-kind'} value="torrent" data-testid={prefix + '-signal-torrent'} label="BitTorrent trackers" description="Connection offers travel through WebSocket BitTorrent trackers." checked={kind === 'torrent'} onChange={() => onKind('torrent')} />
+      <Input label={kind === 'nostr' ? 'Signaling relays' : 'Trackers'} optional data-testid={prefix + '-signal-urls'} error={error}
+        placeholder={kind === 'nostr' ? 'wss://nos.lol' : 'wss://tracker.openwebtorrent.com'}
+        hint={kind === 'nostr' ? 'ws:// or wss:// URLs, separated by spaces or commas. Empty means wss://nos.lol.' : 'ws:// or wss:// URLs. Empty means the built-in public trackers.'}
+        value={urls} onChange={(e: React.ChangeEvent<HTMLInputElement>) => onUrls(e.target.value)} />
+    </div>
+  );
+}
+
+function CallsSwitch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  return <Switch checked={on} onChange={onChange} label="Voice and video calls" data-testid="webrtc-switch"
+    description="Calls are the only thing relay workspaces send over WebRTC. Off keeps this device on Nostr alone; on lets you join calls, and people in a call see each other’s IP addresses." />;
+}
+
+/** A workspace's own network settings, for its mode only: signaling for peer-to-peer, relays and files for Nostr. */
 function ConnectionDialog({ onClose }: { onClose: () => void }) {
   const { route, state, rec, peer } = useCurrent();
   const app = useApp.getState();
-  // Relay sockets open and drop without an app event, so poll their status while the dialog is up.
+  const settings = useApp((x) => x.settings);
+  // Relay sockets and peers come and go without an app event, so poll their status while the dialog is up.
   const [, refresh] = useReducer((x: number) => x + 1, 0);
   useEffect(() => { const t = setInterval(refresh, 1500); return () => clearInterval(t); }, []);
   const t = rec?.transport;
+  const sig = t ? signalingOf(t) : { kind: 'nostr' as const, urls: [] };
   const [relays, setRelays] = useState(t?.kind === 'nostr' ? t.relays.join(', ') : '');
   const [blossom, setBlossom] = useState(rec?.blossom?.join(', ') ?? '');
-  const [err, setErr] = useState<{ relays?: string; blossom?: string }>({});
+  const [sigKind, setSigKind] = useState<SignalKind>(sig.kind);
+  const [sigUrls, setSigUrls] = useState(sig.urls.join(', '));
+  const [turn, setTurn] = useState<Turn>(() => pickTurn(settings));
+  const [calls, setCalls] = useState(settings.webrtc);
+  const [err, setErr] = useState<{ relays?: string; blossom?: string; signal?: string }>({});
   const [busy, setBusy] = useState(false);
   const code = route.code;
   if (!rec || !t || !code) return null;
-  const title = 'Connection · ' + (state?.name || rec.name);
+  const nostr = t.kind === 'nostr';
+  const title = 'Network settings · ' + (state?.name || rec.name);
   const Line = ({ k, v, testId }: { k: string; v: React.ReactNode; testId: string }) => (
     <div style={{ display: 'flex', gap: 'var(--space-3)', fontSize: 'var(--fs-body-sm)' }}>
       <span style={{ width: 96, flexShrink: 0, color: 'var(--text-subtle)' }}>{k}</span>
       <span data-testid={testId} style={{ color: 'var(--text-body)', minWidth: 0 }}>{v}</span>
     </div>
   );
-  if (t.kind === 'trystero') return (
-    <Dialog open onClose={onClose} title={title} width={520} description="Members connect browser to browser. History lives only on members’ devices.">
+  const save = async () => {
+    const errs = nostr
+      ? { relays: listError(rejected(relays, parseRelays), 'a ws:// or wss:// relay') ?? (parseRelays(relays).length ? undefined : 'Add at least one ws:// or wss:// relay.'), blossom: listError(rejected(blossom, parseServers), 'an http(s) server') }
+      : { signal: listError(rejected(sigUrls, parseRelays), 'a ws:// or wss:// server') };
+    setErr(errs);
+    if (Object.values(errs).some(Boolean)) return;
+    setBusy(true);
+    try {
+      // Device settings first, so the workspace reconnects once with everything in place.
+      const device = nostr ? { webrtc: calls, ...(calls ? turn : {}) } : turn;
+      if (!sameTurn(pickTurn(settings), { ...pickTurn(settings), ...device }) || (nostr && calls !== settings.webrtc)) await app.updateSettings(device);
+      if (nostr) await app.updateConnection(code, { kind: 'nostr', relays: parseRelays(relays), blossom: parseServers(blossom) });
+      else {
+        const urls = parseRelays(sigUrls);
+        if (sigKind !== sig.kind || urls.join(',') !== sig.urls.join(',')) await app.updateConnection(code, { kind: 'trystero', signal: { kind: sigKind, urls } });
+      }
+    } catch (e) { setErr({ [nostr ? 'relays' : 'signal']: e instanceof Error ? e.message : String(e) }); return; }
+    finally { setBusy(false); }
+    app.toast({ tone: 'success', title: 'Network settings saved', description: 'Reconnected. Invite links now carry this workspace’s ' + (nostr ? 'relays.' : 'signaling.') });
+  };
+  const footer = <><Button variant="ghost" onClick={onClose}>Close</Button><Button variant="primary" loading={busy} onClick={save} data-testid="connection-save">Save and reconnect</Button></>;
+  if (!nostr) return (
+    <Dialog open onClose={onClose} title={title} width={560} footer={footer} description="Members connect browser to browser. History lives only on members’ devices.">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-        <Line k="Transport" v="Peer-to-peer (WebRTC)" testId="connection-kind" />
-        <Line k="Invite" testId="connection-legacy" v={t.key
-          ? 'Keyed: the invite link carries a 256-bit key, so the room can’t be guessed.'
-          : 'Legacy code-only workspace: anyone who guesses its short code can find the room. It can’t take new members.'} />
-        <span style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>TURN relays for hard networks are under Settings → Network → WebRTC.</span>
+        <Line k="Mode" v={MODE_LABEL.webrtc} testId="connection-kind" />
+        <Line k="Connected" testId="connection-peers" v={(peer?.peers.size ?? 0) + ((peer?.peers.size ?? 0) === 1 ? ' member right now' : ' members right now')} />
+        {!t.key && <Line k="Invite" testId="connection-legacy" v="Legacy code-only workspace: anyone who guesses its short code can find the room. It can’t take new members." />}
+        <SubHead>Signaling</SubHead>
+        <SignalFields prefix="ws" kind={sigKind} urls={sigUrls} error={err.signal} onKind={setSigKind} onUrls={setSigUrls} />
+        <span data-testid="connection-note" style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>
+          Members only find each other over the same method and at least one shared server. New invite links carry these; members who joined earlier keep theirs until they open a new link.
+        </span>
+        <SubHead>This device</SubHead>
+        <TurnFields value={turn} onChange={setTurn} />
       </div>
     </Dialog>
   );
   const status = peer?.relayStatus() ?? new Map<string, boolean>();
-  const save = async () => {
-    const list = parseRelays(relays);
-    const servers = parseServers(blossom);
-    const errs = {
-      relays: listError(rejected(relays, parseRelays), 'a ws:// or wss:// relay') ?? (list.length ? undefined : 'Add at least one ws:// or wss:// relay.'),
-      blossom: listError(rejected(blossom, parseServers), 'an http(s) server'),
-    };
-    setErr(errs);
-    if (errs.relays || errs.blossom) return;
-    setBusy(true);
-    try { await app.updateConnection(code, list, servers); }
-    catch (e) { setErr({ relays: e instanceof Error ? e.message : String(e) }); return; }
-    finally { setBusy(false); }
-    app.toast({ tone: 'success', title: 'Connection updated', description: 'Reconnected to ' + list.length + (list.length === 1 ? ' relay' : ' relays') + '. Invite links now carry them.' });
-  };
   return (
-    <Dialog open onClose={onClose} title={title} width={560}
-      description="Events are end-to-end encrypted and kept on Nostr relays; files on Blossom servers."
-      footer={<><Button variant="ghost" onClick={onClose}>Close</Button><Button variant="primary" loading={busy} onClick={save} data-testid="connection-save">Save and reconnect</Button></>}>
+    <Dialog open onClose={onClose} title={title} width={560} footer={footer} description="Events are end-to-end encrypted and kept on Nostr relays; files on Blossom servers.">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-        <Line k="Transport" v="Encrypted on Nostr relays" testId="connection-kind" />
+        <Line k="Mode" v={MODE_LABEL.nostr} testId="connection-kind" />
         <ul data-testid="connection-relay-list" aria-label="Relay status" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', margin: 0, padding: 'var(--space-2) var(--space-3)', listStyle: 'none', borderRadius: 'var(--radius-md)', background: 'var(--surface-sunken)', border: 'var(--border-width) solid var(--border-subtle)' }}>
           {t.relays.map((u) => {
             const on = status.get(u) === true;
@@ -438,13 +509,16 @@ function ConnectionDialog({ onClose }: { onClose: () => void }) {
             );
           })}
         </ul>
-        <Input label="Relays" placeholder="wss://relay.example.com" data-testid="connection-relays" error={err.relays} value={relays}
+        <Input label="Relays" placeholder="wss://nos.lol" data-testid="connection-relays" error={err.relays} value={relays}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRelays(e.target.value)} hint="ws:// or wss:// URLs, separated by spaces or commas." />
         <Input label="File servers (Blossom)" optional placeholder="https://blossom.example.com" data-testid="connection-blossom" error={err.blossom} value={blossom}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBlossom(e.target.value)} hint="Where your uploads in this workspace go. Leave empty to use Settings → Network, then the defaults." />
         <span data-testid="connection-note" style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>
-          Members only reach each other through relays they share, so keep at least one relay in common. Invite links carry this list, so new links update on their own; members who joined earlier keep their own list.
+          Members only reach each other through relays they share, so keep at least one relay in common. New invite links carry this list; members who joined earlier keep their own.
         </span>
+        <SubHead>This device</SubHead>
+        <CallsSwitch on={calls} onChange={setCalls} />
+        {calls && <TurnFields value={turn} onChange={setTurn} />}
       </div>
     </Dialog>
   );
