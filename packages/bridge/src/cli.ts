@@ -59,7 +59,7 @@ const c = server.pairingCode;
 console.log(`
   yurt bridge ${VERSION}
   Setup      ${url}
-  Pair code  ${c.slice(0, 3)} ${c.slice(3)}   (enter it in Yurt → Add agents)
+  Pair code  ${c.slice(0, 3)} ${c.slice(3)}   (enter it in Yurt → Settings → Agents & bridge)
   Data       ${HOME.replace(os.homedir(), '~')}
 `);
 log('info', 'bridge', 'listening on 127.0.0.1:' + server.boundPort);

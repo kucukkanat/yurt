@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
-import { newNostrTransport, newRecoveryPhrase } from '@yurt/protocol';
+import { newNostrTransport, newTrysteroTransport, newRecoveryPhrase } from '@yurt/protocol';
 import type { Workspaces } from '../src/workspaces';
 import type { Config } from '../src/config';
 import { tempDir, until } from './helpers';
@@ -53,6 +53,20 @@ describe('Workspaces ws.join updates', () => {
     expect(record('EEEEFFFF')?.transport).toEqual(edited);
     expect(ws.peers.get('EEEEFFFF')).not.toBe(before);
     expect(ws.peers.has('EEEEFFFF')).toBe(true);
+  });
+
+  it('moves a peer-to-peer workspace to edited signaling, and leaves an unchanged one alone', () => {
+    // Closed local ports: the peers never reach the network.
+    const p2p = newTrysteroTransport({ kind: 'nostr', urls: ['ws://127.0.0.1:9'] });
+    ws.join('GGGGHHHH', 'P2P', null, [], p2p);
+    const first = ws.peers.get('GGGGHHHH');
+    ws.join('GGGGHHHH', 'P2P', null, [], p2p);
+    expect(ws.peers.get('GGGGHHHH')).toBe(first);
+    // A workspace first joined without signaling (Trystero's defaults) must follow the app's later setting.
+    const trackers = { ...p2p, signal: { kind: 'torrent' as const, urls: ['ws://127.0.0.1:10'] } };
+    ws.join('GGGGHHHH', 'P2P', null, [], trackers);
+    expect(cfg.workspaces.find((w) => w.code === 'GGGGHHHH')?.transport).toEqual(trackers);
+    expect(ws.peers.get('GGGGHHHH')).not.toBe(first);
   });
 
   it('never changes the key or kind, and leaves the peer alone', () => {

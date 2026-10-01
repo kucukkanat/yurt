@@ -236,6 +236,9 @@ export const useApp = create<AppState>((set, get) => {
         reconciled = true;
         const mine = new Set(get().workspaces.map((w) => w.code));
         for (const w of state.workspaces) if (!mine.has(w.code)) bridge.send({ t: 'ws.leave', code: w.code });
+        // ...and re-send the rest with the app's current transport: the bridge only meets members over the
+        // workspace's own signaling or relays, which may have changed here while it was down.
+        for (const w of state.workspaces) if (mine.has(w.code)) get().setAgents(w.code, w.agents);
       });
       huddle.subscribe((v) => {
         set({ huddle: v });
@@ -462,6 +465,9 @@ export const useApp = create<AppState>((set, get) => {
         patchWs(code, { transport: change.signal.kind === 'nostr' && !change.signal.urls.length ? rest : { ...rest, signal: change.signal } });
       }
       await reconnect([code]);
+      // The bridge runs its own peer for this workspace: move it to the same signaling or relays.
+      const onBridge = get().bridgeState?.workspaces.find((w) => w.code === code);
+      if (onBridge) get().setAgents(code, onBridge.agents);
     },
   };
 });

@@ -116,7 +116,7 @@ function Overview({ s, send, go }: P & { go: (x: Section) => void }) {
         <div style={{ flex: 1, minWidth: 240, display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>Pairing code</span>
           <span style={{ font: '500 44px/1 var(--font-mono)', letterSpacing: '.08em', color: 'var(--text-strong)' }}>{code.slice(0, 3)} {code.slice(3)}</span>
-          <span style={{ fontSize: 13.5, color: 'var(--text-muted)' }}>In Yurt, open <b>Add agents</b> and type this. It changes after each use.</span>
+          <span style={{ fontSize: 13.5, color: 'var(--text-muted)' }}>In Yurt, open <b>Settings → Agents &amp; bridge</b> and type this. It changes after each use.</span>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button variant="primary" iconLeft="external-link" onClick={() => window.open(WEB_APP, '_blank')}>Open Yurt</Button>
@@ -310,7 +310,7 @@ function AgentEditor({ s, send, error, clearError, agent, onDone }: P & SaveAck 
 function WorkspacesView({ s, send }: P) {
   return (
     <>
-      <H1 sub="The bridge stays in these workspaces so your agents answer even with the Yurt tab closed. Add workspaces from Yurt → Add agents.">Workspaces</H1>
+      <H1 sub="The bridge stays in these workspaces so your agents answer even with the Yurt tab closed. Add workspaces from Yurt → Settings → (workspace) → Agents.">Workspaces</H1>
       {!s.workspaces.length && <CardBox><span style={{ fontSize: 14.5, color: 'var(--text-muted)' }}>None yet.</span></CardBox>}
       {s.workspaces.map((w) => (
         <CardBox key={w.code} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

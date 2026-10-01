@@ -29,6 +29,9 @@ const fileStore: PeerStore = {
   async saveMark(ws, sec) { fs.writeFileSync(path.join(WS_DIR, safe(ws) + '.mark'), String(sec), { mode: 0o600 }); },
 };
 
+/** The part of a transport members must share to meet: relays, or signaling (absent = Trystero's defaults). */
+const networkOf = (t: WsTransport) => (t.kind === 'nostr' ? { relays: t.relays } : { signal: t.signal ?? null });
+
 /** Headless peers: the bridge joins each workspace with the owner's key so agents answer with the browser closed. */
 export class Workspaces {
   peers = new Map<string, WorkspacePeer>();
@@ -118,15 +121,17 @@ export class Workspaces {
     this.stopping.delete(code);
     let w = this.cfg.workspaces.find((x) => x.code === code);
     if (!w) { w = { code, name, creator: creator || null, agents: [], transport }; this.cfg.workspaces.push(w); }
-    // Kind and key are fixed once known (only filled in for workspaces joined before transports existed);
-    // a relay workspace's relay list may be edited, which needs a fresh peer on the new relays.
+    // Kind and key are fixed once known (only filled in for workspaces joined before transports existed),
+    // but the app owns the rest: a relay list or signaling edited there needs a fresh peer on the new
+    // servers, or the bridge waits where no member ever looks. (Key rotations reach the bridge by itself.)
     const cur = w.transport;
-    const relaysEdited = transport?.kind === 'nostr' && cur?.kind === 'nostr' && transport.key === cur.key && transport.relays.join() !== cur.relays.join();
-    if (transport && (!cur || relaysEdited)) w.transport = transport;
+    const sameIdentity = !!transport && !!cur && transport.kind === cur.kind && transport.key === cur.key;
+    const edited = sameIdentity && JSON.stringify(networkOf(transport)) !== JSON.stringify(networkOf(cur));
+    if (transport && (!cur || edited)) w.transport = transport;
     w.agents = agents.filter((id) => this.cfg.agents.some((a) => a.id === id));
     if (creator && !w.creator) w.creator = creator;
     saveConfig(this.cfg);
-    if (relaysEdited) this.stop(code); // immediate, and clears any pending delayed stop
+    if (edited) this.stop(code); // immediate, and clears any pending delayed stop
     const running = this.peers.has(code);
     this.start(code);
     if (running) { this.announce(code); this.presence(code); } // a fresh peer announces after its log loads
