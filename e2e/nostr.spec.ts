@@ -75,8 +75,8 @@ test('the WebRTC switch enables calls in relay workspaces', async ({ browser }) 
   await page.getByText('Encrypted on Nostr relays').click();
   await page.getByRole('button', { name: 'Create workspace' }).click();
   await expect(page.getByTestId('huddle-button')).toBeDisabled();
-  await page.getByRole('button', { name: 'Settings' }).first().click();
-  await page.getByRole('tab', { name: 'Network' }).click();
+  await page.getByTestId('settings-button').click();
+  await page.getByTestId('settings-nav-connection').click();
   await page.getByTestId('webrtc-switch').click();
   await page.getByTestId('network-save').click();
   await page.getByRole('dialog').press('Escape');
@@ -105,48 +105,78 @@ async function openConnection(page: Page) {
   await page.getByTestId('menu-connection').click();
 }
 
-test('Network settings show one mode at a time, with nos.lol defaults, URL checks, and other tabs left alone', async ({ browser }) => {
+test('one Settings: a single button, "you" sections outside a workspace, device connection without mode tabs', async ({ browser }) => {
   const page = await (await browser.newContext()).newPage();
   await useLocalRelay(page);
   await onboard(page, 'Ed', 'Start chatting');
-  await page.getByRole('button', { name: 'Settings' }).first().click();
-  // The Network form is seeded when the dialog opens; a theme change after that must survive its save.
-  await page.getByRole('tab', { name: 'Preferences' }).click();
+  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(1);
+  await page.getByTestId('settings-button').click();
+  // Not in a workspace: only the "you" group.
+  for (const id of ['profile', 'identity', 'preferences', 'connection', 'agents']) await expect(page.getByTestId('settings-nav-' + id)).toBeVisible();
+  await expect(page.getByTestId('settings-nav-ws-general')).toHaveCount(0);
+  await page.getByTestId('settings-nav-preferences').click();
   await page.getByText('Light', { exact: true }).click();
-  await page.getByRole('tab', { name: 'Network', exact: true }).click();
-
-  // Not in a workspace yet: peer-to-peer first, and only its settings.
-  const webrtc = page.getByTestId('network-webrtc');
-  await expect(webrtc).toBeVisible();
-  await expect(page.getByTestId('network-nostr')).toHaveCount(0);
-  await expect(webrtc.getByTestId('settings-signal-nostr')).toBeChecked();
-  await expect(webrtc.getByTestId('settings-signal-urls')).toHaveValue('wss://nos.lol');
-  await expect(webrtc.getByTestId('turn-off')).toBeChecked();
-  await webrtc.getByTestId('settings-signal-torrent').click();
-  await expect(webrtc.getByTestId('settings-signal-urls')).toHaveAttribute('placeholder', 'wss://tracker.openwebtorrent.com');
-  await webrtc.getByTestId('settings-signal-nostr').click();
-
-  await page.getByRole('tab', { name: 'Nostr relays' }).click();
-  const nostr = page.getByTestId('network-nostr');
-  await expect(nostr).toBeVisible();
-  await expect(page.getByTestId('network-webrtc')).toHaveCount(0);
-  await expect(nostr.getByTestId('settings-relays')).toHaveValue(RELAY);
-  await expect(nostr.getByTestId('blossom-servers')).toHaveValue(BLOSSOM);
-  // TURN only matters for calls here, so it appears with them.
-  await expect(nostr.getByTestId('turn-fields')).toHaveCount(0);
-  await nostr.getByTestId('webrtc-switch').click();
-  await expect(nostr.getByTestId('turn-fields')).toBeVisible();
-  await nostr.getByTestId('webrtc-switch').click();
-
-  await nostr.getByTestId('settings-relays').fill('https://not-a-relay.example');
+  await page.getByTestId('settings-nav-connection').click();
+  const device = page.getByTestId('network-device');
+  await expect(device.getByRole('tab')).toHaveCount(0);
+  await expect(device.getByTestId('turn-off')).toBeChecked();
+  await expect(device.getByTestId('settings-relays')).toHaveCount(0);
+  await device.getByTestId('turn-default').click();
   await page.getByTestId('network-save').click();
-  await expect(page.getByText('Not a ws:// or wss:// relay: https://not-a-relay.example')).toBeVisible();
-  await nostr.getByTestId('settings-relays').fill(RELAY);
-  await page.getByTestId('network-save').click();
-  await expect(page.getByText('Network settings saved')).toBeVisible();
+  await expect(page.getByText('Connection settings saved')).toBeVisible();
+  // Saving the device connection leaves other sections' settings alone.
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  await page.reload();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.getByTestId('settings-nav-agents').click();
+  await expect(page.getByTestId('bridge-install')).toBeVisible(); // no bridge runs in the test
+});
+
+test('inside a workspace, Settings adds its own group for its mode, and the workspace menu jumps into it', async ({ browser }) => {
+  const page = await (await browser.newContext()).newPage();
+  await relayWorkspace(page, 'Lu');
+  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(1);
+  await expect(page.getByTestId('mode-chip').first()).toHaveText('Nostr relays');
+  await page.locator('[aria-haspopup="menu"]').click();
+  await page.getByTestId('menu-settings').click();
+  await expect(page.getByTestId('settings-section-ws-general')).toBeVisible();
+  await expect(page.getByTestId('ws-mode')).toContainText('fixed');
+  await expect(page.getByTestId('invite-link')).toHaveValue(/\/k\//);
+  await page.getByTestId('settings-nav-ws-network').click();
+  await expect(page.getByTestId('connection-kind')).toHaveText('Nostr relays');
+  await expect(page.getByTestId('ws-signal')).toHaveCount(0);
+  await expect(page.getByTestId('turn-fields')).toHaveCount(0); // device settings live under "you"
+  await page.getByTestId('settings-nav-ws-agents').click();
+  await expect(page.getByTestId('ws-agents-nobridge')).toBeVisible();
+  await page.getByTestId('settings-nav-ws-general').press('Escape');
+
+  // The sidebar's "Add agent" and your own row open the right sections.
+  await page.getByRole('button', { name: 'Add agent' }).first().click();
+  await expect(page.getByTestId('settings-section-ws-agents')).toBeVisible();
+  await page.keyboard.press('Escape'); // like a user: focus is already inside the dialog
+  await page.getByTestId('me-row').click();
+  await expect(page.getByTestId('settings-section-profile')).toBeVisible();
+  await page.keyboard.press('Escape'); // like a user: focus is already inside the dialog
+
+  // Leaving happens in General, with a confirmation.
+  await page.locator('[aria-haspopup="menu"]').click();
+  await page.getByTestId('menu-leave').click();
+  await page.getByTestId('ws-leave').click();
+  await page.getByTestId('ws-leave-confirm').click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByLabel('Workspace name')).toBeVisible();
+});
+
+test('Settings on a narrow screen: list, section, back', async ({ browser }) => {
+  const page = await (await browser.newContext({ viewport: { width: 420, height: 800 } })).newPage();
+  await useLocalRelay(page);
+  await onboard(page, 'Mo', 'Start chatting');
+  // On a phone-sized screen the rail lives in the drawer.
+  await page.getByRole('button', { name: 'Open sidebar' }).click();
+  await page.getByTestId('settings-button').click();
+  await page.getByTestId('settings-nav-identity').click();
+  await expect(page.getByTestId('settings-section-identity')).toBeVisible();
+  await expect(page.getByTestId('settings-nav-profile')).toHaveCount(0);
+  await page.getByTestId('settings-back').click();
+  await expect(page.getByTestId('settings-nav-profile')).toBeVisible();
 });
 
 test('a relay workspace’s network settings show live relay status and edit relays; the invite link follows', async ({ browser }) => {
@@ -192,7 +222,7 @@ test('a peer-to-peer workspace’s network settings show only WebRTC: signaling 
   await expect(page.getByTestId('connection-relay-list')).toHaveCount(0);
   await expect(page.getByTestId('ws-signal-nostr')).toBeChecked();
   await expect(page.getByTestId('ws-signal-urls')).toHaveValue('wss://nos.lol');
-  await expect(page.getByTestId('turn-fields')).toBeVisible();
+  await expect(page.getByTestId('turn-fields')).toHaveCount(0); // device settings live under "you"
 
   await page.getByTestId('ws-signal-torrent').click();
   await page.getByTestId('ws-signal-urls').fill('wss://tracker.example');
@@ -304,8 +334,9 @@ test('edit window: the Edit action counts down, then explains instead of doing n
 test('the tab icon shows unread messages on top of whatever favicon is set, and goes back when read', async ({ browser }) => {
   const a = await (await browser.newContext()).newPage();
   await relayWorkspace(a, 'Ida');
+  // Wait until nothing is decorated (relays connected, nothing unread): that's the page's own icon.
+  await expect.poll(() => a.locator('link[rel~="icon"]').getAttribute('href'), { timeout: 30_000 }).toMatch(/^data:image\/svg/);
   const original = await a.locator('link[rel~="icon"]').getAttribute('href');
-  expect(original).toMatch(/^data:image\/svg/);
   await a.getByRole('button', { name: 'Invite people' }).first().click();
   const link = await a.getByTestId('invite-link').inputValue();
   await a.getByTestId('invite-link').press('Escape');
@@ -377,4 +408,11 @@ test('the create step sets the new workspace’s own network settings for the ch
   await expect(page.getByTestId('connection-relays')).toHaveValue(`${RELAY}, ws://127.0.0.1:7779`);
   await expect(page.getByTestId('connection-blossom')).toHaveValue(BLOSSOM);
   await expect(page.getByTestId('ws-signal')).toHaveCount(0);
+  await page.getByTestId('connection-relays').press('Escape');
+
+  // The next workspace starts from what was used last in each mode.
+  await page.getByRole('button', { name: 'Create or join a workspace' }).click();
+  await expect(page.getByTestId('create-net-summary')).toHaveText('Signaling: BitTorrent trackers · wss://tracker.example');
+  await page.getByText('Encrypted on Nostr relays').click();
+  await expect(page.getByTestId('create-net-summary')).toHaveText(`Relays: ${RELAY}, ws://127.0.0.1:7779 · Files: ${BLOSSOM}`);
 });

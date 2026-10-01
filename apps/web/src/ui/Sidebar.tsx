@@ -1,33 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Icon, IconButton, Tooltip, Kbd, Badge, Avatar, DaemonStatus, Dialog, Button } from '@yurt/ui';
+import { Icon, IconButton, Tooltip, Kbd, Badge, Avatar, DaemonStatus } from '@yurt/ui';
 import { liveAgents, fingerprint, formatCode, agentDmChannel } from '@yurt/protocol';
 import { useApp } from '../store';
 import { useCurrent, unread, personFor, channelTitle, othersOnline } from '../model';
 import { HuddleDock } from './Huddle';
-
-function Row({ active, onClick, children, label, dim, testId }: { active?: boolean; onClick: () => void; children: React.ReactNode; label?: string; dim?: boolean; testId?: string }) {
-  const [h, setH] = useState(false);
-  return (
-    <button type="button" onClick={onClick} aria-current={active ? 'page' : undefined} aria-label={label} data-testid={testId}
-      onPointerEnter={() => setH(true)} onPointerLeave={() => setH(false)}
-      style={{ display: 'flex', alignItems: 'center', gap: 9, minHeight: 32, padding: '0 10px', border: 0, borderRadius: 8, width: '100%', cursor: 'pointer', font: 'inherit', fontSize: 14, textAlign: 'left', flexShrink: 0,
-        background: active ? 'var(--surface-press)' : h ? 'var(--surface-hover)' : 'transparent', color: active ? 'var(--text-strong)' : 'var(--text-muted)', opacity: dim && !active ? 0.6 : 1, transition: 'background var(--dur-instant)' }}>
-      {children}
-    </button>
-  );
-}
-
-function Section({ title, onAdd, addLabel, children }: { title: string; onAdd?: () => void; addLabel?: string; children: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px 4px 10px' }}>
-        <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)', lineHeight: '28px' }}>{title}</span>
-        {onAdd && <IconButton icon="plus" label={addLabel || 'Add'} size="sm" onClick={onAdd} />}
-      </div>
-      {children}
-    </div>
-  );
-}
+import { Row, Section } from './Nav';
 
 const initialsOf = (s: string) => s.split(/[\s-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || 'Y';
 
@@ -36,7 +13,7 @@ export function Rail() {
   const states = useApp((s) => s.states);
   const route = useApp((s) => s.route);
   const identity = useApp((s) => s.identity)!;
-  const { go, setDialog } = useApp.getState();
+  const { go, setDialog, openSettings } = useApp.getState();
   return (
     <nav aria-label="Workspaces" style={{ width: 64, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '14px 0 12px', background: 'var(--surface-page)', borderRight: '1px solid var(--border-subtle)' }}>
       <span aria-hidden="true" style={{ font: '700 15px/1 var(--font-display)', letterSpacing: '-0.05em', color: 'var(--text-strong)', padding: '4px 0 6px' }}>yurt</span>
@@ -61,7 +38,8 @@ export function Rail() {
       })}
       <Tooltip content="Create or join a workspace" placement="bottom"><IconButton icon="plus" label="Create or join a workspace" onClick={() => setDialog('workspace')} /></Tooltip>
       <span style={{ flex: 1 }} />
-      <Tooltip content="Settings" kbd="mod+," placement="top"><IconButton icon="settings" label="Settings" onClick={() => setDialog('settings')} /></Tooltip>
+      {/* The only Settings button: always here (in the drawer on narrow screens), inside a workspace or not. */}
+      <Tooltip content="Settings" kbd="mod+," placement="top"><IconButton icon="settings" label="Settings" data-testid="settings-button" onClick={() => openSettings()} /></Tooltip>
     </nav>
   );
 }
@@ -70,9 +48,8 @@ export function Sidebar() {
   const { route, state, rec, identity, peer } = useCurrent();
   const bridgeStatus = useApp((s) => s.bridgeStatus);
   const bridgeState = useApp((s) => s.bridgeState);
-  const { go, setDialog, leaveWorkspace } = useApp.getState();
+  const { go, setDialog, openSettings } = useApp.getState();
   const [menu, setMenu] = useState(false);
-  const [leaving, setLeaving] = useState(false);
   const me = identity.pub;
   const channels = useMemo(() => (state ? [...state.channels.values()].sort((a, b) => a.name.localeCompare(b.name)) : []), [state]);
   const dms = useMemo(() => (state ? [...state.channelMsgs.keys()].filter((k) => k.startsWith('dm:') && k.includes(me)) : []), [state, me]);
@@ -110,13 +87,16 @@ export function Sidebar() {
           <span style={{ flex: 1, minWidth: 0, font: '700 19px/1.1 var(--font-display)', letterSpacing: '-0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{wsName}</span>
           <Icon name="chevron-down" size={16} style={{ color: 'var(--text-subtle)' }} />
         </button>
+        <ModeChip relayed={relayed} onClick={() => openSettings('ws-network')} />
         {menu && (
           <div role="menu" onMouseLeave={() => setMenu(false)} style={{ position: 'absolute', top: 44, left: 0, right: 0, zIndex: 30, padding: 6, borderRadius: 14, background: 'var(--surface-raised)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-lg)', animation: 'ag-rise var(--dur-fast) var(--ease-out)' }}>
             <div data-testid="ws-online" style={{ padding: '6px 10px 8px', font: '400 11.5px/1.4 var(--font-mono)', color: 'var(--text-subtle)' }}>{others ? others + (others === 1 ? ' other member' : ' other members') + ' online' : 'No other members online'}</div>
             <Row onClick={() => { setMenu(false); setDialog('invite'); }}><Icon name="user-plus" size={16} /><span>Invite people</span></Row>
             <Row onClick={() => { setMenu(false); setDialog('channel'); }}><Icon name="hash" size={16} /><span>New channel</span></Row>
-            <Row testId="menu-connection" onClick={() => { setMenu(false); setDialog('connection'); }}><Icon name="globe" size={16} /><span>Network settings</span></Row>
-            <Row onClick={() => { setMenu(false); setLeaving(true); }}><Icon name="log-out" size={16} /><span style={{ color: 'var(--danger-ink)' }}>Leave workspace</span></Row>
+            {/* Shortcuts into the single Settings window. */}
+            <Row testId="menu-settings" onClick={() => { setMenu(false); openSettings('ws-general'); }}><Icon name="settings" size={16} /><span>Workspace settings</span></Row>
+            <Row testId="menu-connection" onClick={() => { setMenu(false); openSettings('ws-network'); }}><Icon name="globe" size={16} /><span>Network settings</span></Row>
+            <Row testId="menu-leave" onClick={() => { setMenu(false); openSettings('ws-general'); }}><Icon name="log-out" size={16} /><span style={{ color: 'var(--danger-ink)' }}>Leave workspace</span></Row>
           </div>
         )}
       </div>
@@ -136,7 +116,7 @@ export function Sidebar() {
           })}
           {!dms.length && <div style={{ padding: '4px 10px', fontSize: 13, color: 'var(--text-subtle)' }}>Press <Kbd keys="mod+k" size="sm" /> to message someone</div>}
         </Section>
-        <Section title="Your agents" onAdd={() => setDialog('agent')} addLabel="Add agent">
+        <Section title="Your agents" onAdd={() => openSettings('ws-agents')} addLabel="Add agent">
           {myAgents.map((a) => {
             const p = personFor(state, peer, a.owner + '/' + a.id, me);
             return chRow(agentDmChannel(me, a.id), a.name, <Avatar name={a.name} kind="agent" presence={p.presence} working={p.working} size={20} decorative cutout="var(--surface-sunken)" />);
@@ -145,18 +125,25 @@ export function Sidebar() {
         </Section>
       </nav>
       <HuddleDock />
-      <DaemonStatus status={daemon} version={bridgeState?.version} port={7717} agents={nAgents != null ? nAgents + (nAgents === 1 ? ' agent' : ' agents') : undefined} onClick={() => setDialog('bridge')} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 4px 0 6px', borderTop: '1px solid var(--border-subtle)' }}>
+      <DaemonStatus status={daemon} version={bridgeState?.version} port={7717} agents={nAgents != null ? nAgents + (nAgents === 1 ? ' agent' : ' agents') : undefined} onClick={() => openSettings('agents')} />
+      {/* You: opens your profile in Settings (the gear in the rail is the one Settings button). */}
+      <button type="button" data-testid="me-row" aria-label="Your profile and settings" onClick={() => openSettings('profile')}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 4px 0 6px', border: 0, borderTop: '1px solid var(--border-subtle)', background: 'none', cursor: 'pointer', textAlign: 'left', font: 'inherit' }}>
         <Avatar name={identity.name} self presence="online" size={30} cutout="var(--surface-sunken)" />
         <div style={{ flex: 1, lineHeight: 1.25, minWidth: 0 }}>
           <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-strong)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{identity.name}</div>
           <div style={{ font: '400 11px/1.3 var(--font-mono)', color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>@{identity.handle} · {fingerprint(me)}</div>
         </div>
-        <Tooltip content="Settings" kbd="mod+," placement="top"><IconButton icon="settings" label="Settings" size="sm" onClick={() => setDialog('settings')} /></Tooltip>
-      </div>
-      <Dialog open={leaving} onClose={() => setLeaving(false)} title={'Leave ' + wsName + '?'} width={440}
-        description={'This device forgets the workspace and its history. To come back you need an invite link; ' + (relayed ? 'history then comes back from the relays.' : 'history then syncs back from members who are online.')}
-        footer={<><Button variant="ghost" onClick={() => setLeaving(false)}>Stay</Button><Button variant="danger" iconLeft="log-out" onClick={() => { setLeaving(false); leaveWorkspace(code); }}>Leave workspace</Button></>} />
+      </button>
     </aside>
   );
+}
+
+/** Which network mode this workspace uses; fixed at creation. Clicking opens its network settings. */
+export function ModeChip({ relayed, onClick }: { relayed: boolean; onClick?: () => void }) {
+  const style: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)', alignSelf: 'flex-start', margin: '2px 0 0 10px', padding: '2px 8px', borderRadius: 'var(--radius-pill)', border: 'var(--border-width) solid var(--border-subtle)', background: 'var(--surface-card)', color: 'var(--text-muted)', font: '500 11.5px/1.4 var(--font-body)', cursor: onClick ? 'pointer' : 'default' };
+  const body = <><Icon name={relayed ? 'database' : 'users'} size={12} />{relayed ? 'Nostr relays' : 'Peer-to-peer'}</>;
+  return onClick
+    ? <button type="button" data-testid="mode-chip" onClick={onClick} title="Network mode (set when the workspace was created)" style={style}>{body}</button>
+    : <span data-testid="mode-chip" style={style}>{body}</span>;
 }

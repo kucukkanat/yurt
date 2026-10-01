@@ -1,19 +1,10 @@
-import React, { useEffect, useMemo, useReducer, useState } from 'react';
-import { Dialog, Button, Input, Tabs, Switch, Checkbox, Radio, Icon, Kbd, Avatar } from '@yurt/ui';
-import { formatCode, fingerprint, dmChannel, agentDmChannel, liveAgents, inviteHash, parseRelays, parseServers, signalingOf, DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, type WsTransport, type SignalKind } from '@yurt/protocol';
-import { useApp, defaultNewNet, type Settings } from '../store';
+import React, { useMemo, useState } from 'react';
+import { Dialog, Button, Input, Tabs, Switch, Radio, Icon, Kbd, Avatar } from '@yurt/ui';
+import { formatCode, dmChannel, agentDmChannel, liveAgents, parseRelays, parseServers, DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, type WsTransport, type SignalKind } from '@yurt/protocol';
+import { useApp } from '../store';
 import { useCurrent, roster } from '../model';
-import { bridge } from '../lib/bridge';
-import type { NetSettings } from '../lib/net';
-
-/** Entries of a free-text URL list that `parse` rejects, so a typo is reported instead of silently dropped. */
-const rejected = (text: string, parse: (s: string) => string[]) => text.split(/[\s,]+/).filter((t) => t && !parse(t).length);
-const listError = (bad: string[], what: string) => (bad.length ? 'Not ' + what + ': ' + bad.join(', ') : undefined);
-const pickNet = (s: Settings): NetSettings => ({ turn: s.turn, turnUrls: s.turnUrls, turnUser: s.turnUser, turnPass: s.turnPass, relays: s.relays, webrtc: s.webrtc, blossom: s.blossom, signalKind: s.signalKind, signalUrls: s.signalUrls });
-type Turn = Pick<NetSettings, 'turn' | 'turnUrls' | 'turnUser' | 'turnPass'>;
-const pickTurn = (s: Turn): Turn => ({ turn: s.turn, turnUrls: s.turnUrls, turnUser: s.turnUser, turnPass: s.turnPass });
-const sameTurn = (a: Turn, b: Turn) => a.turn === b.turn && a.turnUrls === b.turnUrls && a.turnUser === b.turnUser && a.turnPass === b.turnPass;
-const MODE_LABEL = { webrtc: 'Peer-to-peer (WebRTC)', nostr: 'Nostr relays' } as const;
+import { defaultNewNet, netFromForm } from '../lib/newNet';
+import { Settings, SignalFields, InviteBody, listError, rejected } from './Settings';
 
 export function Dialogs() {
   const dialog = useApp((s) => s.dialog);
@@ -23,17 +14,11 @@ export function Dialogs() {
       <WorkspaceDialog open={dialog === 'workspace'} onClose={close} />
       {dialog === 'channel' && <ChannelDialog onClose={close} />}
       {dialog === 'invite' && <InviteDialog onClose={close} />}
-      {(dialog === 'agent' || dialog === 'bridge') && <AgentDialog onClose={close} mode={dialog} />}
-      {dialog === 'settings' && <SettingsDialog onClose={close} />}
+      {dialog === 'settings' && <Settings onClose={close} />}
       {dialog === 'channelSettings' && <ChannelSettings onClose={close} />}
       {dialog === 'jump' && <JumpDialog onClose={close} />}
-      {dialog === 'connection' && <ConnectionDialog onClose={close} />}
     </>
   );
-}
-
-function copy(text: string, what: string) {
-  navigator.clipboard?.writeText(text).then(() => useApp.getState().toast({ tone: 'success', title: what + ' copied', duration: 2500 }));
 }
 
 export function CreateJoin({ onDone }: { onDone?: () => void }) {
@@ -43,10 +28,10 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
   const [code, setCode] = useState('');
   const [err, setErr] = useState('');
   const app = useApp.getState();
-  // The new workspace's own network settings, prefilled from Settings → Network; edits apply to it only.
+  // The new workspace's own network settings, prefilled from the last workspace created in each mode.
   const settings = useApp((x) => x.settings);
-  const [p2p] = useState(() => defaultNewNet(settings, 'trystero'));
-  const [relay] = useState(() => defaultNewNet(settings, 'nostr'));
+  const [p2p] = useState(() => defaultNewNet(settings.lastNet, 'trystero'));
+  const [relay] = useState(() => defaultNewNet(settings.lastNet, 'nostr'));
   const [sigKind, setSigKind] = useState<SignalKind>(p2p.kind === 'trystero' ? p2p.signal.kind : 'nostr');
   const [sigUrls, setSigUrls] = useState(p2p.kind === 'trystero' ? p2p.signal.urls.join(', ') : '');
   const [relays, setRelays] = useState(relay.kind === 'nostr' ? relay.relays.join(', ') : '');
@@ -65,7 +50,7 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
     setNetErr(errs);
     if (Object.values(errs).some(Boolean)) { setNetOpen(true); return; }
     // The form's values through the same rules as Settings → Network: emptied fields mean the built-in defaults.
-    const net = defaultNewNet({ ...settings, relays, blossom, signalKind: sigKind, signalUrls: sigUrls }, kind);
+    const net = netFromForm(kind, { sigKind, sigUrls, relays, blossom });
     await app.createWorkspace(name, net);
     onDone?.();
   };
@@ -94,7 +79,7 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
               <Input label="File servers (Blossom)" optional placeholder="https://blossom.example.com" data-testid="create-blossom" error={netErr.blossom} value={blossom}
                 hint="Where your uploads in this workspace go. Leave empty for the defaults." onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBlossom(e.target.value)} />
             </> : <SignalFields prefix="create" kind={sigKind} urls={sigUrls} error={netErr.signal} onKind={setSigKind} onUrls={setSigUrls} />)}
-            {netOpen && <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-subtle)' }}>Members need {kind === 'nostr' ? 'a relay' : 'a server'} in common; the invite link carries these. Starts from your defaults in Settings → Network.</span>}
+            {netOpen && <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-subtle)' }}>Members need {kind === 'nostr' ? 'a relay' : 'a server'} in common; the invite link carries these. Starts from what you used last.</span>}
           </div>
           <Button type="submit" variant="primary" iconRight="arrow-right" fullWidth>Create workspace</Button>
           <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>{kind === 'nostr'
@@ -129,224 +114,6 @@ function ChannelDialog({ onClose }: { onClose: () => void }) {
           <Button type="submit" variant="primary" disabled={!name.trim()}>Create channel</Button>
         </div>
       </form>
-    </Dialog>
-  );
-}
-
-function InviteDialog({ onClose }: { onClose: () => void }) {
-  const { route, state, rec, peer } = useCurrent();
-  const code = route.code!;
-  const transport = rec?.transport;
-  const title = 'Invite to ' + (state?.name || rec?.name);
-  if (!transport?.key) return (
-    <Dialog open onClose={onClose} title={title} width={480} description="This workspace was created with a short code that anyone on the network can guess, so it can’t take new members safely.">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <span data-testid="legacy-invite" style={{ fontSize: 14, color: 'var(--text-body)' }}>Create a new workspace and invite people there. Its link carries a key that can’t be guessed.</span>
-        <div><Button variant="primary" iconLeft="plus" onClick={() => useApp.getState().setDialog('workspace')}>New workspace</Button></div>
-      </div>
-    </Dialog>
-  );
-  // A rotation may have landed before the record caught up; the peer always knows the current key.
-  const link = location.origin + location.pathname + inviteHash({ code, transport: { ...transport, key: peer?.inviteKey ?? transport.key }, creator: rec?.creator ?? undefined });
-  const description = transport.kind === 'nostr'
-    ? 'This link contains the key that decrypts the workspace. Share it privately: anyone with it can read the whole history.'
-    : 'This link contains the workspace key. Share it privately: anyone with it can join and sync the history.';
-  return (
-    <Dialog open onClose={onClose} title={title} width={480} description={description}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <div style={{ flex: 1, minWidth: 0 }}><Input aria-label="Invite link" data-testid="invite-link" value={link} readOnly iconLeft="link" onFocus={(e) => e.target.select()} /></div>
-          <Button variant="primary" iconLeft="copy" onClick={() => copy(link, 'Link')}>Copy link</Button>
-        </div>
-      </div>
-    </Dialog>
-  );
-}
-
-function AgentDialog({ onClose, mode }: { onClose: () => void; mode: 'agent' | 'bridge' }) {
-  const status = useApp((s) => s.bridgeStatus);
-  const bs = useApp((s) => s.bridgeState);
-  const { route, state } = useCurrent();
-  const code = route.code;
-  const [pin, setPin] = useState('');
-  const [err, setErr] = useState('');
-  const [busy, setBusy] = useState(false);
-  const inWs = bs?.workspaces.find((w) => w.code === code)?.agents || [];
-  const [picked, setPicked] = useState<string[]>(inWs);
-  useEffect(() => { setPicked(inWs); }, [bs?.workspaces.length, code]);
-  useEffect(() => { if (status === 'off') bridge.start(); }, []);
-  const cmd = 'npx yurt-bridge';
-  let body: React.ReactNode;
-  let footer: React.ReactNode = null;
-  if (status === 'connected' && bs) {
-    body = (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-muted)' }}>
-          <span style={{ width: 8, height: 8, borderRadius: 9, background: 'var(--volt-400)', boxShadow: '0 0 0 3px rgba(210,255,46,.18)' }} />
-          yurt-bridge {bs.version} on this machine · {bs.agents.length} {bs.agents.length === 1 ? 'agent' : 'agents'}
-        </div>
-        {mode === 'agent' && code && (bs.agents.length ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <span style={{ fontSize: 13.5, color: 'var(--text-body)' }}>Pick which of your agents join <b>{state?.name}</b>. They reply when someone @mentions them.</span>
-            {bs.agents.map((a) => (
-              <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 14, border: '1px solid ' + (picked.includes(a.id) ? 'var(--agent-ink)' : 'var(--border-subtle)'), background: picked.includes(a.id) ? 'var(--agent-soft)' : 'var(--surface-card)', cursor: 'pointer' }}>
-                <Checkbox checked={picked.includes(a.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, a.id] : picked.filter((x) => x !== a.id))} aria-label={a.name} />
-                <Avatar name={a.name} kind="agent" presence="online" size={28} decorative />
-                <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)' }}>{a.name} <span style={{ fontWeight: 400, color: 'var(--text-subtle)' }}>@{a.handle}</span></span>
-                  <span style={{ font: '400 11.5px/1.3 var(--font-mono)', color: 'var(--text-subtle)' }}>{a.runtime}{a.model ? ' · ' + a.model : ''} · replies in {a.replyIn}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-        ) : <span style={{ fontSize: 14, color: 'var(--text-muted)' }}>No agents yet. Create one in the bridge’s setup page: pick a runtime, a folder and what it’s allowed to do.</span>)}
-      </div>
-    );
-    footer = <>
-      <Button variant="ghost" iconLeft="external-link" onClick={() => window.open('http://127.0.0.1:7717/', '_blank')}>Open bridge setup</Button>
-      {mode === 'agent' && code && bs.agents.length > 0 && <Button variant="agent" iconLeft="sparkles" onClick={() => { useApp.getState().setAgents(code, picked); useApp.getState().toast({ tone: 'agent', title: picked.length ? picked.length + (picked.length === 1 ? ' agent joins ' : ' agents join ') + (state?.name || '') : 'Agents removed from ' + (state?.name || '') }); onClose(); }}>Save</Button>}
-      {mode === 'bridge' && <Button variant="secondary" onClick={() => { bridge.forget(); onClose(); }}>Forget this bridge</Button>}
-    </>;
-  } else if (status === 'unpaired') {
-    body = (
-      <form onSubmit={async (e) => { e.preventDefault(); setBusy(true); setErr(''); const ok = await bridge.pair(pin.replace(/\D/g, '')); setBusy(false); if (!ok) setErr('That code didn’t match. Check the bridge page for the current one.'); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <span style={{ fontSize: 14, color: 'var(--text-body)' }}>The bridge is running. Enter the 6-digit code it shows so only this browser can talk to it.</span>
-        <Input label="Pairing code" inputMode="numeric" autoComplete="one-time-code" placeholder="123 456" value={pin} onChange={(e) => setPin(e.target.value)} error={err || undefined} autoFocus data-autofocus style={{ fontFamily: 'var(--font-mono)', letterSpacing: '.2em' }} />
-        <Button type="submit" variant="primary" loading={busy} disabled={pin.replace(/\D/g, '').length !== 6} fullWidth>Pair</Button>
-      </form>
-    );
-  } else {
-    body = (
-      <ol style={{ display: 'flex', flexDirection: 'column', gap: 14, margin: 0, padding: 0, listStyle: 'none' }}>
-        {[
-          <>Open a terminal and run<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, padding: '8px 8px 8px 14px', borderRadius: 12, background: 'var(--surface-sunken)', border: '1px solid var(--border-subtle)' }}><code style={{ flex: 1, font: '500 14px var(--font-mono)', color: 'var(--text-strong)' }}>{cmd}</code><Button size="sm" variant="secondary" iconLeft="copy" onClick={() => copy(cmd, 'Command')}>Copy</Button></div><div style={{ marginTop: 6, fontSize: 12.5, color: 'var(--text-subtle)' }}>Needs Node 20+ or Bun. <code style={{ fontFamily: 'var(--font-mono)' }}>bunx yurt-bridge</code> works too.</div></>,
-          <>A setup page opens at <span style={{ fontFamily: 'var(--font-mono)' }}>127.0.0.1:7717</span>. It installs agent CLIs and lets you create agents. No config files.</>,
-          <>Come back here and enter the pairing code it shows.</>,
-        ].map((c, i) => (
-          <li key={i} style={{ display: 'flex', gap: 12, fontSize: 14, color: 'var(--text-body)' }}>
-            <span style={{ width: 24, height: 24, borderRadius: 999, background: 'var(--surface-sunken)', border: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '600 12px var(--font-mono)', flexShrink: 0 }}>{i + 1}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>{c}</div>
-          </li>
-        ))}
-        <li style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-subtle)' }}>
-          <Icon name="loader" size={14} style={{ animation: 'ag-spin 1s linear infinite' }} />Looking for the bridge on this machine…
-        </li>
-      </ol>
-    );
-  }
-  return (
-    <Dialog open onClose={onClose} width={520} footer={footer}
-      title={mode === 'agent' ? 'Add agents' : 'Local bridge'}
-      description={mode === 'agent' ? 'Agents are optional. They run on your machine with your agent CLI, and speak in public: everyone sees their work.' : 'yurt-bridge connects Yurt to agent CLIs on this machine (Copilot CLI, OpenCode, Codex, Claude Code, Pi).'}>
-      {body}
-    </Dialog>
-  );
-}
-
-function SettingsDialog({ onClose }: { onClose: () => void }) {
-  const identity = useApp((s) => s.identity)!;
-  const settings = useApp((s) => s.settings);
-  const app = useApp.getState();
-  const [tab, setTab] = useState('profile');
-  const [name, setName] = useState(identity.name);
-  const [handle, setHandle] = useState(identity.handle);
-  const [reveal, setReveal] = useState(false);
-  const [reset, setReset] = useState(false);
-  // Only the network fields: saving them must never write back a stale copy of the other tabs' settings.
-  const [net, setNet] = useState(() => pickNet(settings));
-  const [netErr, setNetErr] = useState<{ relays?: string; blossom?: string; signal?: string }>({});
-  // Open on the mode of the workspace you're in: those are the settings you most likely came for.
-  const current = useCurrent().rec;
-  const [mode, setMode] = useState<'webrtc' | 'nostr'>(current?.transport.kind === 'nostr' ? 'nostr' : 'webrtc');
-  const perm = 'Notification' in window ? Notification.permission : 'denied';
-  return (
-    <Dialog open onClose={onClose} title="Settings" width={600}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <Tabs items={[{ id: 'profile', label: 'Profile', icon: 'user' }, { id: 'identity', label: 'Identity', icon: 'key-round' }, { id: 'prefs', label: 'Preferences', icon: 'bell' }, { id: 'network', label: 'Network', icon: 'globe' }]} value={tab} onChange={setTab} size="sm" label="Settings sections" />
-        {tab === 'profile' && (
-          <form onSubmit={(e) => { e.preventDefault(); app.updateProfile(name, handle); app.toast({ tone: 'success', title: 'Profile updated in every workspace', duration: 3000 }); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Input label="Display name" value={name} onChange={(e) => setName(e.target.value)} />
-            <Input label="Handle" value={handle} onChange={(e) => setHandle(e.target.value.toLowerCase().replace(/[^\w-]/g, ''))} hint="People @mention you with this." iconLeft="at-sign" />
-            <div><Button type="submit" variant="primary" disabled={!name.trim() || !handle.trim()}>Save profile</Button></div>
-          </form>
-        )}
-        {tab === 'identity' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Avatar name={identity.name} self size={40} decorative />
-              <div><div style={{ fontWeight: 600, color: 'var(--text-strong)' }}>Your key</div><div style={{ font: '500 14px var(--font-mono)', color: 'var(--text-muted)' }}>{fingerprint(identity.pub)}</div></div>
-            </div>
-            <span style={{ fontSize: 14, color: 'var(--text-body)' }}>Your recovery phrase is your account. Enter it on another device to be the same person there. Anyone with it can speak as you.</span>
-            {reveal ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 6, padding: 12, borderRadius: 16, background: 'var(--surface-sunken)', border: '1px solid var(--border-subtle)' }}>
-                {identity.phrase.split(' ').map((w, i) => <span key={i} style={{ font: '500 13.5px/1.4 var(--font-mono)', color: 'var(--text-strong)' }}><span style={{ color: 'var(--text-subtle)' }}>{i + 1}.</span> {w}</span>)}
-              </div>
-            ) : null}
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Button variant="secondary" iconLeft={reveal ? 'eye-off' : 'eye'} onClick={() => setReveal(!reveal)}>{reveal ? 'Hide phrase' : 'Show recovery phrase'}</Button>
-              {reveal && <Button variant="ghost" iconLeft="copy" onClick={() => copy(identity.phrase, 'Recovery phrase')}>Copy</Button>}
-            </div>
-            <div style={{ paddingTop: 14, borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <span style={{ fontSize: 13.5, color: 'var(--text-muted)' }}>Remove your identity and every workspace from this browser. Other members keep their copies.</span>
-              {reset
-                ? <div style={{ display: 'flex', gap: 8 }}><Button variant="danger" iconLeft="trash-2" onClick={() => app.resetDevice()}>Erase this device</Button><Button variant="ghost" onClick={() => setReset(false)}>Keep everything</Button></div>
-                : <div><Button variant="secondary" iconLeft="log-out" onClick={() => setReset(true)}>Sign out of this device</Button></div>}
-            </div>
-          </div>
-        )}
-        {tab === 'prefs' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Switch checked={settings.notifications && perm === 'granted'} onChange={(on) => app.updateSettings({ notifications: on })} label="Desktop notifications"
-              description={perm === 'denied' ? 'Blocked in browser settings for this site.' : 'For @mentions, direct messages and agent approvals while Yurt is in the background.'} disabled={perm === 'denied'} />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)' }}>Theme</span>
-              <div style={{ display: 'flex', gap: 16 }}>
-                <Radio name="theme" value="dark" label="Dark" checked={settings.theme === 'dark'} onChange={() => app.updateSettings({ theme: 'dark' })} />
-                <Radio name="theme" value="light" label="Light" checked={settings.theme === 'light'} onChange={() => app.updateSettings({ theme: 'light' })} />
-              </div>
-            </div>
-          </div>
-        )}
-        {tab === 'network' && (
-          <form data-testid="network-form" onSubmit={async (e) => {
-            e.preventDefault();
-            const errs = mode === 'webrtc'
-              ? { signal: listError(rejected(net.signalUrls, parseRelays), 'a ws:// or wss:// server') }
-              : { relays: listError(rejected(net.relays, parseRelays), 'a ws:// or wss:// relay'), blossom: listError(rejected(net.blossom, parseServers), 'an http(s) server') };
-            setNetErr(errs);
-            if (Object.values(errs).some(Boolean)) return;
-            const n = await app.updateSettings(net);
-            app.toast({ tone: 'success', title: 'Network settings saved', duration: 5000,
-              description: (n ? 'Reconnected ' + n + (n === 1 ? ' workspace' : ' workspaces') + '. ' : '') + 'Defaults apply to new workspaces; each workspace keeps its own under its menu → Network settings.' });
-          }} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-            <span style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>Defaults for new workspaces, and how this device connects. A workspace’s own settings are in its menu → Network settings.</span>
-            <Tabs items={[{ id: 'webrtc', label: MODE_LABEL.webrtc }, { id: 'nostr', label: MODE_LABEL.nostr }]} value={mode} onChange={(m: string) => { setMode(m === 'nostr' ? 'nostr' : 'webrtc'); setNetErr({}); }} fullWidth size="sm" label="Network mode" />
-            {mode === 'webrtc' ? (
-              <NetSection testId="network-webrtc" title={MODE_LABEL.webrtc} intro="Members connect browser to browser; history lives only on members’ devices.">
-                <SubHead>Signaling for new workspaces</SubHead>
-                <SignalFields prefix="settings" kind={net.signalKind} urls={net.signalUrls} error={netErr.signal}
-                  onKind={(k) => setNet({ ...net, signalKind: k })} onUrls={(u) => setNet({ ...net, signalUrls: u })} />
-                <SubHead>This device</SubHead>
-                <TurnFields value={net} onChange={(t) => setNet({ ...net, ...t })} />
-              </NetSection>
-            ) : (
-              <NetSection testId="network-nostr" title={MODE_LABEL.nostr} intro="History is end-to-end encrypted on Nostr relays and files on Blossom servers, so messages arrive even when nobody else is online.">
-                <SubHead>Defaults for new workspaces</SubHead>
-                <Input label="Nostr relays" placeholder="wss://nos.lol" data-testid="settings-relays" error={netErr.relays}
-                  hint="ws:// or wss:// URLs, separated by spaces or commas. Empty means wss://nos.lol."
-                  value={net.relays} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNet({ ...net, relays: e.target.value })} />
-                <Input label="Blossom file servers" optional placeholder="https://blossom.example.com" data-testid="blossom-servers" error={netErr.blossom}
-                  hint="Where encrypted files go. Leave empty for the defaults."
-                  value={net.blossom} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNet({ ...net, blossom: e.target.value })} />
-                <SubHead>This device</SubHead>
-                <CallsSwitch on={net.webrtc} onChange={(on) => setNet({ ...net, webrtc: on })} />
-                {net.webrtc && <TurnFields value={net} onChange={(t) => setNet({ ...net, ...t })} />}
-              </NetSection>
-            )}
-            <div><Button type="submit" variant="primary" data-testid="network-save">Save network settings</Button></div>
-          </form>
-        )}
-      </div>
     </Dialog>
   );
 }
@@ -416,153 +183,8 @@ function JumpDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-
-function NetSection({ testId, title, intro, children }: { testId: string; title: string; intro: string; children: React.ReactNode }) {
-  return (
-    <section data-testid={testId} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      <h3 style={{ margin: 0, font: 'var(--weight-bold) var(--fs-body-lg)/1.2 var(--font-display)', color: 'var(--text-strong)' }}>{title}</h3>
-      <span style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>{intro}</span>
-      {children}
-    </section>
-  );
-}
-
-const SubHead = ({ children }: { children: React.ReactNode }) => (
-  <span style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-caption)', fontWeight: 'var(--weight-semibold)', letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>{children}</span>
-);
-
-/** TURN is a device setting: it applies to every peer-to-peer workspace and to calls. */
-function TurnFields({ value: v, onChange }: { value: Turn; onChange: (t: Turn) => void }) {
-  const set = (p: Partial<Turn>) => onChange({ ...pickTurn(v), ...p });
-  return (
-    <div data-testid="turn-fields" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      <span style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>Some networks block direct connections. A TURN relay forwards encrypted traffic when that happens, but whoever runs it sees your IP address and who you talk to.</span>
-      <Radio name="turn" value="off" data-testid="turn-off" label="Direct only (STUN)" description="No relay in the middle. Fails on some strict networks." checked={v.turn === 'off'} onChange={() => set({ turn: 'off' })} />
-      <Radio name="turn" value="default" data-testid="turn-default" label="Free public TURN relay" description="Open Relay by Metered. Its operator sees your IP address and who you connect to (not content). Rate-limited." checked={v.turn === 'default'} onChange={() => set({ turn: 'default' })} />
-      <Radio name="turn" value="custom" data-testid="turn-custom" label="My own TURN server" checked={v.turn === 'custom'} onChange={() => set({ turn: 'custom' })} />
-      {v.turn === 'custom' && <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', paddingLeft: 'var(--space-8)' }}>
-        <Input label="TURN URLs" placeholder="turn:turn.example.com:3478" data-testid="turn-urls" value={v.turnUrls} onChange={(e: React.ChangeEvent<HTMLInputElement>) => set({ turnUrls: e.target.value })} />
-        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          <Input label="Username" data-testid="turn-user" value={v.turnUser} onChange={(e: React.ChangeEvent<HTMLInputElement>) => set({ turnUser: e.target.value })} />
-          <Input label="Credential" type="password" data-testid="turn-pass" value={v.turnPass} onChange={(e: React.ChangeEvent<HTMLInputElement>) => set({ turnPass: e.target.value })} />
-        </div>
-      </div>}
-    </div>
-  );
-}
-
-/** How peer-to-peer members find each other (Trystero signaling). */
-function SignalFields({ prefix, kind, urls, error, onKind, onUrls }: { prefix: string; kind: SignalKind; urls: string; error?: string; onKind: (k: SignalKind) => void; onUrls: (u: string) => void }) {
-  return (
-    <div data-testid={prefix + '-signal'} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      <Radio name={prefix + '-signal-kind'} value="nostr" data-testid={prefix + '-signal-nostr'} label="Nostr relays" description="Connection offers travel through Nostr relays." checked={kind === 'nostr'} onChange={() => onKind('nostr')} />
-      <Radio name={prefix + '-signal-kind'} value="torrent" data-testid={prefix + '-signal-torrent'} label="BitTorrent trackers" description="Connection offers travel through WebSocket BitTorrent trackers." checked={kind === 'torrent'} onChange={() => onKind('torrent')} />
-      <Input label={kind === 'nostr' ? 'Signaling relays' : 'Trackers'} optional data-testid={prefix + '-signal-urls'} error={error}
-        placeholder={kind === 'nostr' ? 'wss://nos.lol' : 'wss://tracker.openwebtorrent.com'}
-        hint={kind === 'nostr' ? 'ws:// or wss:// URLs, separated by spaces or commas. Empty means wss://nos.lol.' : 'ws:// or wss:// URLs. Empty means the built-in public trackers.'}
-        value={urls} onChange={(e: React.ChangeEvent<HTMLInputElement>) => onUrls(e.target.value)} />
-    </div>
-  );
-}
-
-function CallsSwitch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
-  return <Switch checked={on} onChange={onChange} label="Voice and video calls" data-testid="webrtc-switch"
-    description="Calls are the only thing relay workspaces send over WebRTC. Off keeps this device on Nostr alone; on lets you join calls, and people in a call see each other’s IP addresses." />;
-}
-
-/** A workspace's own network settings, for its mode only: signaling for peer-to-peer, relays and files for Nostr. */
-function ConnectionDialog({ onClose }: { onClose: () => void }) {
-  const { route, state, rec, peer } = useCurrent();
-  const app = useApp.getState();
-  const settings = useApp((x) => x.settings);
-  // Relay sockets and peers come and go without an app event, so poll their status while the dialog is up.
-  const [, refresh] = useReducer((x: number) => x + 1, 0);
-  useEffect(() => { const t = setInterval(refresh, 1500); return () => clearInterval(t); }, []);
-  const t = rec?.transport;
-  const sig = t ? signalingOf(t) : { kind: 'nostr' as const, urls: [] };
-  const [relays, setRelays] = useState(t?.kind === 'nostr' ? t.relays.join(', ') : '');
-  const [blossom, setBlossom] = useState(rec?.blossom?.join(', ') ?? '');
-  const [sigKind, setSigKind] = useState<SignalKind>(sig.kind);
-  const [sigUrls, setSigUrls] = useState(sig.urls.join(', '));
-  const [turn, setTurn] = useState<Turn>(() => pickTurn(settings));
-  const [calls, setCalls] = useState(settings.webrtc);
-  const [err, setErr] = useState<{ relays?: string; blossom?: string; signal?: string }>({});
-  const [busy, setBusy] = useState(false);
-  const code = route.code;
-  if (!rec || !t || !code) return null;
-  const nostr = t.kind === 'nostr';
-  const title = 'Network settings · ' + (state?.name || rec.name);
-  const Line = ({ k, v, testId }: { k: string; v: React.ReactNode; testId: string }) => (
-    <div style={{ display: 'flex', gap: 'var(--space-3)', fontSize: 'var(--fs-body-sm)' }}>
-      <span style={{ width: 96, flexShrink: 0, color: 'var(--text-subtle)' }}>{k}</span>
-      <span data-testid={testId} style={{ color: 'var(--text-body)', minWidth: 0 }}>{v}</span>
-    </div>
-  );
-  const save = async () => {
-    const errs = nostr
-      ? { relays: listError(rejected(relays, parseRelays), 'a ws:// or wss:// relay') ?? (parseRelays(relays).length ? undefined : 'Add at least one ws:// or wss:// relay.'), blossom: listError(rejected(blossom, parseServers), 'an http(s) server') }
-      : { signal: listError(rejected(sigUrls, parseRelays), 'a ws:// or wss:// server') };
-    setErr(errs);
-    if (Object.values(errs).some(Boolean)) return;
-    setBusy(true);
-    try {
-      // Device settings first, so the workspace reconnects once with everything in place.
-      const device = nostr ? { webrtc: calls, ...(calls ? turn : {}) } : turn;
-      if (!sameTurn(pickTurn(settings), { ...pickTurn(settings), ...device }) || (nostr && calls !== settings.webrtc)) await app.updateSettings(device);
-      if (nostr) await app.updateConnection(code, { kind: 'nostr', relays: parseRelays(relays), blossom: parseServers(blossom) });
-      else {
-        const urls = parseRelays(sigUrls);
-        if (sigKind !== sig.kind || urls.join(',') !== sig.urls.join(',')) await app.updateConnection(code, { kind: 'trystero', signal: { kind: sigKind, urls } });
-      }
-    } catch (e) { setErr({ [nostr ? 'relays' : 'signal']: e instanceof Error ? e.message : String(e) }); return; }
-    finally { setBusy(false); }
-    app.toast({ tone: 'success', title: 'Network settings saved', description: 'Reconnected. Invite links now carry this workspace’s ' + (nostr ? 'relays.' : 'signaling.') });
-  };
-  const footer = <><Button variant="ghost" onClick={onClose}>Close</Button><Button variant="primary" loading={busy} onClick={save} data-testid="connection-save">Save and reconnect</Button></>;
-  if (!nostr) return (
-    <Dialog open onClose={onClose} title={title} width={560} footer={footer} description="Members connect browser to browser. History lives only on members’ devices.">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-        <Line k="Mode" v={MODE_LABEL.webrtc} testId="connection-kind" />
-        <Line k="Connected" testId="connection-peers" v={(peer?.peers.size ?? 0) + ((peer?.peers.size ?? 0) === 1 ? ' member right now' : ' members right now')} />
-        {!t.key && <Line k="Invite" testId="connection-legacy" v="Legacy code-only workspace: anyone who guesses its short code can find the room. It can’t take new members." />}
-        <SubHead>Signaling</SubHead>
-        <SignalFields prefix="ws" kind={sigKind} urls={sigUrls} error={err.signal} onKind={setSigKind} onUrls={setSigUrls} />
-        <span data-testid="connection-note" style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>
-          Members only find each other over the same method and at least one shared server. New invite links carry these; members who joined earlier keep theirs until they open a new link.
-        </span>
-        <SubHead>This device</SubHead>
-        <TurnFields value={turn} onChange={setTurn} />
-      </div>
-    </Dialog>
-  );
-  const status = peer?.relayStatus() ?? new Map<string, boolean>();
-  return (
-    <Dialog open onClose={onClose} title={title} width={560} footer={footer} description="Events are end-to-end encrypted and kept on Nostr relays; files on Blossom servers.">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-        <Line k="Mode" v={MODE_LABEL.nostr} testId="connection-kind" />
-        <ul data-testid="connection-relay-list" aria-label="Relay status" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', margin: 0, padding: 'var(--space-2) var(--space-3)', listStyle: 'none', borderRadius: 'var(--radius-md)', background: 'var(--surface-sunken)', border: 'var(--border-width) solid var(--border-subtle)' }}>
-          {t.relays.map((u) => {
-            const on = status.get(u) === true;
-            return (
-              <li key={u} data-testid="relay-status" data-relay={u} data-connected={String(on)} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--fs-body-sm)' }}>
-                <span aria-hidden="true" style={{ width: 'var(--space-2)', height: 'var(--space-2)', borderRadius: 'var(--radius-pill)', background: on ? 'var(--success)' : 'var(--danger)', flexShrink: 0 }} />
-                <code style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', font: 'var(--fs-mono) var(--font-mono)', color: 'var(--text-strong)' }}>{u}</code>
-                <span style={{ color: on ? 'var(--success-ink)' : 'var(--danger-ink)' }}>{on ? 'Connected' : 'Disconnected'}</span>
-              </li>
-            );
-          })}
-        </ul>
-        <Input label="Relays" placeholder="wss://nos.lol" data-testid="connection-relays" error={err.relays} value={relays}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRelays(e.target.value)} hint="ws:// or wss:// URLs, separated by spaces or commas." />
-        <Input label="File servers (Blossom)" optional placeholder="https://blossom.example.com" data-testid="connection-blossom" error={err.blossom} value={blossom}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBlossom(e.target.value)} hint="Where your uploads in this workspace go. Leave empty to use Settings → Network, then the defaults." />
-        <span data-testid="connection-note" style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>
-          Members only reach each other through relays they share, so keep at least one relay in common. New invite links carry this list; members who joined earlier keep their own.
-        </span>
-        <SubHead>This device</SubHead>
-        <CallsSwitch on={calls} onChange={setCalls} />
-        {calls && <TurnFields value={turn} onChange={setTurn} />}
-      </div>
-    </Dialog>
-  );
+/** The quick share action; the same link lives in Settings → workspace → General. */
+function InviteDialog({ onClose }: { onClose: () => void }) {
+  const { state, rec } = useCurrent();
+  return <Dialog open onClose={onClose} title={'Invite to ' + (state?.name || rec?.name)} width={480}><InviteBody /></Dialog>;
 }

@@ -1,6 +1,6 @@
 import { joinRoom as joinNostr, selfId } from 'trystero';
 import { joinRoom as joinTorrent } from '@trystero-p2p/torrent';
-import { WorkspacePeer, signalingOf, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport, type SignalKind } from '@yurt/protocol';
+import { WorkspacePeer, signalingOf, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport } from '@yurt/protocol';
 import { peerStore } from './db';
 
 export interface NetSettings {
@@ -8,14 +8,8 @@ export interface NetSettings {
   turnUrls: string;
   turnUser: string;
   turnPass: string;
-  /** Defaults for new relay workspaces: Nostr relays and Blossom file servers (free text, parsed when used). */
-  relays: string;
-  blossom: string;
   /** Relay workspaces use WebRTC (voice and video) only when this is on. Trystero workspaces always use it. */
   webrtc: boolean;
-  /** Defaults for new peer-to-peer workspaces: how members find each other (empty urls = built-in servers). */
-  signalKind: SignalKind;
-  signalUrls: string;
 }
 
 // Free public TURN (Open Relay by Metered). Rate-limited; set your own in Settings → Network.

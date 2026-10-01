@@ -125,7 +125,7 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
       title={other!.self ? 'Notes to yourself' : 'You and ' + other!.name} body={other!.self ? 'Drafts, links, reminders. Only you see these.' : relayed ? 'Only the two of you can read this conversation. Relays keep it end-to-end encrypted.' : 'Only the two of you hold this conversation. It syncs directly between your devices.'} />
   ) : (
     <Intro title={'#' + channel!.name + ' is ready'} body="Invite people with a link, then add an agent. Everyone here sees everything said, agents included."
-      actions={<><Button variant="primary" iconLeft="user-plus" onClick={() => app.setDialog('invite')}>Invite people</Button><Button variant="agent" iconLeft="sparkles" onClick={() => app.setDialog('agent')}>Add agent</Button></>} />
+      actions={<><Button variant="primary" iconLeft="user-plus" onClick={() => app.setDialog('invite')}>Invite people</Button><Button variant="agent" iconLeft="sparkles" onClick={() => app.openSettings('ws-agents')}>Add agent</Button></>} />
   );
 
   const onDrop = (e: React.DragEvent) => { e.preventDefault(); setDragging(false); const fs = Array.from(e.dataTransfer.files || []); if (fs.length) setDrop({ at: draftKey, files: fs }); };
@@ -158,8 +158,8 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
         {!narrow && !isDm && !isAgentDm && <Tooltip content={'Pinned · ' + pinnedN} placement="bottom"><IconButton icon="pin" label={'Pinned, ' + pinnedN} size="sm" active={panel.type === 'pinned'} onClick={() => togglePanel('pinned')} /></Tooltip>}
         {!isDm && !isAgentDm && !narrow && <Tooltip content="Invite people" placement="bottom"><IconButton icon="user-plus" label="Invite people" size="sm" onClick={() => app.setDialog('invite')} /></Tooltip>}
         {!isDm && !isAgentDm && (narrow
-          ? <IconButton icon="sparkles" label="Add agent" variant="agent" size="sm" onClick={() => app.setDialog('agent')} />
-          : <Button variant="agent" size="sm" iconLeft="sparkles" onClick={() => app.setDialog('agent')}>Add agent</Button>)}
+          ? <IconButton icon="sparkles" label="Add agent" variant="agent" size="sm" onClick={() => app.openSettings('ws-agents')} />
+          : <Button variant="agent" size="sm" iconLeft="sparkles" onClick={() => app.openSettings('ws-agents')}>Add agent</Button>)}
         {!isAgentDm && (
           <button type="button" onClick={() => togglePanel('members')} aria-pressed={panel.type === 'members'} aria-label={'Members: ' + humans.length + ' people, ' + agents.length + ' agents'}
             style={{ display: 'flex', alignItems: 'center', gap: 6, height: 32, padding: '0 10px 0 5px', borderRadius: 999, border: '1px solid ' + (panel.type === 'members' ? 'var(--accent)' : 'var(--border-subtle)'), background: panel.type === 'members' ? 'var(--accent-soft)' : 'transparent', cursor: 'pointer', color: 'var(--text-muted)', font: '500 12.5px var(--font-body)', flexShrink: 0, marginLeft: 2 }}>

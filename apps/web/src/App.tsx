@@ -23,7 +23,7 @@ function useShortcuts() {
       const s = useApp.getState();
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); s.setDialog(s.dialog === 'jump' ? null : 'jump'); }
-      else if (mod && e.key === ',') { e.preventDefault(); s.setDialog('settings'); }
+      else if (mod && e.key === ',') { e.preventDefault(); s.openSettings(); }
       else if (mod && e.key.toLowerCase() === 'i' && s.route.code) { e.preventDefault(); s.setPanel(s.panel.type === 'members' ? { type: null } : { type: 'members' }); }
       else if (mod && e.key.toLowerCase() === 'f' && s.route.code) { e.preventDefault(); s.setPanel({ type: 'search' }); }
       else if (e.key === 'Escape' && !s.dialog && s.panel.type && !(e.target as HTMLElement)?.closest?.('textarea,input')) {

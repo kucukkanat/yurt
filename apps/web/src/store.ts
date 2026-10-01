@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import {
   keyFromPhrase, newInviteCode, normalizeCode, formatCode, slug, mentions, sha256Buf, MAX_FILE_BYTES,
-  parseInvite, parseRelays, DEFAULT_RELAYS, DEFAULT_SIGNAL_URLS, newNostrTransport, newTrysteroTransport, LEGACY_TRYSTERO, uploadFile, parseServers, DEFAULT_BLOSSOM,
+  parseInvite, newNostrTransport, newTrysteroTransport, LEGACY_TRYSTERO, uploadFile, DEFAULT_BLOSSOM,
   type KeyPair, type WsTransport, type Signaling, type WorkspacePeer, type WsState, type Ev, type FileRef, type EventFields, type BridgeState,
 } from '@yurt/protocol';
 import { kv, eventsDb, blobsDb } from './lib/db';
@@ -9,42 +9,36 @@ import { connect, getPeer, allPeers, disconnect, type NetSettings } from './lib/
 import { bridge, type BridgeStatus } from './lib/bridge';
 import { huddle, type HuddleView } from './lib/huddle';
 import { notify } from './lib/format';
+import { rememberNet, migrateLastNet, dropLegacy, type NewWorkspaceNet, type LastNet } from './lib/newNet';
+
+export type { NewWorkspaceNet } from './lib/newNet';
 
 interface Identity extends KeyPair { phrase: string; name: string; handle: string }
-/** What a new workspace starts with: shared by its members, so it travels in the invite link (except file servers). */
-export type NewWorkspaceNet =
-  | { kind: 'trystero'; signal: Signaling }
-  | { kind: 'nostr'; relays: string[]; blossom: string[] };
-
-/** The create step's starting point: Settings → Network defaults, emptied fields falling back to the built-ins. */
-export function defaultNewNet(s: Settings, kind: WsTransport['kind']): NewWorkspaceNet {
-  if (kind === 'nostr') {
-    const relays = parseRelays(s.relays);
-    return { kind, relays: relays.length ? relays : [...DEFAULT_RELAYS], blossom: parseServers(s.blossom) };
-  }
-  const urls = parseRelays(s.signalUrls);
-  // Nostr signaling with no servers means nos.lol; trackers with none means the built-in public ones.
-  return { kind, signal: { kind: s.signalKind, urls: urls.length || s.signalKind !== 'nostr' ? urls : [...DEFAULT_SIGNAL_URLS] } };
-}
-
 export type ConnectionChange =
   | { kind: 'nostr'; relays: string[]; blossom: string[] }
   | { kind: 'trystero'; signal: Signaling };
 export interface WsRecord {
   code: string; name: string; transport: WsTransport; creator: string | null; lastRead: Record<string, number>; muted: string[];
-  /** Blossom servers for this workspace's uploads; falls back to Settings, then the defaults. */
+  /** Blossom servers for this workspace's uploads; falls back to the defaults. */
   blossom?: string[];
 }
-export interface Settings extends NetSettings { theme: 'dark' | 'light'; notifications: boolean }
+export interface Settings extends NetSettings {
+  theme: 'dark' | 'light';
+  notifications: boolean;
+  /** What the create step used last for each mode; prefills the next new workspace. */
+  lastNet?: LastNet;
+}
+/** Sections of the single Settings window: "you" (account and this device) and the current workspace. */
+export type SettingsSection = 'profile' | 'identity' | 'preferences' | 'connection' | 'agents' | 'ws-general' | 'ws-network' | 'ws-agents';
 interface Route { code?: string; ch?: string; thread?: string }
 type PanelType = 'members' | 'profile' | 'thread' | 'pinned' | 'search' | null;
 interface Panel { type: PanelType; id?: string }
-type DialogType = null | 'workspace' | 'channel' | 'invite' | 'agent' | 'bridge' | 'settings' | 'channelSettings' | 'jump' | 'connection';
+type DialogType = null | 'workspace' | 'channel' | 'invite' | 'settings' | 'channelSettings' | 'jump';
 /** `onDismiss` runs once however the toast goes away: expired, closed, acted on, or pushed out by newer toasts. */
 interface ToastT { id: number; tone?: 'neutral' | 'success' | 'agent' | 'human' | 'danger'; title: string; description?: string; actionLabel?: string; onAction?: () => void; onDismiss?: () => void; duration?: number }
 
 // No TURN by default: a third-party relay would see who connects to whom. Opt in under Settings → Network.
-const DEFAULT_SETTINGS: Settings = { theme: 'dark', notifications: false, turn: 'off', turnUrls: '', turnUser: '', turnPass: '', relays: DEFAULT_RELAYS.join(', '), webrtc: false, blossom: '', signalKind: 'nostr', signalUrls: DEFAULT_SIGNAL_URLS.join(', ') };
+const DEFAULT_SETTINGS: Settings = { theme: 'dark', notifications: false, turn: 'off', turnUrls: '', turnUser: '', turnPass: '', webrtc: false };
 
 function parseHash(h = location.hash): Route {
   const p = h.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
@@ -77,6 +71,7 @@ export interface AppState {
   blobProgress: Record<string, number>;
   panel: Panel;
   dialog: DialogType;
+  settingsSection: SettingsSection;
   toasts: ToastT[];
   bridgeStatus: BridgeStatus;
   bridgeState: BridgeState | null;
@@ -97,6 +92,8 @@ export interface AppState {
   go(r: Route): void;
   setPanel(p: Panel): void;
   setDialog(d: DialogType): void;
+  /** Opens the single Settings window, on `section` or wherever it was last. */
+  openSettings(section?: SettingsSection): void;
   toast(t: Omit<ToastT, 'id'>): void;
   dismiss(id: number): void;
   /** A new workspace with its own network settings (the create step starts from `defaultNewNet`). */
@@ -219,11 +216,14 @@ export const useApp = create<AppState>((set, get) => {
 
   return {
     ready: false, identity: null, workspaces: [], settings: DEFAULT_SETTINGS, route: parseHash(), states: {}, tick: 0, blobVer: {}, blobProgress: {},
-    panel: { type: null }, dialog: null, toasts: [], bridgeStatus: 'off', bridgeState: null, huddle: huddle.view, online: navigator.onLine, drawer: false, editing: null, clock: Date.now(), highlight: null,
+    panel: { type: null }, dialog: null, settingsSection: 'profile', toasts: [], bridgeStatus: 'off', bridgeState: null, huddle: huddle.view, online: navigator.onLine, drawer: false, editing: null, clock: Date.now(), highlight: null,
 
     async init() {
-      const [identity, workspaces, settings] = await Promise.all([kv.get<Identity>('identity'), kv.get<WsRecord[]>('workspaces'), kv.get<Settings>('settings')]);
-      const s = { ...DEFAULT_SETTINGS, ...(settings || {}) };
+      const [identity, workspaces, saved] = await Promise.all([kv.get<Identity>('identity'), kv.get<WsRecord[]>('workspaces'), kv.get<Record<string, unknown>>('settings')]);
+      // Stored settings are this app's own earlier writes; older versions also held app-wide network defaults.
+      const raw = saved ?? {};
+      const lastNet = migrateLastNet(raw);
+      const s: Settings = { ...DEFAULT_SETTINGS, ...(dropLegacy(raw) as Partial<Settings>), ...(lastNet ? { lastNet } : {}) };
       applyTheme(s.theme);
       // Records from before transports existed are Trystero workspaces.
       set({ identity: identity || null, workspaces: (workspaces || []).map((w) => ({ ...w, transport: w.transport ?? LEGACY_TRYSTERO })), settings: s, ready: true });
@@ -304,6 +304,11 @@ export const useApp = create<AppState>((set, get) => {
     go(r) { location.hash = buildHash(r); },
     setPanel(panel) { set({ panel }); },
     setDialog(dialog) { set({ dialog }); },
+    openSettings(section) {
+      // Workspace sections only exist inside a workspace; elsewhere fall back to the first "you" section.
+      const want = section ?? get().settingsSection;
+      set({ dialog: 'settings', settingsSection: want.startsWith('ws-') && !get().route.code ? 'profile' : want });
+    },
     toast(t) {
       const id = ++toastId;
       const toasts = get().toasts;
@@ -324,6 +329,10 @@ export const useApp = create<AppState>((set, get) => {
       const rec: WsRecord = { code, name: name.trim(), transport, creator: me.pub, lastRead: {}, muted: [],
         ...(net.kind === 'nostr' && net.blossom.length ? { blossom: net.blossom } : {}) };
       saveWs([...get().workspaces, rec]);
+      // Remember these settings: they prefill the next workspace created in this mode.
+      const settings = { ...get().settings, lastNet: rememberNet(get().settings.lastNet, net) };
+      set({ settings });
+      await kv.set('settings', settings);
       connectWs(rec);
       const p = getPeer(code)!;
       p.publish({ t: 'ws.create', b: { name: rec.name } });
@@ -377,12 +386,11 @@ export const useApp = create<AppState>((set, get) => {
     publish(code, f) { return getPeer(code)?.publish(f); },
 
     async send(text, files, parent) {
-      const { route, identity, settings } = get();
+      const { route, identity } = get();
       if (!route.code || !route.ch || !identity) return false;
       const rec = get().workspaces.find((w) => w.code === route.code);
       const relayed = rec?.transport.kind === 'nostr';
-      const fromSettings = parseServers(settings.blossom);
-      const servers = rec?.blossom?.length ? rec.blossom : fromSettings.length ? fromSettings : DEFAULT_BLOSSOM;
+      const servers = rec?.blossom?.length ? rec.blossom : DEFAULT_BLOSSOM;
       const big = files.find((f) => f.size > MAX_FILE_BYTES);
       if (big) { get().toast({ tone: 'danger', title: big.name + ' is over 25 MB', description: 'Remove it and share a link instead.' }); return false; }
       const refs: FileRef[] = [];

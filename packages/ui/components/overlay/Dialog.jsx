@@ -16,6 +16,17 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
     }, 20);
     return () => { clearTimeout(t); prev.current && prev.current.focus && prev.current.focus(); };
   }, [open]);
+  // Escape must close the dialog even when focus isn't inside it yet (focus moves in after a tick) or
+  // drifted to the page, e.g. after clicking a menu item that unmounted. Keys inside the panel are
+  // handled by onKey below, so they're skipped here.
+  const closeRef = React.useRef(onClose);
+  closeRef.current = onClose;
+  React.useEffect(() => {
+    if (!open || !dismissible) return;
+    const k = (e) => { if (e.key === 'Escape' && !(panel.current && panel.current.contains(e.target))) closeRef.current && closeRef.current(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [open, dismissible]);
   if (!open) return null;
   const onKey = (e) => {
     if (e.key === 'Escape' && dismissible) { e.stopPropagation(); onClose && onClose(); }

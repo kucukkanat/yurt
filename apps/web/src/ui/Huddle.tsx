@@ -19,7 +19,7 @@ export function HuddleButton({ ch }: { ch: string }) {
   if (mine) return null;
   const off = !!peer && !peer.calls;
   return (
-    <Tooltip content={off ? 'Turn on WebRTC in Settings → Network to join calls' : 'Start or join huddle'} placement="bottom">
+    <Tooltip content={off ? 'Turn on calls in Settings → Connection to join' : 'Start or join huddle'} placement="bottom">
       <IconButton icon="headphones" label="Start or join huddle" size="sm" disabled={off} data-testid="huddle-button" onClick={() => peer && huddle.join(peer, ch)} />
     </Tooltip>
   );

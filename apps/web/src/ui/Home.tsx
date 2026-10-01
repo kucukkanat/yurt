@@ -52,7 +52,7 @@ export function Home({ narrow }: { narrow: boolean }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'var(--text-subtle)' }}>
           <Icon name="sparkles" size={16} style={{ color: 'var(--agent-ink)' }} />
           <span style={{ flex: 1 }}>Want agents in your rooms? They’re optional and run on your machine.</span>
-          <Button variant="ghost" size="sm" onClick={() => app.setDialog('bridge')}>Set up</Button>
+          <Button variant="ghost" size="sm" onClick={() => app.openSettings('agents')}>Set up</Button>
         </div>
       </div>
     </div>

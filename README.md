@@ -25,12 +25,12 @@ When you create a workspace you choose how its messages travel. The choice is fi
 | Files | WebRTC, from members who are online | Encrypted on [Blossom](https://github.com/hzrd149/blossom) file servers |
 | Voice and video | WebRTC | WebRTC, only if you turn it on in **Settings → Network** |
 
-Invites are links only: the 8-character code is just an id, and a 256-bit key in the link's `#` fragment is what lets people in. Relays can't read Nostr workspaces: every event is sealed with that key, private messages get a second, pairwise key, and sizes and timestamps are blurred. Details and the threat model are in [docs/PROTOCOL.md](docs/PROTOCOL.md#nostr-transport). **Network settings** come in three places, and each shows only the settings of one mode:
+Invites are links only: the 8-character code is just an id, and a 256-bit key in the link's `#` fragment is what lets people in. Relays can't read Nostr workspaces: every event is sealed with that key, private messages get a second, pairwise key, and sizes and timestamps are blurred. Details and the threat model are in [docs/PROTOCOL.md](docs/PROTOCOL.md#nostr-transport). **Settings** is one window, opened from the gear in the workspace rail (or <kbd>⌘/Ctrl ,</kbd>):
 
-- **Creating a workspace**: after picking a mode, a collapsed *Network settings* row (with a one-line summary) sets that workspace's signaling, or its relays and file servers. It starts from your defaults; edits apply to the new workspace only.
+- **You**: profile, identity, preferences, **Connection** (this device only: TURN, and whether it joins voice and video calls in relay workspaces) and **Agents & bridge**.
+- **The current workspace** (shown with its mode chip): **General** (mode, invite link, leave), **Network** (only its own mode: a peer-to-peer workspace's signaling, or a relay workspace's relays with live status and file servers) and **Agents**. The workspace menu jumps straight into these.
 
-- **Settings → Network** holds defaults for new workspaces plus how this device connects. Pick *Peer-to-peer (WebRTC)* to set the default signaling (Nostr relays or BitTorrent trackers; `wss://nos.lol` by default) and TURN, or *Nostr relays* to set the default relays (`wss://nos.lol`), file servers, and whether this device joins voice and video calls (with TURN appearing once calls are on).
-- **Workspace menu → Network settings** shows that workspace's mode only: a peer-to-peer workspace's signaling method and servers, or a relay workspace's relays (with live status) and file servers, plus the device settings that apply. Members need a signaling server or relay in common; invite links carry the workspace's current list.
+A workspace's network is chosen when it's created: after picking a mode, a collapsed *Network settings* row sets its signaling, or its relays and file servers, starting from what you used last. The mode is fixed after that; members need a signaling server or relay in common, and invite links carry the workspace's current list.
 
 ## Run it
 
