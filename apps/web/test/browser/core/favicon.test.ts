@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { CALM, type FaviconState, installFavicon } from '../../../src/lib/favicon';
+import { CALM, type FaviconState, installFavicon as install } from '../../../src/lib/favicon';
 import { until } from './harness';
 
 const svg = (fill: string) =>
@@ -19,7 +19,31 @@ function setIcon(href: string): HTMLLinkElement {
 const href = () => icons()[0]?.href ?? '';
 const tick = () => new Promise((r) => setTimeout(r, 30));
 
+// Each test's icon keeper is stopped afterwards: a live one would adopt and redraw the next test's icon.
+const running: { stop(): void }[] = [];
+const installFavicon = (read: () => FaviconState) => {
+  const fav = install(read);
+  running.push(fav);
+  return fav;
+};
+
+/** The RGB of one pixel of a drawn icon. */
+async function pixel(href: string, x: number, y: number): Promise<[number, number, number]> {
+  const img = new Image();
+  img.src = href;
+  await img.decode();
+  const c = document.createElement('canvas');
+  c.width = img.width;
+  c.height = img.height;
+  const ctx = c.getContext('2d');
+  if (!ctx) throw new Error('no 2D canvas');
+  ctx.drawImage(img, 0, 0);
+  const [r = 0, g = 0, b = 0] = ctx.getImageData(x, y, 1, 1).data;
+  return [r, g, b];
+}
+
 afterEach(() => {
+  for (const f of running.splice(0)) f.stop();
   for (const l of icons()) l.remove();
   document.documentElement.style.removeProperty('--danger');
 });
@@ -67,14 +91,24 @@ describe('tab icon', () => {
   });
 
   it('uses the theme’s colours when they are set', async () => {
+    document.documentElement.style.setProperty('--danger', '#00ff00');
+    const link = setIcon(BLUE);
+    installFavicon(() => ({ ...CALM, mentions: 1 }));
+    await until(() => link.href.startsWith('data:image/png'), 'a badge');
+    // Inside the mention badge (centre 47,17 on the 64px icon, radius 17), clear of the digit: the theme's green.
+    expect(await pixel(link.href, 37, 17)).toEqual([0, 255, 0]);
+  });
+
+  it('lets go of the icon once stopped, even mid-load', async () => {
     const link = setIcon(BLUE);
     const fav = installFavicon(() => ({ ...CALM, mentions: 1 }));
+    const badgeOnly = link.href; // drawn at once, before the base icon loads
+    fav.stop();
+    await tick(); // the base icon's load lands now, and draws nothing
+    expect(link.href).toBe(badgeOnly);
+    link.href = RED;
     await tick();
-    const fallback = link.href;
-    document.documentElement.style.setProperty('--danger', '#00ff00');
-    link.href = BLUE; // force a redraw with the new palette
-    await until(() => link.href !== BLUE && link.href !== fallback, 'a redraw with the theme colour');
-    fav.update();
+    expect(link.href).toBe(RED);
   });
 
   it('still badges when the icon can’t be loaded', async () => {

@@ -86,19 +86,23 @@ function palette(): Palette {
   return { danger: v('--danger', '#e5484d'), accent: v('--accent', '#2f55ff'), success: v('--success', '#30a46c'), onColor: '#ffffff' };
 }
 
-/** Keeps the tab icon in step with `read()`; call `update()` whenever app state may have changed. */
-export function installFavicon(read: () => FaviconState): { update(): void } {
+/**
+ * Keeps the tab icon in step with `read()`; call `update()` whenever app state may have changed. `stop()` lets go of
+ * the icon for good (the app keeps one for its lifetime; tests stop theirs so they don't fight over the next page's).
+ */
+export function installFavicon(read: () => FaviconState): { update(): void; stop(): void } {
   const ours = new Set<string>(); // hrefs we generated, so we can tell them from a newly chosen icon
   let link: HTMLLinkElement | null = null;
   let baseHref = '';
   let base: HTMLImageElement | null = null;
   let shown: FaviconState = CALM;
   let drawn = false;
+  let stopped = false;
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = SIZE;
   const ctx = canvas.getContext('2d');
   /* istanbul ignore next -- every browser the app supports has a 2D canvas; without one the tab icon just stays plain */
-  if (!ctx) return { update: () => {} };
+  if (!ctx) return { update: () => {}, stop: () => {} };
 
   /** Picks up a newly chosen icon as the base; false when nothing changed (including our own writes). */
   const adopt = (): boolean => {
@@ -122,6 +126,7 @@ export function installFavicon(read: () => FaviconState): { update(): void } {
   };
 
   const render = (force = false) => {
+    if (stopped) return; // e.g. a base icon that finishes loading after stop()
     if (adopt()) force = true;
     if (!link) return;
     const s = read();
@@ -142,9 +147,16 @@ export function installFavicon(read: () => FaviconState): { update(): void } {
 
   // Someone swapping the icon (new <link> or a new href) gives us a new base to decorate. Our own
   // writes also trigger this, but adopt() recognises them, so they don't redraw (or loop).
-  new MutationObserver(() => {
+  const observer = new MutationObserver(() => {
     if (adopt()) render(true);
-  }).observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'rel'] });
+  });
+  observer.observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'rel'] });
   render(true);
-  return { update: () => render() };
+  return {
+    update: () => render(),
+    stop: () => {
+      stopped = true;
+      observer.disconnect();
+    },
+  };
 }

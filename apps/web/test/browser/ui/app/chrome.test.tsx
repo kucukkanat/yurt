@@ -21,7 +21,10 @@ describe('the app chrome', () => {
     await dlg.getByRole('textbox', { name: 'Workspace name' }).fill('Side Project');
     await dlg.getByRole('button', { name: 'Create workspace' }).click();
     await expect.element(dlg).not.toBeInTheDocument();
-    other = useApp.getState().route.code ?? '';
+    // From the list, not the route: the route follows `hashchange`, which a slow machine delivers after the dialog closes.
+    other = useApp.getState().workspaces.find((w) => w.name === 'Side Project')?.code ?? '';
+    expect(other).not.toBe('');
+    await until(() => useApp.getState().route.code === other);
     // Joining by link from the same dialog.
     await rail().getByRole('button', { name: 'Create or join a workspace' }).click();
     await dlg.getByRole('tab', { name: 'Join with a link' }).click();
