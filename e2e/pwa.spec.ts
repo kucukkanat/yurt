@@ -77,3 +77,20 @@ test('notifies through the service worker, and closes the notification once the 
     .click();
   await expect.poll(() => notifications(a)).toEqual([]);
 });
+
+test('keeps working where the worker can’t notify (Safari in a tab has no getNotifications)', async ({ page }) => {
+  await page.addInitScript(() => {
+    // Safari in a tab: a worker registration without the method.
+    Reflect.deleteProperty(ServiceWorkerRegistration.prototype, 'getNotifications');
+  });
+  await page.goto('./');
+  await onboard(page, 'Ada', 'Start chatting');
+  await createWorkspace(page, 'Tab');
+  await ready(page);
+  // A new message marks the open conversation read, which closes its notifications: what crashed on iOS.
+  const composer = page.getByRole('textbox', { name: 'Message #general' });
+  await composer.fill('still here');
+  await composer.press('Enter');
+  await expect(page.getByText('still here')).toBeVisible();
+  await expect(page.getByTestId('crash')).toHaveCount(0);
+});

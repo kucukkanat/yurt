@@ -12,6 +12,13 @@ export interface NoticeData {
   ch: string;
 }
 
+/**
+ * Whether a worker registration can show and close notifications. Safari in a tab (not a home-screen app) registers
+ * the worker without them, and calling `getNotifications` there threw when a conversation was marked read.
+ */
+export const notifiesThroughWorker = (reg: { showNotification?: unknown; getNotifications?: unknown }) =>
+  typeof reg.showNotification === 'function' && typeof reg.getNotifications === 'function';
+
 /** Workbox's request to take over now (`messageSkipWaiting()`, when the user accepts "Reload" on a new version). */
 export const isSkipWaiting = (m: unknown) => !!parseOr(v.object({ type: v.literal('SKIP_WAITING') }), m);
 

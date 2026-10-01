@@ -2,7 +2,7 @@ import { Workbox } from 'workbox-window';
 import { useApp } from '../store';
 import { mayNotify } from './format';
 import { setNotifier, type Notifier } from './notifications';
-import { noticeDataOf, openOf } from './swLogic';
+import { noticeDataOf, notifiesThroughWorker, openOf } from './swLogic';
 
 /*
  * The page's side of the service worker: registering it, offering a new version, and showing notifications through
@@ -52,7 +52,7 @@ export async function startServiceWorker() {
   if (reg) adopt(reg);
 }
 
-/** Shows notifications through a registered worker from now on. */
+/** Shows notifications through a registered worker from now on, where it can; otherwise the page keeps them. */
 export function adopt(reg: ServiceWorkerRegistration) {
-  setNotifier(workerNotifier(reg));
+  if (notifiesThroughWorker(reg)) setNotifier(workerNotifier(reg));
 }

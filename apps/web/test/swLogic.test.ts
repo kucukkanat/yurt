@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conversationUrl, isSkipWaiting, noticeDataOf, openMessage, openOf } from '../src/lib/swLogic';
+import { conversationUrl, isSkipWaiting, noticeDataOf, notifiesThroughWorker, openMessage, openOf } from '../src/lib/swLogic';
 import { anything, fc } from './fuzz';
 
 describe('the service worker’s decisions', () => {
@@ -26,5 +26,13 @@ describe('the service worker’s decisions', () => {
         expect(noticeDataOf(x)).toBeNull();
       }),
     );
+  });
+
+  it('notify through the worker only where it can show and close notifications (not Safari in a tab)', () => {
+    const fn = () => undefined;
+    expect(notifiesThroughWorker({ showNotification: fn, getNotifications: fn })).toBe(true);
+    expect(notifiesThroughWorker({ showNotification: fn })).toBe(false);
+    expect(notifiesThroughWorker({ getNotifications: fn })).toBe(false);
+    expect(notifiesThroughWorker({ showNotification: fn, getNotifications: undefined })).toBe(false);
   });
 });
