@@ -47,8 +47,23 @@ describe('Settings', () => {
     await until(() => document.documentElement.dataset.theme === 'dark');
     // This headless Chromium blocks notifications: the switch says so and stays off.
     expect(Notification.permission).toBe('denied');
-    await expect.element(dlg().getByRole('switch', { name: 'Desktop notifications' })).toBeDisabled();
+    await expect.element(dlg().getByRole('switch', { name: 'Notifications' })).toBeDisabled();
     await expect.element(dlg().getByText('Blocked in browser settings for this site.')).toBeVisible();
+    // Haptics: on by default, and a switch away.
+    const haptics = dlg().getByRole('switch', { name: 'Haptic feedback' });
+    await expect.element(haptics).toBeChecked();
+    await haptics.click();
+    await until(() => !useApp.getState().settings.haptics);
+    await haptics.click();
+  });
+
+  it('explains installing', async () => {
+    await open('app');
+    // A desktop browser tab that hasn't offered installing: the browser's menu does it.
+    await expect.element(page.getByTestId('app-install-menu')).toBeVisible();
+    useApp.setState({ installable: true }); // the browser offered it
+    await page.getByTestId('app-install').click(); // the offer was already used up elsewhere: nothing happens
+    useApp.setState({ installable: false });
   });
 
   it('saves calls and TURN for this device, reconnecting what needs it', async () => {
@@ -131,6 +146,9 @@ describe('Settings', () => {
     await open('ws-general');
     await expectText(page.getByTestId('ws-mode'), /Nostr relays/);
     await expect.element(page.getByTestId('invite-link')).toBeVisible();
+    // Where the browser has a share sheet, the link can go straight to it. (Not pressed here: opening the system sheet
+    // brings headless Chromium down on macOS.)
+    await expect.element(page.getByTestId('invite-share')).toBeVisible();
     await page.getByTestId('ws-leave').click();
     await dlg().getByRole('button', { name: 'Stay' }).click();
     await expect.element(page.getByTestId('ws-leave')).toBeVisible();
@@ -221,6 +239,9 @@ describe('Settings outside a workspace and on a narrow screen', () => {
     await expect.element(section('preferences')).toBeVisible();
     await page.getByTestId('settings-back').click();
     await expect.element(page.getByTestId('settings-nav-identity')).toBeVisible();
+    await userEvent.keyboard('{Escape}');
+    useApp.getState().openSettings('app'); // asked for by name (the install hint's "How"): straight there
+    await expect.element(section('app')).toBeVisible();
     await userEvent.keyboard('{Escape}');
     await page.viewport(1280, 860);
     // A peer-to-peer workspace's network section: signaling, members connected.

@@ -309,9 +309,11 @@ test('edit window: the Edit action counts down, then explains instead of doing n
 test('the tab icon shows unread messages on top of whatever favicon is set, and goes back when read', async ({ browser }) => {
   const a = await (await browser.newContext()).newPage();
   await relayWorkspace(a, 'Ida');
+  // The app declares several icons (favicon.ico, icon.svg); the badge decorates the first, as browsers prefer it.
+  const icon = () => a.locator('link[rel~="icon"]').first().getAttribute('href');
   // Wait until nothing is decorated (relays connected, nothing unread): that's the page's own icon.
-  await expect.poll(() => a.locator('link[rel~="icon"]').getAttribute('href'), { timeout: 30_000 }).toMatch(/^data:image\/svg/);
-  const original = await a.locator('link[rel~="icon"]').getAttribute('href');
+  await expect.poll(icon, { timeout: 30_000 }).toMatch(/favicon\.ico$/);
+  const original = await icon();
   await a.getByRole('button', { name: 'Invite people' }).first().click();
   const link = await a.getByTestId('invite-link').inputValue();
   await a.getByTestId('invite-link').press('Escape');
@@ -325,7 +327,6 @@ test('the tab icon shows unread messages on top of whatever favicon is set, and 
   await a.getByLabel('Name').fill('side');
   await a.getByRole('button', { name: 'Create channel' }).click();
   await expect(a).toHaveURL(/\/c\/side/);
-  const icon = () => a.locator('link[rel~="icon"]').getAttribute('href');
   const openGeneral = () =>
     a
       .getByRole('button', { name: /general/ })

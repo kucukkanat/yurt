@@ -23,7 +23,7 @@ bun install
 bun run dev            # web app on http://localhost:5173
 bun run bridge         # build the bridge UI and run the bridge from source
 bun run test           # unit + integration tests, all packages, with coverage gates
-bun run e2e            # Playwright (separate from unit tests on purpose)
+bun run e2e            # Playwright against the production build (service worker included), desktop + phone projects
 bun run quality        # typecheck (incl. tests and e2e) + Knip + jscpd + Biome (warnings fail)
 bun run format         # apply Biome formatting
 bun run build && bun run bridge:build
@@ -72,3 +72,6 @@ production build (`vite preview`), and deploys `main` to Pages.
 - Private channels: `dm:<a>:<b>`, `adm:<owner>:<agentId>`, `gdm:<member>:<owner>:<agentId>`; routing and sealing
   depend only on the `a`/`to` pair.
 - Web browser tests share one origin (IndexedDB, store), so that project runs files one at a time.
+- The service worker (`apps/web/src/sw.ts`) and its page glue (`lib/swClient.ts`) only exist in the built app: keep
+  their decisions in `lib/swLogic.ts` (unit tested) and check the wiring in `e2e/pwa.spec.ts`.
+- Don't press the invite Share button in tests: `navigator.share` brings headless Chromium down on macOS.

@@ -12,3 +12,4 @@ export * from './transport';
 export * from './blossom';
 export * from './rekey';
 export * from './schemas';
+export * from './notify';

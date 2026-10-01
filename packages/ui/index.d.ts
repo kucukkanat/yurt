@@ -13,6 +13,7 @@ export * from './components/forms/Radio';
 export * from './components/forms/Switch';
 export * from './components/navigation/Tabs';
 export * from './components/overlay/Dialog';
+export * from './components/overlay/ActionSheet';
 export * from './components/overlay/Toast';
 export * from './components/overlay/Tooltip';
 export * from './components/agent/AgentStep';

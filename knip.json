@@ -4,6 +4,9 @@
   "workspaces": {
     "packages/bridge": {
       "entry": ["test/ui/busy-bridge.ts"]
+    },
+    "apps/web": {
+      "entry": ["test/browser/fixtures/sw.js"]
     }
   }
 }

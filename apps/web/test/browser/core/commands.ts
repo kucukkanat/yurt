@@ -42,3 +42,33 @@ export const bridgeAllowOrigin: BrowserCommand<[origin: string]> = async (_ctx, 
 export const bridgeRevokeOrigin: BrowserCommand<[origin: string]> = async (_ctx, origin) => {
   testBridge().revokeOrigin(origin);
 };
+
+interface PageContext {
+  page: {
+    emulateMedia(o: { reducedMotion: 'reduce' | 'no-preference' }): Promise<void>;
+    context(): { newCDPSession(page: unknown): Promise<{ send(method: string, params: Record<string, unknown>): Promise<unknown> }> };
+  };
+}
+const pageOf = (ctx: Parameters<BrowserCommand<[]>>[0]) => {
+  if (ctx.provider.name !== 'playwright') throw new Error('page emulation needs the Playwright provider');
+  return (ctx as unknown as PageContext).page;
+};
+
+/** Emulates the user's reduced-motion preference (Chromium's own media emulation). */
+export const reduceMotion: BrowserCommand<[on: boolean]> = async (ctx, on) => {
+  await pageOf(ctx).emulateMedia({ reducedMotion: on ? 'reduce' : 'no-preference' });
+};
+
+/** Emulates a touch screen, so `(pointer: coarse)` matches as on a phone (DevTools' device mode does the same). */
+export const emulateTouch: BrowserCommand<[on: boolean]> = async (ctx, on) => {
+  const page = pageOf(ctx);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: on, maxTouchPoints: on ? 5 : 1 });
+};
+
+/** Emulates an iPhone's browser identity (its user agent), or the real one again with an empty string. */
+export const emulateUserAgent: BrowserCommand<[userAgent: string]> = async (ctx, userAgent) => {
+  const page = pageOf(ctx);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setUserAgentOverride', { userAgent });
+};

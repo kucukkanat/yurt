@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChatMessage, MentionText, ApprovalCard, Button, Kbd, Icon, IconButton, ICONS, type IconName } from '@yurt/ui';
+import { ChatMessage, MentionText, ApprovalCard, Button, Kbd, Icon, IconButton, ICONS, ActionSheet, REACTIONS, type IconName, type SheetAction } from '@yurt/ui';
 import { EDIT_WINDOW_MS, mentions, type Msg, type WsState, type WorkspacePeer, type FileRef } from '@yurt/protocol';
 import { editLeft, editLeftLabel, EDIT_CLOSED } from '../lib/editWindow';
 import { useApp } from '../store';
 import { addressed } from '../lib/private';
-import { personFor, authorKey, type Person } from '../model';
+import { personFor, authorKey, useMedia, type Person } from '../model';
 import { blobsDb } from '../lib/db';
 import { must } from './must';
 import { fmtTime, fmtBytes } from '../lib/format';
+import { haptic } from '../lib/haptics';
+import { both, useLongPress, useSwipe } from './touch';
+import { copy } from './Settings';
 
 const pendingDeletes = new Set<string>();
 
@@ -296,6 +299,97 @@ function messageTone(m: Msg, author: Person, mine: boolean, ctx: MsgCtx): 'menti
   return agentTalk ? 'agent' : 'default';
 }
 
+/** A message's actions on a touch screen, as the hover bar would offer them. */
+function sheetActions(o: {
+  text: string;
+  pinned: boolean;
+  pin: (() => void) | undefined;
+  mine: boolean;
+  canEdit: boolean;
+  editLabel: string;
+  reply: (() => void) | undefined;
+  edit: () => void;
+  del: () => void;
+  explainClosed: () => void;
+}): SheetAction[] {
+  const mineActions: SheetAction[] = o.canEdit
+    ? [
+        { id: 'edit', label: o.editLabel, icon: 'pencil', onSelect: o.edit },
+        { id: 'delete', label: 'Delete', icon: 'trash-2', tone: 'danger', onSelect: o.del },
+      ]
+    : [{ id: 'locked', label: 'Edit window closed', icon: 'lock', onSelect: o.explainClosed }];
+  return [
+    ...(o.reply ? [{ id: 'reply', label: 'Reply in thread', icon: 'reply' as const, onSelect: o.reply }] : []),
+    ...(o.text ? [{ id: 'copy', label: 'Copy text', icon: 'copy' as const, onSelect: () => copy(o.text, 'Message') }] : []),
+    ...(o.pin ? [{ id: 'pin', label: o.pinned ? 'Unpin' : 'Pin', icon: 'pin' as const, onSelect: o.pin }] : []),
+    ...(o.mine ? mineActions : []),
+  ];
+}
+
+/**
+ * A message on a touch screen: long-press opens its actions (with quick reactions), and swiping right replies in its
+ * thread, following the finger. Mouse and pen are untouched (they keep the hover bar and text selection).
+ */
+function TouchMessage({
+  id,
+  actions,
+  onReact,
+  onReply,
+  children,
+}: {
+  id: string;
+  actions: SheetAction[];
+  onReact: (icon: IconName) => void;
+  onReply: (() => void) | undefined;
+  children: React.ReactNode;
+}) {
+  const touch = useMedia('(pointer: coarse)');
+  const [sheet, setSheet] = useState(false);
+  const longPress = useLongPress(() => {
+    haptic('tick');
+    setSheet(true);
+  });
+  const swipe = useSwipe(onReply ? { right: onReply } : {}, { onReach: () => haptic('tick') });
+  // A little resistance past the swipe distance.
+  const shift = onReply && swipe.offset > 0 ? Math.min(swipe.offset, 96) : 0;
+  return (
+    <div
+      data-mid={id}
+      {...both(swipe.handlers, longPress)}
+      style={{
+        touchAction: 'pan-y',
+        transform: shift ? 'translateX(' + shift + 'px)' : undefined,
+        transition: shift ? undefined : 'transform var(--dur-fast) var(--ease-out)',
+        ...(touch ? { userSelect: 'none', WebkitTouchCallout: 'none' } : {}),
+      }}
+    >
+      {children}
+      <ActionSheet
+        open={sheet}
+        onClose={() => setSheet(false)}
+        label="Message actions"
+        header={
+          <div style={{ display: 'flex', justifyContent: 'space-around', padding: '0 var(--space-2) var(--space-2)' }}>
+            {REACTIONS.map((icon) => (
+              <IconButton
+                key={icon}
+                icon={icon}
+                label={'React with ' + icon}
+                data-testid={'sheet-react-' + icon}
+                onClick={() => {
+                  setSheet(false);
+                  onReact(icon);
+                }}
+              />
+            ))}
+          </div>
+        }
+        actions={actions}
+      />
+    </div>
+  );
+}
+
 export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean; ctx: MsgCtx }) {
   const editing = useApp((s) => s.editing);
   // Re-render my own messages as their edit window counts down (and once just after it closes); others never change.
@@ -303,6 +397,8 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
   const highlight = useApp((s) => s.highlight);
   const { state, peer, me, code } = ctx;
   const app = useApp.getState();
+  const openThread = () => app.go({ code, ch: m.ch, thread: m.id });
+  const touch = useMedia('(pointer: coarse)'); // touch screens get the long-press sheet instead of the hover bar
   if (pendingDeletes.has(m.id)) return null;
   if (m.deleted) {
     return (
@@ -319,7 +415,6 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
   const pinned = !!state.pins.get(m.ch)?.has(m.id);
   const reactions = Object.entries(m.reactions).flatMap(([icon, who]) => (isIconName(icon) ? [{ icon, count: who.length, mine: who.includes(me) }] : []));
   const members = ctx.roster.map((p) => ({ id: p.id, handle: p.handle, kind: p.kind }));
-  const openThread = () => app.go({ code, ch: m.ch, thread: m.id });
   const explainClosed = () => app.toast({ ...EDIT_CLOSED, duration: 8000, ...(ctx.inThread ? {} : { actionLabel: 'Reply in thread', onAction: openThread }) });
   const saveEdit = (t: string) => {
     useApp.setState({ editing: null });
@@ -330,8 +425,24 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
     }
     app.publish(code, { t: 'edit', ch: m.ch, ...addressed(m.ch, me), b: { target: m.id, text: t } });
   };
+  const react = (icon: IconName) => app.publish(code, { t: 'react', ch: m.ch, ...addressed(m.ch, me), b: { target: m.id, icon, on: !m.reactions[icon]?.includes(me) } });
+  const pin = m.ch.includes(':') ? undefined : () => app.publish(code, { t: 'pin', b: { target: m.id, on: !pinned } });
+  const edit = () => useApp.setState({ editing: m.id });
+  const del = () => deleteWithUndo(m, ctx);
+  const actions = sheetActions({
+    text,
+    pinned,
+    pin,
+    mine,
+    canEdit,
+    editLabel: 'Edit · ' + editLeftLabel(left),
+    reply: ctx.inThread ? undefined : openThread,
+    edit,
+    del,
+    explainClosed,
+  });
   return (
-    <div data-mid={m.id}>
+    <TouchMessage id={m.id} actions={actions} onReact={react} onReply={ctx.inThread ? undefined : openThread}>
       {/* A thread reply also shown in the channel: point back to the conversation it answers. */}
       {!ctx.inThread && m.alsoInChannel && m.parent && <AlsoInChannel m={{ ...m, parent: m.parent }} state={state} code={code} />}
       <ChatMessage
@@ -345,13 +456,14 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
         pinned={pinned}
         status={peer?.queued.has(m.id) ? 'queued' : 'sent'}
         reactions={reactions}
-        onReact={(icon) => app.publish(code, { t: 'react', ch: m.ch, ...addressed(m.ch, me), b: { target: m.id, icon, on: !m.reactions[icon]?.includes(me) } })}
-        onPin={m.ch.includes(':') ? undefined : () => app.publish(code, { t: 'pin', b: { target: m.id, on: !pinned } })}
+        onReact={react}
+        onPin={pin}
+        actions={!touch}
         replies={threadSummary(m, ctx)}
         onReplies={openThread}
         onReply={ctx.inThread ? undefined : openThread}
-        onEdit={canEdit ? () => useApp.setState({ editing: m.id }) : undefined}
-        onDelete={canEdit ? () => deleteWithUndo(m, ctx) : undefined}
+        onEdit={canEdit ? edit : undefined}
+        onDelete={canEdit ? del : undefined}
         editLabel={'Edit · ' + editLeftLabel(left)}
         locked={mine && !canEdit}
         lockedLabel="Edit window closed"
@@ -371,6 +483,6 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
         )}
       </ChatMessage>
       {m.approval && <Approval approval={m.approval} state={state} author={author} />}
-    </div>
+    </TouchMessage>
   );
 }

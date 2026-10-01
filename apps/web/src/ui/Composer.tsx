@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { IconButton, Kbd, MemberRow, Tag } from '@yurt/ui';
 import { editLeft, EDIT_CLOSED } from '../lib/editWindow';
 import { useApp } from '../store';
+import { haptic } from '../lib/haptics';
 import type { Person } from '../model';
 import { must } from './must';
 
@@ -89,6 +90,7 @@ export function Composer({ members, placeholder, note, onSend, onTyping, autoFoc
     setSending(true);
     const ok = await onSend(text.trim(), sent).finally(() => setSending(false));
     if (!ok) return;
+    haptic('tap');
     // Clear only what was sent: anything typed or attached during a slow upload stays.
     setV((cur) => (cur === text ? '' : cur));
     setFiles((cur) => cur.filter((f) => !sent.includes(f)));

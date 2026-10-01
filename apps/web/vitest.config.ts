@@ -1,7 +1,7 @@
 import react from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
-import { bridgeAllowOrigin, bridgePairingCode, bridgeRevokeOrigin, setPermissions } from './test/browser/core/commands.ts';
+import { bridgeAllowOrigin, bridgePairingCode, bridgeRevokeOrigin, emulateTouch, emulateUserAgent, reduceMotion, setPermissions } from './test/browser/core/commands.ts';
 
 // Two projects, one coverage report:
 // - unit: pure modules in Node.
@@ -26,12 +26,13 @@ export default defineConfig({
             headless: true,
             // Chromium's built-in fake camera/mic and auto-accepted permission prompt (browser features, not mocks).
             provider: playwright({
-              launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--auto-accept-this-tab-capture'] },
+              // WebShare: Chromium's share sheet, off in headless builds by default (the invite link's Share button).
+              launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--auto-accept-this-tab-capture', '--enable-features=WebShare'] },
               contextOptions: { permissions: ['microphone', 'camera'] },
             }),
             instances: [{ browser: 'chromium' }],
             screenshotFailures: false,
-            commands: { setPermissions, bridgePairingCode, bridgeAllowOrigin, bridgeRevokeOrigin },
+            commands: { setPermissions, bridgePairingCode, bridgeAllowOrigin, bridgeRevokeOrigin, reduceMotion, emulateTouch, emulateUserAgent },
           },
         },
       },
@@ -40,6 +41,11 @@ export default defineConfig({
       provider: 'istanbul',
       // The UI kit is source too (JSX consumed directly), so it's held to the same bar.
       include: ['src/**', '**/packages/ui/components/**'],
+      // Code that only runs with a built, registered service worker (no worker exists in dev or these tests): wiring
+      // only, with its decisions in tested modules (lib/swLogic.ts); e2e/pwa.spec.ts runs it against the build.
+      // ui/share.ts calls the system share sheet, which brings headless Chromium down on macOS: it's five lines, read by
+      // hand, and its button is checked to appear (settings.test.tsx).
+      exclude: ['src/sw.ts', 'src/lib/swClient.ts', 'src/ui/share.ts'],
       allowExternal: true,
       // Per-file table in CI logs, so coverage differences between machines can be traced.
       reporter: process.env.CI ? ['text'] : ['text-summary'],

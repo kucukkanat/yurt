@@ -57,3 +57,5 @@ export interface ChatMessageProps {
 export declare function ChatMessage(props: ChatMessageProps): JSX.Element;
 export declare function UnreadDivider(props: { label?: string }): JSX.Element;
 export declare function DayDivider(props: { label: string }): JSX.Element;
+/** The quick reactions offered on a message. */
+export declare const REACTIONS: readonly IconName[];

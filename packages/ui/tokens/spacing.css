@@ -4,5 +4,7 @@
 --border-width:1px;--border-width-bold:1.5px;--border-width-heavy:2px;
 --control-sm:32px;--control-md:40px;--control-lg:48px;
 --hit-min:44px;
+/* Device safe areas (notch, home indicator, rounded corners); 0 where there are none. */
+--safe-top:env(safe-area-inset-top,0px);--safe-right:env(safe-area-inset-right,0px);--safe-bottom:env(safe-area-inset-bottom,0px);--safe-left:env(safe-area-inset-left,0px);
 --layout-rail:64px;--layout-sidebar:264px;--layout-content:760px;--layout-max:1280px;
 }

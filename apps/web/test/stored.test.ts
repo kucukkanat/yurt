@@ -112,9 +112,20 @@ describe('stored settings', () => {
   });
 
   it('keep valid values and replace bad ones with defaults', () => {
-    const good = { theme: 'light', notifications: true, turn: 'custom', turnUrls: 'turn:x', turnUser: 'u', turnPass: 'p', webrtc: true } as const;
+    const good = {
+      theme: 'light',
+      notifications: true,
+      haptics: false,
+      installHint: true,
+      turn: 'custom',
+      turnUrls: 'turn:x',
+      turnUser: 'u',
+      turnPass: 'p',
+      webrtc: true,
+    } as const;
     expect(loadSettings(good)).toEqual(good);
-    expect(loadSettings({ theme: 'neon', notifications: 'yes', turn: 1, turnUrls: null, webrtc: 'on', extra: 1 })).toEqual(DEFAULT_SETTINGS);
+    const bad = { theme: 'neon', notifications: 'yes', haptics: 0, installHint: 'no', turn: 1, turnUrls: null, webrtc: 'on', extra: 1 };
+    expect(loadSettings(bad)).toEqual(DEFAULT_SETTINGS);
   });
 
   it('carry lastNet, migrating an older version’s network defaults once', () => {

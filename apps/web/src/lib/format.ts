@@ -39,13 +39,16 @@ export async function askNotifications(): Promise<boolean> {
   return canNotify() && (await Notification.requestPermission()) === 'granted';
 }
 
+/** Whether notifications may be shown now, read live: `Notification.permission` can lag behind the browser's settings. */
+export const mayNotify = async () => canNotify() && (await navigator.permissions.query({ name: 'notifications' })).state === 'granted';
+
 /**
  * Shows a desktop notification if allowed, and returns it (null when not shown). Permission is read live
  * from the Permissions API: `Notification.permission` can lag behind a change made in the browser's settings.
  */
-export async function notify(title: string, body: string, onClick?: () => void): Promise<Notification | null> {
-  if (!canNotify() || (await navigator.permissions.query({ name: 'notifications' })).state !== 'granted') return null;
-  const n = new Notification(title, { body, tag: title });
+export async function notify(title: string, body: string, tag: string, onClick?: () => void): Promise<Notification | null> {
+  if (!(await mayNotify())) return null;
+  const n = new Notification(title, { body, tag });
   n.onclick = () => {
     window.focus();
     onClick?.();

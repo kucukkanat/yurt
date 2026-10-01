@@ -9,7 +9,7 @@ export type IconName =
   | 'wand-sparkles' | 'list-checks' | 'hand' | 'keyboard' | 'bell' | 'sun' | 'moon' | 'panel-left' | 'ellipsis' | 'flag' | 'gauge'
   | 'database' | 'coins'
   | 'hash' | 'at-sign' | 'message-square' | 'messages-square' | 'smile-plus' | 'pin' | 'users' | 'user-plus' | 'wifi-off' | 'refresh-cw' | 'cpu' | 'laptop' | 'key-round' | 'reply' | 'image' | 'plug' | 'arrow-down' | 'wrench' | 'heart' | 'clock' | 'log-in'
-  | 'mic-off' | 'video' | 'video-off' | 'monitor-up' | 'headphones' | 'phone-off' | 'download' | 'log-out' | 'ban' | 'crown' | 'menu' | 'qr-code';
+  | 'mic-off' | 'video' | 'video-off' | 'monitor-up' | 'headphones' | 'phone-off' | 'download' | 'share' | 'log-out' | 'ban' | 'crown' | 'menu' | 'qr-code';
 
 /** Lucide stroke icon (copied set, 24px grid, 2px stroke). Decorative unless `label` is set. */
 export interface IconProps extends React.SVGAttributes<SVGSVGElement> {

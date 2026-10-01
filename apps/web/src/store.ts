@@ -5,7 +5,7 @@ import {
   newInviteCode,
   formatCode,
   slug,
-  mentions,
+  noticeFor,
   sha256Buf,
   MAX_FILE_BYTES,
   parseInvite,
@@ -26,7 +26,8 @@ import { connect, getPeer, allPeers, disconnect } from './lib/net';
 import { bridge, type BridgeStatus } from './lib/bridge';
 import { huddle, type HuddleView } from './lib/huddle';
 import { askNotifications, errorText } from './lib/format';
-import { announce, closeNotifications } from './lib/notifications';
+import { announce, closeNotifications, type Notice } from './lib/notifications';
+import { haptic } from './lib/haptics';
 import { report } from './lib/diagnostics';
 import { buildHash, parseHash, type Route } from './lib/route';
 import { presenceNow } from './lib/visibility';
@@ -37,7 +38,7 @@ export type { Settings, WsRecord } from './lib/stored';
 
 type ConnectionChange = { kind: 'nostr'; relays: string[]; blossom: string[] } | { kind: 'trystero'; signal: Signaling };
 /** Sections of the single Settings window: "you" (account and this device) and the current workspace. */
-export type SettingsSection = 'profile' | 'identity' | 'preferences' | 'connection' | 'agents' | 'ws-general' | 'ws-network' | 'ws-agents';
+export type SettingsSection = 'profile' | 'identity' | 'preferences' | 'app' | 'connection' | 'agents' | 'ws-general' | 'ws-network' | 'ws-agents';
 type PanelType = 'members' | 'profile' | 'thread' | 'pinned' | 'search' | null;
 interface Panel {
   type: PanelType;
@@ -71,6 +72,8 @@ export interface AppData {
   panel: Panel;
   dialog: DialogType;
   settingsSection: SettingsSection;
+  /** Settings was opened on a section asked for by name: narrow screens show it at once, not the list first. */
+  settingsJump: boolean;
   toasts: ToastT[];
   bridgeStatus: BridgeStatus;
   bridgeState: BridgeState | null;
@@ -81,6 +84,10 @@ export interface AppData {
   /** Ticks every 30 s so time-based UI (like the edit window) stays current. */
   clock: number;
   highlight: string | null;
+  /** The browser offered to install Yurt (Chromium); lib/pwa.ts holds the offer. */
+  installable: boolean;
+  /** Running as the installed app, not in a browser tab (set at start, lib/pwa.ts isStandalone). */
+  standalone: boolean;
 }
 
 export interface AppState extends AppData {
@@ -133,19 +140,16 @@ function changedTransport(t: WsTransport, change: ConnectionChange): { transport
 }
 
 /** A desktop notification for a fresh message, if it's for me (a mention or any direct message) and I'm not looking at it. */
-function notificationFor(e: Ev, s: WsState, ctx: { me: Identity; route: Route; code: string; muted: readonly string[] }): { title: string; body: string; ch: string } | null {
+/**
+ * A fresh message worth a notification here: what notifies is decided by noticeFor (@yurt/protocol); this device adds that it's new (not a backfill) and not the conversation already on screen.
+ */
+function notificationFor(e: Ev, s: WsState, ctx: { me: Identity; route: Route; code: string; muted: readonly string[] }): Notice | null {
   // The reduced message, not the raw body: only what the reducer accepted is announced.
   const m = e.t === 'msg' && e.ch ? s.msgs.get(e.id) : undefined;
-  if (!m || (m.a === ctx.me.pub && !m.ag) || Date.now() - m.ts > 60_000 || ctx.muted.includes(m.ch)) return null;
-  const direct = m.ch.startsWith('dm:') || m.ch.startsWith('adm:') || m.ch.startsWith('gdm:');
-  if (!direct && !mentions(m.text).includes(ctx.me.handle.toLowerCase())) return null;
+  if (!m || Date.now() - m.ts > 60_000) return null;
   if (!document.hidden && ctx.route.code === ctx.code && ctx.route.ch === m.ch) return null;
-  const author = m.ag ? s.agents.get(m.a + '/' + m.ag)?.name || 'Agent' : s.profiles.get(m.a)?.name || 'Someone';
-  if (m.approval) return { title: author + ' needs you', body: m.approval.title, ch: m.ch };
-  // The reducer keeps channel messages only in channels it knows, so the name is there; the fallback is for the types.
-  /* istanbul ignore next -- unreachable: a message in an unknown channel never reaches the state */
-  const channel = s.channels.get(m.ch)?.name ?? m.ch;
-  return { title: direct ? author : author + ' in #' + channel, body: m.text.slice(0, 140), ch: m.ch };
+  const n = noticeFor(m, s, ctx.me.pub, ctx.muted);
+  return n && { ...n, code: ctx.code, tag: ctx.code + ':' + m.id };
 }
 
 /** Everything the app holds in memory before `init` loads saved data; a device reset returns to it. */
@@ -162,6 +166,7 @@ const initialState = (): AppData => ({
   panel: { type: null },
   dialog: null,
   settingsSection: 'profile',
+  settingsJump: false,
   toasts: [],
   bridgeStatus: 'off',
   bridgeState: null,
@@ -171,6 +176,8 @@ const initialState = (): AppData => ({
   editing: null,
   clock: Date.now(),
   highlight: null,
+  installable: false,
+  standalone: false,
 });
 
 let typingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -202,11 +209,13 @@ export const useApp = create<AppState>((set, get) => {
 
   const onFresh = (code: string, s: WsState, fresh: Ev[], me: Identity) => {
     const { route, settings, workspaces } = get();
-    if (!settings.notifications) return;
     const muted = workspaces.flatMap((w) => (w.code === code ? w.muted : []));
     for (const e of fresh) {
       const n = notificationFor(e, s, { me, route, code, muted });
-      if (n) void announce(code, n.ch, n.title, n.body, () => get().go({ code, ch: n.ch }));
+      if (!n) continue;
+      // In my hand and looking elsewhere in the app: a buzz says something arrived for me.
+      if (!document.hidden) haptic('notice');
+      if (settings.notifications) void announce(n, () => get().go({ code, ch: n.ch }));
     }
   };
 
@@ -435,7 +444,8 @@ export const useApp = create<AppState>((set, get) => {
     openSettings(section) {
       // Workspace sections only exist inside a workspace; elsewhere fall back to the first "you" section.
       const want = section ?? get().settingsSection;
-      set({ dialog: 'settings', settingsSection: want.startsWith('ws-') && !get().route.code ? 'profile' : want });
+      const settingsSection = want.startsWith('ws-') && !get().route.code ? 'profile' : want;
+      set({ dialog: 'settings', settingsSection, settingsJump: settingsSection === section });
     },
     toast(t) {
       const id = ++toastId;

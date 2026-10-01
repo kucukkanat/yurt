@@ -6,7 +6,9 @@ import { Icon } from '../core/Icon.jsx';
 import { Badge } from '../display/Badge.jsx';
 
 const TINT = { default: 'transparent', agent: 'color-mix(in oklab, var(--agent) 6%, transparent)', mention: 'color-mix(in oklab, var(--human) 9%, transparent)' };
-const PICK = ['thumbs-up', 'heart', 'circle-check', 'eye', 'zap', 'flag'];
+/** The quick reactions offered on a message (the action bar's picker, and the app's touch sheet). */
+export const REACTIONS = ['thumbs-up', 'heart', 'circle-check', 'eye', 'zap', 'flag'];
+const PICK = REACTIONS;
 
 function Act({ icon, label, onClick, tone, testId }) {
   const [h, setH] = React.useState(false);

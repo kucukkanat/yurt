@@ -9,6 +9,8 @@ import type { NetSettings } from '../lib/net';
 import { Row, Section } from './Nav';
 import { ModeChip } from './Sidebar';
 import { messageOf, must } from './must';
+import { AppSection } from './AppSettings';
+import { share } from './share';
 
 /**
  * The one Settings window. "You" holds your account and this device; the workspace group (only inside
@@ -39,6 +41,7 @@ const YOU: Item[] = [
   PROFILE,
   { id: 'identity', label: 'Identity', icon: 'key-round' },
   { id: 'preferences', label: 'Preferences', icon: 'bell' },
+  { id: 'app', label: 'App', icon: 'download' },
   { id: 'connection', label: 'Connection', icon: 'globe' },
   { id: 'agents', label: 'Agents & bridge', icon: 'sparkles' },
 ];
@@ -52,8 +55,8 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const section = useApp((s) => s.settingsSection);
   const { route, state, rec } = useCurrent();
   const narrow = useMedia('(max-width: 760px)');
-  // Narrow screens show the list first, then one section with a way back.
-  const [listing, setListing] = useState(narrow);
+  // Narrow screens show the list first, then one section with a way back; a section asked for by name opens at once.
+  const [listing, setListing] = useState(() => narrow && !useApp.getState().settingsJump);
   const inWs = !!route.code && !!rec;
   const items = [...YOU, ...(inWs ? WORKSPACE : [])];
   const current = items.find((i) => i.id === section) ?? PROFILE;
@@ -124,6 +127,8 @@ function SectionBody({ id }: { id: SettingsSection }) {
       return <IdentitySection />;
     case 'preferences':
       return <PreferencesSection />;
+    case 'app':
+      return <AppSection />;
     case 'connection':
       return <ConnectionSection />;
     case 'agents':
@@ -137,12 +142,12 @@ function SectionBody({ id }: { id: SettingsSection }) {
   }
 }
 
-const Muted = ({ children, testId }: { children: React.ReactNode; testId?: string }) => (
+export const Muted = ({ children, testId }: { children: React.ReactNode; testId?: string }) => (
   <span data-testid={testId} style={{ fontSize: 'var(--fs-body-sm)', color: 'var(--text-muted)' }}>
     {children}
   </span>
 );
-const SubHead = ({ children }: { children: React.ReactNode }) => (
+export const SubHead = ({ children }: { children: React.ReactNode }) => (
   <span
     style={{
       marginTop: 'var(--space-2)',
@@ -267,9 +272,16 @@ function PreferencesSection() {
       <Switch
         checked={settings.notifications && perm === 'granted'}
         onChange={(on) => app.updateSettings({ notifications: on })}
-        label="Desktop notifications"
+        label="Notifications"
         description={perm === 'denied' ? 'Blocked in browser settings for this site.' : 'For @mentions, direct messages and agent approvals while Yurt is in the background.'}
         disabled={perm === 'denied'}
+      />
+      <Switch
+        data-testid="haptics"
+        checked={settings.haptics}
+        onChange={(on) => app.updateSettings({ haptics: on })}
+        label="Haptic feedback"
+        description="A short vibration when a long-press, a swipe or sending works. Phones that support it only."
       />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
         <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)' }}>Theme</span>
@@ -514,6 +526,7 @@ export function InviteBody() {
         <Button variant="primary" iconLeft="copy" onClick={() => copy(link, 'Link')}>
           Copy link
         </Button>
+        {'share' in navigator && <IconButton icon="share" label="Share link" variant="secondary" data-testid="invite-share" onClick={() => share(link, 'Join me on Yurt')} />}
       </div>
       <Muted>
         {t.kind === 'nostr'

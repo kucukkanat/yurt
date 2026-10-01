@@ -55,12 +55,26 @@ export interface NetSettings {
 export interface Settings extends NetSettings {
   theme: 'dark' | 'light';
   notifications: boolean;
+  /** Vibration on touches that do something (long-press, swipe to reply, sending). */
+  haptics: boolean;
+  /** The "install Yurt" suggestion was shown on this device. */
+  installHint: boolean;
   /** What the create step used last for each mode; prefills the next new workspace. */
   lastNet?: LastNet | undefined;
 }
 
 // No TURN by default: a third-party relay would see who connects to whom. Opt in under Settings → Network.
-export const DEFAULT_SETTINGS: Settings = { theme: 'dark', notifications: false, turn: 'off', turnUrls: '', turnUser: '', turnPass: '', webrtc: false };
+export const DEFAULT_SETTINGS: Settings = {
+  theme: 'dark',
+  notifications: false,
+  haptics: true,
+  installHint: false,
+  turn: 'off',
+  turnUrls: '',
+  turnUser: '',
+  turnPass: '',
+  webrtc: false,
+};
 
 const text = v.string();
 const finite = v.pipe(v.number(), v.finite());
@@ -143,6 +157,8 @@ export function loadIdentity(raw: unknown): Identity | null {
 const SettingsSchema = v.object({
   theme: v.fallback(v.picklist(['dark', 'light']), DEFAULT_SETTINGS.theme),
   notifications: v.fallback(v.boolean(), DEFAULT_SETTINGS.notifications),
+  haptics: v.fallback(v.boolean(), DEFAULT_SETTINGS.haptics),
+  installHint: v.fallback(v.boolean(), DEFAULT_SETTINGS.installHint),
   turn: v.fallback(v.picklist(['default', 'custom', 'off']), DEFAULT_SETTINGS.turn),
   turnUrls: v.fallback(text, DEFAULT_SETTINGS.turnUrls),
   turnUser: v.fallback(text, DEFAULT_SETTINGS.turnUser),

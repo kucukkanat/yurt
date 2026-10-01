@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { Icon, IconButton, Button, Avatar, Badge, MemberRow, Input, Kbd } from '@yurt/ui';
 import { fingerprint, dmChannel, agentDmChannel, guestDmChannel, type Msg } from '@yurt/protocol';
 import { useApp } from '../store';
+import { useSwipe } from './touch';
 import { useCurrent, roster, personFor, authorKey, channelTitle, prefsLine, type Person } from '../model';
 import { fmtTime, fmtDay } from '../lib/format';
 import { MessageItem, type MsgCtx } from './Message';
@@ -18,11 +19,14 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
     if (panel.type === 'thread') useApp.getState().go({ code, ch: route.ch });
     useApp.getState().setPanel({ type: null });
   };
+  // Full screen on narrow screens: swipe it away to the right, like going back.
+  const swipe = useSwipe({ right: close });
   const titles = { members: 'Members', profile: 'Profile', thread: 'Thread', pinned: 'Pinned', search: 'Search' } as const;
   const title = titles[must(panel.type, 'The side panel is mounted for an open panel')];
   return (
     <aside
       aria-label={title}
+      {...(narrow ? swipe.handlers : {})}
       style={
         narrow
           ? {
@@ -32,6 +36,9 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
               background: 'var(--surface-page)',
               display: 'flex',
               flexDirection: 'column',
+              padding: 'var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left)',
+              touchAction: 'pan-y',
+              transform: swipe.offset > 0 ? 'translateX(' + swipe.offset + 'px)' : undefined,
               animation: 'ag-rise var(--dur-base) var(--ease-out)',
             }
           : {
