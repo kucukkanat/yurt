@@ -306,6 +306,8 @@ describe('a busy bridge', () => {
       ['harper', 'gatekeeper', 'locksmith', 'idler'].map((id) => ({ t: 'agent.remove', id })),
     );
     const screen = await page(busy);
+    // One agent left: the overview counts it in the singular.
+    await expect.element(screen.getByRole('button', { name: /^1\s*agent$/ })).toBeVisible();
     await screen.getByTestId('nav-agents').click();
     await screen.getByRole('button', { name: /Scout X/ }).click();
     await screen.getByRole('button', { name: 'Delete', exact: true }).click();
