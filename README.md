@@ -1,16 +1,49 @@
-# Yurt
+<p align="center">
+  <a href="https://kucukkanat.github.io/yurt/"><img src="docs/assets/banner.svg" alt="Yurt: peer-to-peer team chat with AI agents. No server, no accounts. Just a link." width="100%"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/kucukkanat/yurt/actions/workflows/pages.yml"><img src="https://github.com/kucukkanat/yurt/actions/workflows/pages.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.npmjs.com/package/yurt-bridge"><img src="https://img.shields.io/npm/v/yurt-bridge?color=2F55FF&label=yurt-bridge" alt="yurt-bridge on npm"></a>
+  <a href="https://kucukkanat.github.io/yurt/"><img src="https://img.shields.io/badge/open-the_app-D2FF2E?labelColor=0D0D0C" alt="Open the app"></a>
+</p>
+
+<p align="center">
+  <a href="https://kucukkanat.github.io/yurt/"><b>Open Yurt</b></a> ·
+  <a href="#agents">Bring your agents</a> ·
+  <a href="docs/PROTOCOL.md">Protocol</a> ·
+  <a href="#develop">Develop</a>
+</p>
 
 Team chat that runs entirely in the browser. Workspaces, channels, DMs, threads, files and huddles travel directly between members over WebRTC ([Trystero](https://trystero.dev), Nostr signaling). There are no accounts and no server: you are an Ed25519 key, and a workspace is a signed event log that every member holds a copy of.
 
 Optionally, `yurt-bridge` runs on your machine and brings your own coding agents (GitHub Copilot CLI, OpenCode, Codex, Claude Code, Pi) into rooms over the [Agent Client Protocol](https://agentclientprotocol.com).
 
-```
-apps/web            React + Vite app, deployed to GitHub Pages
-packages/protocol   Events, signatures, reducer, sync, shared WorkspacePeer (web + bridge)
-packages/ui         Agentic Design System components and tokens
-packages/bridge     yurt-bridge: local agent host, headless peer, its own setup UI
-docs/PROTOCOL.md    Wire formats and rules
-e2e/                Playwright: two browsers, real P2P
+## Highlights
+
+<table>
+  <tr>
+    <td width="33%" valign="top"><b>No server, no accounts</b><br>You are a key. A workspace is a signed event log every member holds. The app is static files on GitHub Pages.</td>
+    <td width="33%" valign="top"><b>Your agents, in the room</b><br>Claude Code, Codex, Copilot CLI, OpenCode and Pi join over ACP. Every tool call shows as a trace; tools you haven't pre-approved ask you first.</td>
+    <td width="33%" valign="top"><b>Two transports</b><br>Live peer to peer over WebRTC, or end-to-end encrypted on Nostr relays so messages arrive while you're away.</td>
+  </tr>
+  <tr>
+    <td valign="top"><b>Sealed by default</b><br>The invite link carries a 256-bit key; relays see only ciphertext. DMs get their own pairwise key.</td>
+    <td valign="top"><b>Everything a team chat needs</b><br>Channels, DMs, threads, reactions, pins, files up to 25 MB, and huddles with video and screen share.</td>
+    <td valign="top"><b>Installable</b><br>A PWA that opens offline, with touch gestures, haptics and an unread badge on the home-screen icon.</td>
+  </tr>
+</table>
+
+## How it fits together
+
+```mermaid
+flowchart LR
+  A["Your browser"] <-- "WebRTC" --> B["Teammate's browser"]
+  A <-. "sealed events" .-> R[("Nostr relays")]
+  B <-. "sealed events" .-> R
+  A <-- "paired, 127.0.0.1:7717" --> Br["yurt-bridge<br>(your machine)"]
+  Br <-- "joins as you, headless" --> R
+  Br <-- "ACP" --> Ag["Your agent CLIs<br>(Claude Code, Codex, …)"]
 ```
 
 ## Two ways to carry a workspace
@@ -32,26 +65,7 @@ Invites are links only: the 8-character code is just an id, and a 256-bit key in
 
 A workspace's network is chosen when it's created: after picking a mode, a collapsed *Network settings* row sets its signaling, or its relays and file servers, starting from what you used last. The mode is fixed after that; members need a signaling server or relay in common, and invite links carry the workspace's current list.
 
-## Run it
-
-```sh
-bun install
-bun run dev          # http://localhost:5173
-bun run test         # protocol + bridge unit/integration tests (Vitest; local relay, Blossom server and real WebRTC, no network)
-bun run e2e          # Playwright: P2P chat over public relays, relay workspaces over a local relay and Blossom server
-```
-
-Open two browser profiles (or one normal + one private window), create a workspace in one and paste its invite link into the other.
-
-## Deploy to GitHub Pages
-
-1. Push to `main` on `kucukkanat/yurt`.
-2. Repo **Settings → Pages → Source: GitHub Actions**.
-3. `.github/workflows/pages.yml` tests, builds `apps/web` with base `/yurt/` and deploys. The site lands at `https://kucukkanat.github.io/yurt/`.
-
-For a different repo name or a custom domain, set `YURT_BASE` (e.g. `/` for a custom domain) in the build step.
-
-## Agents (optional)
+## Agents
 
 ```sh
 npx yurt-bridge      # or: bunx yurt-bridge
@@ -65,8 +79,6 @@ That's the only terminal step. The bridge opens `http://127.0.0.1:7717`, where y
 - Every tool call shows up in the room as an expandable trace. Tool kinds not on the agent's auto-approve list pause the run and ask you in your private chat with it, with a desktop notification.
 - One ACP session per agent, kept alive across prompts.
 - Config lives in `~/.yurt/` (JSON, written by the bridge UI; you never edit it).
-
-From the repo: `bun run bridge`. Releases are published locally (not from CI) with `npm publish -w packages/bridge` (the `prepublishOnly` script builds the UI and CLI).
 
 ### Runtime commands
 
@@ -95,3 +107,37 @@ The bridge launches each CLI's ACP mode. Adapters move fast, so check these agai
 - **Identity** is a 12-word recovery phrase. Enter it on another device to be the same person.
 - **On a phone.** Yurt installs as an app (Settings → App: the Install button, or Safari's Share → Add to Home Screen on iPhone and iPad) and opens offline. Touch gestures: swipe in from the left edge for the sidebar, swipe a message right to reply in its thread, long-press it for its actions, and swipe a full-screen panel away. Android phones give a short vibration when these land (Settings → Preferences → Haptic feedback); iOS has no vibration for web apps.
 - **Notifications** come from the app itself, so they need it open or recently in the background; there's no server to push them to a closed app. On iPhone and iPad they need the installed app.
+
+## Develop
+
+```
+apps/web            React + Vite app, deployed to GitHub Pages
+packages/protocol   Events, signatures, reducer, sync, shared WorkspacePeer (web + bridge)
+packages/ui         Agentic Design System components and tokens
+packages/bridge     yurt-bridge: local agent host, headless peer, its own setup UI
+docs/PROTOCOL.md    Wire formats and rules
+e2e/                Playwright: two browsers, real P2P
+```
+
+### Run it
+
+```sh
+bun install
+bun run dev          # http://localhost:5173
+bun run test         # protocol + bridge unit/integration tests (Vitest; local relay, Blossom server and real WebRTC, no network)
+bun run e2e          # Playwright: P2P chat over public relays, relay workspaces over a local relay and Blossom server
+```
+
+Open two browser profiles (or one normal + one private window), create a workspace in one and paste its invite link into the other.
+
+### Deploy to GitHub Pages
+
+1. Push to `main` on `kucukkanat/yurt`.
+2. Repo **Settings → Pages → Source: GitHub Actions**.
+3. `.github/workflows/pages.yml` tests, builds `apps/web` with base `/yurt/` and deploys. The site lands at `https://kucukkanat.github.io/yurt/`.
+
+For a different repo name or a custom domain, set `YURT_BASE` (e.g. `/` for a custom domain) in the build step.
+
+### Release the bridge
+
+From the repo: `bun run bridge`. Releases are published locally (not from CI) with `npm publish -w packages/bridge` (the `prepublishOnly` script builds the UI and CLI).

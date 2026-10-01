@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Yurt"><title>Yurt</title>
+  <defs>
+    <clipPath id="logo-roof"><path d="M84 262 Q170 190 214 150 Q256 124 298 150 Q342 190 428 262 Q256 290 84 262 Z"/></clipPath>
+    <clipPath id="logo-wall"><path d="M128 280 Q256 300 384 280 L384 384 L128 384 Z"/></clipPath>
+  </defs>
+  <rect width="512" height="512" rx="144" fill="#2F55FF"/>
+  <g transform="translate(0 14)">
+    <path d="M84 262 Q170 190 214 150 Q256 124 298 150 Q342 190 428 262 Q256 290 84 262 Z" fill="#FFFFFF"/>
+    <path d="M256 136 L66 300 M256 136 L187.60000000000002 300 M256 136 L324.4 300 M256 136 L446 300" stroke="#2F55FF" stroke-width="9" stroke-linecap="round" clip-path="url(#logo-roof)"/>
+    <path d="M128 280 Q256 300 384 280 L384 384 L128 384 Z" fill="#FFFFFF"/>
+    <path d="M40 392 L152 280 M152 392 L40 280 M88 392 L200 280 M200 392 L88 280 M136 392 L248 280 M248 392 L136 280 M184 392 L296 280 M296 392 L184 280 M232 392 L344 280 M344 392 L232 280 M280 392 L392 280 M392 392 L280 280 M328 392 L440 280 M440 392 L328 280 M376 392 L488 280 M488 392 L376 280 M424 392 L536 280 M536 392 L424 280" stroke="#2F55FF" stroke-width="8" clip-path="url(#logo-wall)"/>
+    <path d="M222 384 V348 A34 34 0 0 1 290 348 V384 Z" fill="#2F55FF"/>
+    <circle cx="256" cy="362" r="12" fill="#FF5A33"/>
+    <circle cx="256" cy="134" r="34" fill="#D2FF2E"/>
+    <circle cx="256" cy="134" r="12" fill="#2F55FF"/>
+  </g>
+</svg>
