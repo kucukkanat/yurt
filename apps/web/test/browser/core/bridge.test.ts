@@ -12,6 +12,8 @@ const unsubscribe = bridge.subscribe((s) => statuses.push(s));
 
 beforeAll(async () => {
   await resetDb();
+  // Other files allow this page's origin on the shared test bridge; start from a bridge that refuses it.
+  await commands.bridgeRevokeOrigin(location.origin);
   bridge.url = inject('bridgeUrl');
 });
 afterAll(async () => {

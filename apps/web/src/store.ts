@@ -178,9 +178,24 @@ let readTimer: ReturnType<typeof setTimeout> | null = null;
 let toastId = 0;
 
 export const useApp = create<AppState>((set, get) => {
+  // App-state writes run in the background, so a failure (e.g. a newer app version upgraded the database in another
+  // tab) must be reported here, never left unhandled. One toast while saving keeps failing, not one per write.
+  let saveFailing = false;
+  const persist = (key: string, value: unknown) =>
+    kv.set(key, value).then(
+      () => {
+        saveFailing = false;
+      },
+      (err: unknown) => {
+        report('device', 'error', 'Couldn’t save ' + key + ': ' + errorText(err));
+        if (saveFailing) return;
+        saveFailing = true;
+        get().toast({ tone: 'danger', title: 'Couldn’t save on this device', description: errorText(err), duration: 10_000 });
+      },
+    );
   const saveWs = (ws: WsRecord[]) => {
     set({ workspaces: ws });
-    kv.set('workspaces', ws);
+    void persist('workspaces', ws);
   };
   const patchWs = (code: string, p: Partial<WsRecord>) => saveWs(get().workspaces.map((w) => (w.code === code ? { ...w, ...p } : w)));
   const profilePublished = new Set<string>();
@@ -498,7 +513,7 @@ export const useApp = create<AppState>((set, get) => {
       const lastRead = { ...rec.lastRead, [ch]: Date.now() };
       set({ workspaces: get().workspaces.map((w) => (w.code === code ? { ...w, lastRead } : w)) });
       if (readTimer) clearTimeout(readTimer);
-      readTimer = setTimeout(() => kv.set('workspaces', get().workspaces), 500);
+      readTimer = setTimeout(() => void persist('workspaces', get().workspaces), 500);
     },
 
     toggleMute(code, ch) {

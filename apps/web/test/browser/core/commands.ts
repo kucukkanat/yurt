@@ -20,6 +20,7 @@ export const setPermissions: BrowserCommand<[permissions: string[], origin: stri
 export interface TestBridge {
   pairingCode(): string;
   allowOrigin(origin: string): void;
+  revokeOrigin(origin: string): void;
 }
 export const TEST_BRIDGE = Symbol.for('yurt.testBridge');
 
@@ -35,4 +36,9 @@ export const bridgePairingCode: BrowserCommand<[]> = async () => testBridge().pa
 /** Lets the test page's origin talk to the test bridge, as a user adding it under "Allowed origins" would. */
 export const bridgeAllowOrigin: BrowserCommand<[origin: string]> = async (_ctx, origin) => {
   testBridge().allowOrigin(origin);
+};
+
+/** Takes the origin off the list again, so a test can start from a bridge that refuses this page whatever ran before. */
+export const bridgeRevokeOrigin: BrowserCommand<[origin: string]> = async (_ctx, origin) => {
+  testBridge().revokeOrigin(origin);
 };

@@ -1,6 +1,8 @@
 import { BRIDGE_URL, type BridgeState, type FromBridge, type ToBridge } from '@yurt/protocol';
 import { parseBridgeMessage } from './bridgeMessages';
 import { kv } from './db';
+import { report } from './diagnostics';
+import { errorText } from './format';
 import { loadToken } from './stored';
 
 export type BridgeStatus = 'off' | 'missing' | 'connecting' | 'unpaired' | 'connected';
@@ -102,7 +104,8 @@ class BridgeClient {
       } else this.set('unpaired');
     } else if (m.t === 'paired') {
       this.token = m.token;
-      kv.set('bridgeToken', m.token);
+      // Losing the token only means pairing again next time; record it rather than leave the rejection unhandled.
+      kv.set('bridgeToken', m.token).catch((err: unknown) => report('bridge', 'error', 'Couldn’t save the pairing: ' + errorText(err)));
       this.set('connected');
       if (this.identity) this.send({ t: 'identity', ...this.identity });
     } else if (m.t === 'state') {

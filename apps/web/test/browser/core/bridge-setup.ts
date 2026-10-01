@@ -58,6 +58,9 @@ export default async function setup(project: TestProject) {
     allowOrigin: (origin) => {
       if (!cfg.allowedOrigins.includes(origin)) cfg.allowedOrigins.push(origin);
     },
+    revokeOrigin: (origin) => {
+      cfg.allowedOrigins = cfg.allowedOrigins.filter((o) => o !== origin);
+    },
   };
   (globalThis as Record<symbol, unknown>)[TEST_BRIDGE] = bridge;
   project.provide('bridgeUrl', `ws://127.0.0.1:${server.boundPort}/ws`);

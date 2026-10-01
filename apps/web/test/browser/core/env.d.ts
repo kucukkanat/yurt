@@ -4,6 +4,7 @@ declare module 'vitest/browser' {
     setPermissions(permissions: string[], origin: string): Promise<void>;
     bridgePairingCode(): Promise<string>;
     bridgeAllowOrigin(origin: string): Promise<void>;
+    bridgeRevokeOrigin(origin: string): Promise<void>;
   }
 }
 export {};

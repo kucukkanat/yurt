@@ -1,7 +1,7 @@
 import react from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
-import { bridgeAllowOrigin, bridgePairingCode, setPermissions } from './test/browser/core/commands.ts';
+import { bridgeAllowOrigin, bridgePairingCode, bridgeRevokeOrigin, setPermissions } from './test/browser/core/commands.ts';
 
 // Two projects, one coverage report:
 // - unit: pure modules in Node.
@@ -31,7 +31,7 @@ export default defineConfig({
             }),
             instances: [{ browser: 'chromium' }],
             screenshotFailures: false,
-            commands: { setPermissions, bridgePairingCode, bridgeAllowOrigin },
+            commands: { setPermissions, bridgePairingCode, bridgeAllowOrigin, bridgeRevokeOrigin },
           },
         },
       },
