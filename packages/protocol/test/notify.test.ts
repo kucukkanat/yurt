@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { newRecoveryPhrase, keyFromPhrase, reduce, noticeFor, dmChannel, guestDmChannel, type Ev, type Msg, type WsState } from '../src';
+import { newRecoveryPhrase, keyFromPhrase, reduce, noticeFor, inMyThread, dmChannel, guestDmChannel, type Ev, type Msg, type WsState } from '../src';
 import { eventClock } from './util';
 
 const WS = 'K7QX2MPD';
@@ -64,5 +64,33 @@ describe('what notifies me', () => {
     const s = state([]);
     const m: Msg = { id: 'x', ch: 'elsewhere', a: BO.pub, ts: 1, text: '@ada', files: [], edited: false, deleted: false, reactions: {}, replies: [] };
     expect(noticeFor(m, s, ADA.pub, [])?.title).toBe('Bo in #elsewhere');
+  });
+
+  it('a reply in a thread I started or replied to; not my agent’s thread, nor one I only read', () => {
+    const CY = keyFromPhrase(newRecoveryPhrase());
+    const mineTop = ev(ADA, 'msg', { text: 'plan?' }, { ch: 'general' });
+    const reply = ev(BO, 'msg', { text: 'yes', parent: mineTop.id }, { ch: 'general' });
+    const theirs = ev(BO, 'msg', { text: 'lunch?' }, { ch: 'general' });
+    const early = ev(CY, 'msg', { text: 'sure', parent: theirs.id }, { ch: 'general' });
+    const joined = ev(ADA, 'msg', { text: 'me too', parent: theirs.id }, { ch: 'general' });
+    const later = ev(BO, 'msg', { text: 'noon', parent: theirs.id }, { ch: 'general' });
+    const other = ev(BO, 'msg', { text: 'standup' }, { ch: 'general' });
+    const byAgent = ev(ADA, 'msg', { text: 'summary', parent: other.id }, { ch: 'general', ag: 'scout' });
+    const unseen = ev(CY, 'msg', { text: 'ok', parent: other.id }, { ch: 'general' });
+    const s = state([mineTop, reply, theirs, early, joined, later, other, byAgent, unseen]);
+    expect(noticeFor(msg(s, reply), s, ADA.pub, [])).toEqual({ title: 'Bo in #general', body: 'yes', ch: 'general' });
+    expect(inMyThread(msg(s, later), s, ADA.pub)).toBe(true);
+    // Replies before I joined are in my thread too: I'm in it now.
+    expect(inMyThread(msg(s, early), s, ADA.pub)).toBe(true);
+    expect(inMyThread(msg(s, joined), s, BO.pub)).toBe(true);
+    expect(inMyThread(msg(s, joined), s, CY.pub)).toBe(true);
+    expect(inMyThread(msg(s, unseen), s, ADA.pub)).toBe(false);
+    expect(noticeFor(msg(s, unseen), s, ADA.pub, [])).toBeNull();
+    expect(inMyThread(msg(s, theirs), s, BO.pub)).toBe(false);
+    // A thread whose reply list names a message the state lacks.
+    const parent: Msg = { ...msg(s, other), replies: ['missing'] };
+    const m: Msg = { ...msg(s, unseen), parent: parent.id };
+    expect(inMyThread(m, { ...s, msgs: new Map([[parent.id, parent]]) }, ADA.pub)).toBe(false);
+    expect(inMyThread({ ...m, parent: 'gone' }, s, ADA.pub)).toBe(false);
   });
 });
