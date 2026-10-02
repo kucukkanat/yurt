@@ -281,6 +281,13 @@ function PreferencesSection() {
         label="Haptic feedback"
         description="A short vibration when a long-press, a swipe or sending works. Phones that support it only."
       />
+      <Switch
+        data-testid="sound"
+        checked={settings.sound}
+        onChange={(on) => app.updateSettings({ sound: on })}
+        label="Sound"
+        description="A short chime for @mentions, direct messages and agent approvals in conversations you aren’t looking at. Silent in Focus mode."
+      />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
         <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)' }}>Theme</span>
         <div style={{ display: 'flex', gap: 'var(--space-4)' }}>

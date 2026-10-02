@@ -105,6 +105,7 @@ describe('stored settings', () => {
       theme: 'light',
       notifications: true,
       haptics: false,
+      sound: false,
       installHint: true,
       turn: 'custom',
       turnUrls: 'turn:x',
@@ -113,8 +114,12 @@ describe('stored settings', () => {
       webrtc: false,
     } as const;
     expect(loadSettings(good)).toEqual(good);
-    const bad = { theme: 'neon', notifications: 'yes', haptics: 0, installHint: 'no', turn: 1, turnUrls: null, webrtc: 'on', extra: 1 };
+    const bad = { theme: 'neon', notifications: 'yes', haptics: 0, sound: 'loud', installHint: 'no', turn: 1, turnUrls: null, webrtc: 'on', extra: 1 };
     expect(loadSettings(bad)).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it('turn sound on for settings saved before it existed', () => {
+    expect(loadSettings({ theme: 'light', notifications: true, haptics: false }).sound).toBe(true);
   });
 
   it('carry lastNet when well-formed', () => {

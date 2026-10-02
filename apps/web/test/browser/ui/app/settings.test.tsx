@@ -56,6 +56,12 @@ describe('Settings', () => {
     await haptics.click();
     await until(() => !useApp.getState().settings.haptics);
     await haptics.click();
+    // Sound: on by default, and a switch away.
+    const sound = dlg().getByRole('switch', { name: 'Sound', exact: true });
+    await expect.element(sound).toBeChecked();
+    await sound.click();
+    await until(() => !useApp.getState().settings.sound);
+    await sound.click();
   });
 
   it('explains installing', async () => {

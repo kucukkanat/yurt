@@ -41,6 +41,8 @@ import { huddle, type HuddleView } from './lib/huddle';
 import { askNotifications, errorText } from './lib/format';
 import { announce, closeNotifications, type Notice } from './lib/notifications';
 import { haptic } from './lib/haptics';
+import { inAppAlerts, MESSAGE_TOAST_MS, messageToastKey } from './lib/alerts';
+import { chime } from './lib/chime';
 import { report } from './lib/diagnostics';
 import { buildHash, parseHash, type Route } from './lib/route';
 import { presenceNow } from './lib/visibility';
@@ -71,6 +73,10 @@ export interface CollabForm {
 /** `onDismiss` runs once however the toast goes away: expired, closed, acted on, or pushed out by newer toasts. */
 interface ToastT {
   id: number;
+  /** A newer toast with the same key replaces this one (one per conversation for new messages). */
+  key?: string | undefined;
+  testId?: string | undefined;
+  icon?: 'message-square' | undefined;
   tone?: 'neutral' | 'success' | 'agent' | 'human' | 'danger' | undefined;
   title: string;
   description?: string | undefined;
@@ -317,7 +323,16 @@ export const useApp = create<AppState>((set, get) => {
       if (!n) continue;
       // In my hand and looking elsewhere in the app: a buzz says something arrived for me.
       if (!document.hidden) haptic('notice');
-      if (settings.notifications && !get().focus) void announce(n, () => get().go({ code, ch: n.ch }));
+      const focus = get().focus;
+      const open = () => get().go({ code, ch: n.ch });
+      if (settings.notifications && !focus) void announce(n, open);
+      const onScreen = route.code === code && route.ch === n.ch;
+      const alerts = inAppAlerts({ focus, sound: settings.sound, onScreen, osAlert: document.hidden && settings.notifications });
+      if (alerts.sound) chime();
+      if (alerts.toast) {
+        const key = messageToastKey(code, n.ch);
+        get().toast({ key, testId: 'message-toast', icon: 'message-square', title: n.title, description: n.body, actionLabel: 'Open', onAction: open, duration: MESSAGE_TOAST_MS });
+      }
     }
   };
 
@@ -580,6 +595,7 @@ export const useApp = create<AppState>((set, get) => {
     },
     toast(t) {
       const id = ++toastId;
+      for (const x of get().toasts) if (t.key && x.key === t.key) get().dismiss(x.id);
       const toasts = get().toasts;
       for (const x of toasts.slice(0, -2)) get().dismiss(x.id); // at most 3 on screen; pushed-out ones are dismissed properly
       set((s) => ({ toasts: [...s.toasts, { duration: 5000, ...t, id }] }));
@@ -651,6 +667,7 @@ export const useApp = create<AppState>((set, get) => {
       const rec = get().workspaces.find((w) => w.code === code);
       if (!rec) return;
       closeNotifications(code, ch);
+      for (const t of get().toasts) if (t.key === messageToastKey(code, ch)) get().dismiss(t.id);
       const at = Date.now();
       const lastRead = { ...rec.lastRead, [ch]: at };
       set({ workspaces: get().workspaces.map((w) => (w.code === code ? { ...w, lastRead } : w)) });

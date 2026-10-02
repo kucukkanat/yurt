@@ -54,6 +54,8 @@ export interface Settings extends NetSettings {
   notifications: boolean;
   /** Vibration on touches that do something (long-press, swipe to reply, sending). */
   haptics: boolean;
+  /** A short chime for messages that alert me (silent in Focus mode). */
+  sound: boolean;
   /** The "install Yurt" suggestion was shown on this device. */
   installHint: boolean;
   /** What the create step used last; prefills the next new workspace. */
@@ -65,6 +67,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: 'dark',
   notifications: false,
   haptics: true,
+  sound: true,
   installHint: false,
   turn: 'off',
   turnUrls: '',
@@ -144,6 +147,7 @@ const SettingsSchema = v.object({
   theme: v.fallback(v.picklist(['dark', 'light']), DEFAULT_SETTINGS.theme),
   notifications: v.fallback(v.boolean(), DEFAULT_SETTINGS.notifications),
   haptics: v.fallback(v.boolean(), DEFAULT_SETTINGS.haptics),
+  sound: v.fallback(v.boolean(), DEFAULT_SETTINGS.sound),
   installHint: v.fallback(v.boolean(), DEFAULT_SETTINGS.installHint),
   turn: v.fallback(v.picklist(['default', 'custom', 'off']), DEFAULT_SETTINGS.turn),
   turnUrls: v.fallback(text, DEFAULT_SETTINGS.turnUrls),

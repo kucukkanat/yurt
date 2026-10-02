@@ -223,12 +223,20 @@ function unreadIn(s: AppState, w: WsRecord, me: { pub: string; handle: string },
   return { m, n };
 }
 
-export function faviconStateOf(s: AppState, peerOf: (code: string) => WorkspacePeer | undefined, visible: boolean): FaviconState {
+/**
+ * Unread across every workspace: `m` messages that alert me (the tab title, app badge and menu button count them),
+ * `n` whether anything is unread. Skips muted conversations and, while `visible`, the one on screen.
+ */
+export function unreadEverywhere(s: AppState, visible: boolean): { m: number; n: boolean } {
   const me = s.identity;
-  if (!me) return CALM;
+  if (!me) return { m: 0, n: false };
   const counts = s.workspaces.map((w) => unreadIn(s, w, me, visible));
-  const mentionCount = counts.reduce((sum, c) => sum + c.m, 0);
-  const unreadAny = counts.some((c) => c.n);
+  return { m: counts.reduce((sum, c) => sum + c.m, 0), n: counts.some((c) => c.n) };
+}
+
+export function faviconStateOf(s: AppState, peerOf: (code: string) => WorkspacePeer | undefined, visible: boolean): FaviconState {
+  if (!s.identity) return CALM;
+  const { m: mentionCount, n: unreadAny } = unreadEverywhere(s, visible);
   const nearby = s.workspaces.some((w) => callNearby(s, w.code, peerOf(w.code)));
   const cur = s.route.code ? peerOf(s.route.code) : undefined;
   // Offline: no network, or no relay reachable.
