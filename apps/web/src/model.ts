@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { agentKey, agentPrefs, fingerprint, liveAgents, members, mentions, type WsState, type WorkspacePeer, type Msg } from '@yurt/protocol';
-import { isDirect, guestDmTitle, type AgentPrefs } from './lib/private';
+import { agentKey, agentPrefs, alerts, fingerprint, levelOf, liveAgents, members, type WsState, type WorkspacePeer, type Msg } from '@yurt/protocol';
+import { guestDmTitle, type AgentPrefs } from './lib/private';
 export { prefsLine } from './lib/private';
 import { useApp, type WsRecord, type AppState } from './store';
 import { CALM, type FaviconState } from './lib/favicon';
@@ -159,7 +159,13 @@ export function roster(state: WsState | undefined, peer: WorkspacePeer | undefin
   return [...byPresence(people), ...byPresence(agents)];
 }
 
+/**
+ * Unread messages in `ch` (`n`) and how many of them alert me (`m`), following the conversation's alert level: at `all`
+ * every unread one, at `mentions` @mentions of my handle and approvals. At `none` nothing counts, not even as unread.
+ */
 export function unread(state: WsState, rec: WsRecord | undefined, ch: string, me: string, handle: string) {
+  const level = levelOf(state, me, ch);
+  if (level === 'none') return { n: 0, m: 0 };
   // Read here, or on another of my devices (read marks sync privately).
   const last = readUpTo(rec?.lastRead[ch], state, me, ch);
   // Newest first, stopping at the first message already read.
@@ -173,7 +179,7 @@ export function unread(state: WsState, rec: WsRecord | undefined, ch: string, me
     if (x.ts <= last) break;
     if ((x.a === me && !x.ag) || x.deleted) continue;
     n++;
-    if (mentions(x.text).includes(handle) || isDirect(ch) || (ch.startsWith('adm:') && x.approval)) m++;
+    if (alerts(x, me, handle, level)) m++;
   }
   return { n, m };
 }
@@ -197,7 +203,7 @@ export function channelTitle(state: WsState | undefined, ch: string, me: string)
 }
 
 /**
- * What the tab icon should show (see lib/favicon.ts): unread mentions and DMs across every workspace,
+ * What the tab icon should show (see lib/favicon.ts): alerting messages (by each conversation's level) across every workspace,
  * other unread messages, calls, and whether we're cut off. The channel on screen doesn't count while
  * the tab is visible, matching the sidebar.
  */
@@ -208,14 +214,14 @@ function callNearby(s: AppState, code: string, p: WorkspacePeer | undefined): bo
   return false;
 }
 
-/** Mentions and whether anything is unread in a workspace, skipping muted conversations and the one on screen. */
+/** Alerting messages and whether anything is unread in a workspace, skipping the conversation on screen (and, by `unread`, those set to alert nothing). */
 function unreadIn(s: AppState, w: WsRecord, me: { pub: string; handle: string }, visible: boolean): { m: number; n: boolean } {
   const st = s.states[w.code];
   let m = 0;
   let n = false;
   if (st)
     for (const ch of st.channelMsgs.keys()) {
-      if (w.muted.includes(ch) || (visible && s.route.code === w.code && s.route.ch === ch)) continue;
+      if (visible && s.route.code === w.code && s.route.ch === ch) continue;
       const u = unread(st, w, ch, me.pub, me.handle);
       m += u.m;
       n ||= u.n > 0;

@@ -1,7 +1,7 @@
 import type React from 'react';
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { Icon, IconButton, Button, Tooltip, Kbd, Avatar, DayDivider, UnreadDivider, TypingIndicator, ConnectionBanner } from '@yurt/ui';
-import { agentKey, parseGuestDm, type Channel, type Msg, type WorkspacePeer, type WsState } from '@yurt/protocol';
+import { agentKey, levelOf, parseGuestDm, type Channel, type Msg, type WorkspacePeer, type WsState } from '@yurt/protocol';
 import { useApp } from '../store';
 import { useCurrent, roster, personFor, authorKey, channelTitle, type Person } from '../model';
 import { privateTarget } from '../lib/private';
@@ -12,6 +12,7 @@ import { Composer, editLastMessage } from './Composer';
 import { HuddleStrip, HuddleButton, HuddleDock } from './Huddle';
 import { must } from './must';
 import { Viewers, FollowBar } from './Collab';
+import { AlertsButton, QuietMark } from './Alerts';
 
 const GROUP_MS = 5 * 60 * 1000;
 
@@ -231,7 +232,7 @@ const h1Reset: React.CSSProperties = { margin: 0, font: 'inherit', minWidth: 0 }
 const subtitleStyle: React.CSSProperties = { fontSize: 12, color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
 
 /** Avatar, title and subtitle of a private conversation. */
-function PrivateTitle({ avatar, title, subtitle, testId }: { avatar: React.ReactNode; title: string; subtitle: string; testId?: string }) {
+function PrivateTitle({ avatar, title, subtitle, testId, quiet }: { avatar: React.ReactNode; title: string; subtitle: string; testId?: string; quiet: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
       {avatar}
@@ -239,6 +240,7 @@ function PrivateTitle({ avatar, title, subtitle, testId }: { avatar: React.React
         <h1 style={{ ...h1Reset, ...titleStyle }}>
           {title}
           <Icon name="lock" size={13} label="Private" style={{ color: 'var(--text-subtle)' }} />
+          {quiet && <QuietMark />}
         </h1>
         <div data-testid={testId} style={subtitleStyle}>
           {subtitle}
@@ -250,7 +252,7 @@ function PrivateTitle({ avatar, title, subtitle, testId }: { avatar: React.React
 
 const presenceLine = (p: Person) => (p.presence === 'online' ? 'Online' : p.presence === 'away' ? 'Away' : 'Offline · messages sync when they’re back');
 
-function ConversationTitle({ c, title, narrow, muted }: { c: Conversation; title: string; narrow: boolean; muted: boolean }) {
+function ConversationTitle({ c, title, narrow, quiet }: { c: Conversation; title: string; narrow: boolean; quiet: boolean }) {
   switch (c.kind) {
     case 'guest':
       return (
@@ -259,6 +261,7 @@ function ConversationTitle({ c, title, narrow, muted }: { c: Conversation; title
           title={c.ownerView ? title : c.agent.name}
           subtitle={c.ownerView ? 'Your agent · ' + c.member.name + ' started this chat' : c.owner.name + '’s agent'}
           testId="guest-dm-subtitle"
+          quiet={quiet}
         />
       );
     case 'agent':
@@ -267,11 +270,17 @@ function ConversationTitle({ c, title, narrow, muted }: { c: Conversation; title
           avatar={<Avatar name={c.agent.name} kind="agent" presence={c.agent.presence} working={c.agent.working} size={28} decorative />}
           title={title}
           subtitle={'Private · ' + (c.agent.runtime || 'agent') + ' on your machine'}
+          quiet={quiet}
         />
       );
     case 'dm':
       return (
-        <PrivateTitle avatar={<Avatar name={c.other.name} self={c.other.self} presence={c.other.presence} size={28} decorative />} title={title} subtitle={presenceLine(c.other)} />
+        <PrivateTitle
+          avatar={<Avatar name={c.other.name} self={c.other.self} presence={c.other.presence} size={28} decorative />}
+          title={title}
+          subtitle={presenceLine(c.other)}
+          quiet={quiet}
+        />
       );
     case 'channel':
       return (
@@ -298,7 +307,7 @@ function ConversationTitle({ c, title, narrow, muted }: { c: Conversation; title
             <span style={{ ...titleStyle, gap: 4, whiteSpace: 'nowrap', overflow: 'hidden' }}>
               <Icon name="hash" size={16} style={{ color: 'var(--text-subtle)', flexShrink: 0 }} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.channel.name}</span>
-              {muted && <Icon name="bell" size={13} label="Muted" style={{ color: 'var(--text-subtle)', opacity: 0.6 }} />}
+              {quiet && <QuietMark />}
               <Icon name="chevron-down" size={14} style={{ color: 'var(--text-subtle)' }} />
             </span>
             {!narrow && c.channel.topic && <span style={{ ...subtitleStyle, display: 'block' }}>{c.channel.topic}</span>}
@@ -522,7 +531,7 @@ export function ChannelView({ narrow }: { narrow: boolean }) {
 }
 
 function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: string; ch: string; state: WsState }) {
-  const { rec, identity, peer } = useCurrent();
+  const { identity, peer } = useCurrent();
   const panel = useApp((s) => s.panel);
   const online = useApp((s) => s.online);
   const highlight = useApp((s) => s.highlight);
@@ -562,8 +571,9 @@ function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: stri
         }}
       >
         {narrow && <IconButton icon="menu" label="Open sidebar" size="sm" onClick={() => useApp.setState({ drawer: true })} />}
-        <ConversationTitle c={c} title={title} narrow={narrow} muted={!!rec?.muted.includes(ch)} />
+        <ConversationTitle c={c} title={title} narrow={narrow} quiet={levelOf(state, me, ch) === 'none'} />
         <Viewers view={ch} />
+        <AlertsButton />
         {huddles && <HuddleButton ch={ch} />}
         <Tooltip content="Hub: tasks, docs, decisions, saved" placement="bottom">
           <IconButton

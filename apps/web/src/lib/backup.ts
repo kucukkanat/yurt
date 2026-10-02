@@ -6,7 +6,8 @@ import { WsRecordSchema, type WsRecord } from './stored';
  * Which workspaces an identity belongs to, kept across its devices in an encrypted note on Nostr relays
  * (`identityBackup` in @yurt/protocol), so importing the recovery phrase elsewhere brings them back.
  * Each workspace's newest change wins, joined or left, so devices merge in any order and a workspace left on one
- * device isn't brought back by another's older copy. Read positions and mutes stay on each device.
+ * device isn't brought back by another's older copy. Read positions and alert levels aren't in it: they sync as events
+ * addressed to myself inside each workspace (`read`, `notify`).
  */
 
 /**
@@ -58,7 +59,7 @@ export function merge(mine: Ledger, theirs: Ledger): Ledger {
 
 /** Workspaces the ledger has joined that this device doesn't have yet, ready to connect. */
 export const missing = (ledger: Ledger, workspaces: readonly WsRecord[]): WsRecord[] =>
-  Object.values(ledger).flatMap((e) => (e.ws && !workspaces.some((w) => w.code === e.ws?.code) ? [{ ...e.ws, lastRead: {}, muted: [] }] : []));
+  Object.values(ledger).flatMap((e) => (e.ws && !workspaces.some((w) => w.code === e.ws?.code) ? [{ ...e.ws, lastRead: {} }] : []));
 
 /** The ledger as stored on this device and, as text, in the backup. */
 export const docOf = (ledger: Ledger) => ({ v: 1, ws: ledger });

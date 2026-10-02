@@ -1,6 +1,6 @@
 import type { Ev, EvType, AgentBody, AgentTriggers, AgentPlacement, FileRef, TraceStep, ApprovalReq, PollSpec, MeetSpec, Actor, TaskStatus, DocKind } from './types';
 import { EDIT_WINDOW_MS, sortEvents, isEventShape } from './events';
-import { parseBody, type ParsedBody } from './schemas';
+import { parseBody, type NotifyLevel, type ParsedBody } from './schemas';
 import { isPrivateChannel, dmChannel, parseGuestDm } from './codes';
 
 export interface Msg {
@@ -136,6 +136,8 @@ export interface WsState {
   saved: Map<string, string[]>;
   /** Private to each member's devices: pub → channel → read up to (ms). */
   reads: Map<string, Map<string, number>>;
+  /** Private to each member's devices: pub → channel → alert level, the newest setting (see notify.ts `levelOf`). */
+  levels: Map<string, Map<string, NotifyLevel>>;
 }
 
 export const agentKey = (owner: string, id: string) => owner + '/' + id;
@@ -163,6 +165,7 @@ export function emptyState(ws: string): WsState {
     docs: new Map(),
     saved: new Map(),
     reads: new Map(),
+    levels: new Map(),
   };
 }
 
@@ -453,6 +456,13 @@ const APPLY: Handlers = {
     const r = s.reads.get(e.a) ?? new Map<string, number>();
     r.set(b.ch, Math.max(r.get(b.ch) ?? 0, b.ts));
     s.reads.set(e.a, r);
+  },
+  // Events apply in (ts, id) order, so the newest setting wins and ties settle the same everywhere.
+  notify: (s, e, b) => {
+    if (e.to !== e.a) return;
+    const l = s.levels.get(e.a) ?? new Map<string, NotifyLevel>();
+    l.set(b.ch, b.level);
+    s.levels.set(e.a, l);
   },
 };
 

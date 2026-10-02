@@ -35,7 +35,6 @@ export interface WsRecord {
   transport: WsTransport;
   creator: string | null;
   lastRead: Record<string, number>;
-  muted: string[];
   /** Blossom servers for this workspace's uploads; falls back to the defaults. */
   blossom?: string[] | undefined;
 }
@@ -111,7 +110,6 @@ export const WsRecordSchema: v.GenericSchema<unknown, WsRecord> = v.pipe(
         return out;
       }),
     ),
-    muted: strings,
     blossom: v.fallback(v.optional(v.array(text)), undefined),
   }),
   v.transform(({ name, blossom, ...r }): WsRecord => ({ ...r, name: name ?? formatCode(r.code), ...(blossom ? { blossom } : {}) })),
@@ -130,6 +128,21 @@ export function loadWorkspaces(raw: unknown): WsRecord[] {
     seen.add(w.code);
     return [w];
   });
+}
+
+/**
+ * Conversations muted on this device by an app from before alert levels (a `muted` list per saved workspace), by workspace
+ * code. They move to the synced level `none` once; records saved since have no such list.
+ */
+export function legacyMutes(raw: unknown): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  if (!Array.isArray(raw)) return out;
+  for (const x of raw as unknown[]) {
+    if (!isRecord(x) || typeof x.code !== 'string') continue;
+    const muted = v.parse(strings, x.muted);
+    if (muted.length) out.set(x.code, muted);
+  }
+  return out;
 }
 
 /** The saved identity. The phrase is the source of truth: keys are derived from it, so a stale or edited key can't win. */

@@ -10,7 +10,6 @@ const ws = (code: string, p: Partial<WsRecord> = {}): WsRecord => ({
   transport: { key: KEY, relays: ['wss://r.example'] },
   creator: null,
   lastRead: { general: 5 },
-  muted: ['random'],
   ...p,
 });
 const A = ws('AAAAAAAA');
@@ -18,10 +17,10 @@ const B = ws('BBBBBBBB');
 const kept = (w: WsRecord) => ({ code: w.code, name: w.name, transport: w.transport, creator: w.creator });
 
 describe('the workspace backup ledger', () => {
-  it('records joins, changes and leaves, but not read positions or mutes', () => {
+  it('records joins, changes and leaves, but not read positions', () => {
     const joined = record({}, [], [A, B], 1);
     expect(joined).toEqual({ [A.code]: { at: 1, ws: kept(A) }, [B.code]: { at: 1, ws: kept(B) } });
-    expect(sameLedger(record(joined, [A, B], [{ ...A, lastRead: {}, muted: [] }, B], 2), joined)).toBe(true);
+    expect(sameLedger(record(joined, [A, B], [{ ...A, lastRead: {} }, B], 2), joined)).toBe(true);
     const renamed = record(joined, [A, B], [{ ...A, name: 'Renamed' }, B], 3);
     expect(renamed[A.code]).toEqual({ at: 3, ws: { ...kept(A), name: 'Renamed' } });
     const left = record(renamed, [A, B], [B], 4);
@@ -54,7 +53,7 @@ describe('the workspace backup ledger', () => {
 
   it('lists the joined workspaces this device lacks, with fresh read state', () => {
     const l: Ledger = { [A.code]: { at: 1, ws: kept(A) }, [B.code]: { at: 1, ws: kept(B) }, CCCCCCCC: { at: 1, ws: null } };
-    expect(missing(l, [A])).toEqual([{ ...kept(B), lastRead: {}, muted: [] }]);
+    expect(missing(l, [A])).toEqual([{ ...kept(B), lastRead: {} }]);
     expect(missing(l, [A, B])).toEqual([]);
   });
 

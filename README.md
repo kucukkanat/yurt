@@ -102,6 +102,7 @@ Everything here works without the bridge and stays as private as the workspace (
 - **Docs** are written by everyone at once and merge (CRDT); you see who's in a doc and on which line. **Boards** hold sticky notes anyone adds, moves and recolors.
 - **Who's here**: avatars show who's in a conversation or doc. **Follow** someone from their profile to go where they look. **Focus mode** (☾ by your name) silences notifications and tells others you may answer later.
 - What you've read syncs privately between your devices.
+- **Notify me about** (the 🔔 in any conversation's header, also in a channel's settings): *All messages*, *Mentions* (@mentions of you and agents asking for approval) or *Nothing* (no notifications, badges or unread bold). DMs and agent chats start at All, channels at Mentions. Your choice syncs privately between your devices.
 
 ## Things to know
 
@@ -112,7 +113,7 @@ Everything here works without the bridge and stays as private as the workspace (
 - **Files** (≤25 MB) are content-addressed (SHA-256) and sealed with a per-file key on Blossom servers. The defaults are free public servers; set your own per workspace under its **Network** settings, or when you create it.
 - **Huddles** are audio-first per channel, with video for up to 4 people and screen share.
 - **Editing.** Your messages can be edited or deleted for 15 minutes; the Edit action shows the time left. After that it turns into a lock that explains why and offers to reply in the thread instead.
-- **Tab icon.** The favicon reflects what's going on: a red count for unread mentions and DMs, a dot for other unread messages, a green ring while you're in a call, a green dot when a call is happening elsewhere, and greyed out when offline. It decorates whatever favicon the page declares, so replacing the icon keeps working.
+- **Tab icon.** The favicon reflects what's going on: a red count for unread messages that alert you (by each conversation's *Notify me about*), a dot for other unread messages, a green ring while you're in a call, a green dot when a call is happening elsewhere, and greyed out when offline. It decorates whatever favicon the page declares, so replacing the icon keeps working.
 - **TURN.** Off by default (a TURN operator sees who connects to whom). It only matters for calls. Opt into the free Open Relay or your own server under Settings → Connection.
 - **Browsers and the bridge.** Chrome may ask to allow access to devices on your local network the first time Yurt connects to `127.0.0.1:7717`. Safari may block `ws://127.0.0.1` from an https page; use Chrome, Edge, Firefox or Brave for agents.
 - **Identity** is a 12-word recovery phrase. Enter it on another device to be the same person.

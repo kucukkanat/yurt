@@ -58,6 +58,7 @@ Every change is an immutable, signed event:
 | `suggest.res` | `{target, accept}` | Accepts or rejects an open suggestion. People only (no `ag`): an agent can't accept its own. Accepting clients also send the `doc.op` that applies it. |
 | `save` | `{target, on}` | A message saved for later. Only counts with `to` = the author and no `ch`: it reaches only the author's own devices (and bridge). |
 | `read` | `{ch, ts}` | Read up to `ts` in `ch`, for the author's other devices (`to` = author). The latest `ts` wins. |
+| `notify` | `{ch, level}` | How much `ch` alerts the author, for their other devices (`to` = author). `level` ∈ `all` (every message not the author's own; their agents' count), `mentions` (@mentions of their handle, and approval requests), `none` (nothing, not even unread). The newest event wins (`(ts, id)` order). Without one: `all` in `dm:`/`adm:`/`gdm:`, `mentions` in channels. |
 
 A `msg` can carry a **poll** `{q, options (2–10), multi?, closes?}` or a **meeting** `{title, at, dur?}` (minutes); its `text` repeats the question or title for apps that predate them. `vote`, `rsvp` and `decide` on a message in a private conversation must be addressed like it (`to`, between the same two keys), so they never reach the rest of the workspace. Changes (`task.set`, `vote`, `rsvp`, `decide`, `doc.*`, `suggest*`) are applied after everything else, in `(ts, id)` order, so a change whose author's clock was behind its target still lands. Peers that predate these types reject them as unknown, so they just don't see them.
 
@@ -143,9 +144,9 @@ identity's public key; it's addressed by `d = HKDF(sec, "backup-d")[0:16]`; and 
 `HKDF(sec, "backup-enc")`. Kind 30078 (NIP-78, addressable), so relays keep only the newest.
 
 The content is `{v: 1, ws: {<code>: {at, ws}}}`: per workspace, its latest change in ms, `ws` being what rejoining takes
-(code, name, transport with its current key, creator, file servers) or `null` once left. Read positions and mutes stay
-on each device. Devices merge by the newest `at` per workspace, so they sync in any order and a workspace left on one
-device isn't restored by another's older copy; one already present elsewhere isn't removed from that device. A device
+(code, name, transport with its current key, creator, file servers) or `null` once left. Read positions and alert levels
+aren't in it: they sync inside each workspace as `read` and `notify` events addressed to oneself. Devices merge by the
+newest `at` per workspace, so they sync in any order and a workspace left on one device isn't restored by another's older copy; one already present elsewhere isn't removed from that device. A device
 loads before it saves, and never saves after a load no relay answered, so one that couldn't read the backup can't
 replace it. It syncs on start, after importing a phrase, on reconnect, and shortly after the workspace list changes.
 

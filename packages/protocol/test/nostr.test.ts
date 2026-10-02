@@ -16,6 +16,7 @@ import {
   sign,
   buildKeyring,
   makeRekey,
+  levelOf,
   type KeyPair,
   type WsTransport,
   type WorkspacePeerOpts,
@@ -79,12 +80,14 @@ describe('nostr transport', () => {
     a.publish({ t: 'ch.create', b: { id: 'general', name: 'general' } });
     a.publish({ t: 'doc', b: { id: 'd1', title: 'Spec', ch: 'general', kind: 'text' } });
     const save = a.publish({ t: 'save', to: A.pub, b: { target: 'm1', on: true } });
+    const quiet = a.publish({ t: 'notify', to: A.pub, b: { ch: 'general', level: 'none' } });
     await until(() => a.queued.size === 0);
     a.leave();
     const a2 = await join(A);
     const b = await join(B);
-    await until(() => a2.state.saved.get(A.pub)?.[0] === 'm1' && b.state.docs.has('d1'), 10_000, 'backfill');
-    expect(b.events.has(save.id)).toBe(false);
+    await until(() => a2.state.saved.get(A.pub)?.[0] === 'm1' && levelOf(a2.state, A.pub, 'general') === 'none' && b.state.docs.has('d1'), 10_000, 'backfill');
+    expect(b.events.has(save.id) || b.events.has(quiet.id)).toBe(false);
+    expect(levelOf(b.state, A.pub, 'general')).toBe('mentions');
   });
 
   it('keeps history on the relay for members who join after the author left', async () => {

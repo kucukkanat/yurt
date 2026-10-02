@@ -1,6 +1,6 @@
 import type React from 'react';
 import { useState } from 'react';
-import { Dialog, Button, Input, Tabs, Switch, Icon, Kbd, Avatar } from '@yurt/ui';
+import { Dialog, Button, Input, Tabs, Icon, Kbd, Avatar } from '@yurt/ui';
 import {
   formatCode,
   dmChannel,
@@ -8,6 +8,7 @@ import {
   guestDmChannel,
   agentPrefs,
   liveAgents,
+  levelOf,
   parseRelays,
   parseServers,
   DEFAULT_RELAYS,
@@ -19,6 +20,7 @@ import { useCurrent, roster } from '../model';
 import { defaultNewNet, netFromForm } from '../lib/newNet';
 import { Settings, InviteBody, listError, rejected } from './Settings';
 import { CollabDialog } from './Collab';
+import { AlertLevelPicker, AlertsDialog } from './Alerts';
 
 export function Dialogs() {
   const dialog = useApp((s) => s.dialog);
@@ -32,6 +34,7 @@ export function Dialogs() {
       {dialog === 'invite' && <InviteDialog onClose={close} />}
       {dialog === 'settings' && <Settings onClose={close} />}
       {dialog === 'channelSettings' && <ChannelSettings onClose={close} />}
+      {dialog === 'alerts' && <AlertsDialog onClose={close} />}
       {dialog === 'jump' && <JumpDialog onClose={close} />}
       {dialog === 'collab' && collab && state && <CollabDialog form={collab} state={state} onClose={close} />}
     </>
@@ -245,13 +248,12 @@ function ChannelDialog({ onClose }: { onClose: () => void }) {
 }
 
 function ChannelSettings({ onClose }: { onClose: () => void }) {
-  const { route, state, rec } = useCurrent();
+  const { route, state, identity } = useCurrent();
   const ch = state?.channels.get(route.ch || '');
   const [name, setName] = useState(ch?.name || '');
   const [topic, setTopic] = useState(ch?.topic || '');
   const code = route.code;
-  if (!ch || !code) return null;
-  const muted = !!rec?.muted.includes(ch.id);
+  if (!state || !ch || !code) return null;
   return (
     <Dialog
       open
@@ -278,12 +280,7 @@ function ChannelSettings({ onClose }: { onClose: () => void }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Input label="Name" iconLeft="hash" value={name} onChange={(e) => setName(e.target.value.toLowerCase().replace(/\s+/g, '-'))} />
         <Input label="Topic" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="What happens here" />
-        <Switch
-          checked={muted}
-          onChange={() => useApp.getState().toggleMute(code, ch.id)}
-          label="Mute channel"
-          description="No notifications or unread bold. Mentions still count."
-        />
+        <AlertLevelPicker code={code} ch={ch.id} level={levelOf(state, identity.pub, ch.id)} />
       </div>
     </Dialog>
   );

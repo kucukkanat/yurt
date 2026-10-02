@@ -1,6 +1,19 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { commands } from 'vitest/browser';
-import { agentDmChannel, dmChannel, inviteHash, keyFromPhrase, MAX_FILE_BYTES, newInviteCode, newNostrTransport, newRecoveryPhrase, sha256Buf } from '@yurt/protocol';
+import {
+  agentDmChannel,
+  dmChannel,
+  emptyState,
+  inviteHash,
+  keyFromPhrase,
+  levelOf,
+  MAX_FILE_BYTES,
+  newInviteCode,
+  newNostrTransport,
+  newRecoveryPhrase,
+  sha256Buf,
+  type NotifyLevel,
+} from '@yurt/protocol';
 import { blobsDb, kv } from '../../../src/lib/db';
 import { notificationsFor } from '../../../src/lib/notifications';
 import { recentDiagnostics } from '../../../src/lib/diagnostics';
@@ -192,19 +205,19 @@ describe('messages and files', () => {
     app().approve('req-2', 'allow'); // no conversation open: nothing to approve in
   }, 15_000);
 
-  it('marks conversations read (saved shortly after) and mutes them', async () => {
+  it('marks conversations read (saved shortly after) and sets how much they alert, for all my devices', async () => {
     app().markRead('NOWHERE1', 'general');
-    app().toggleMute('NOWHERE1', 'general');
+    app().setLevel('NOWHERE1', 'general', 'none');
     app().markRead(relayCode, 'general');
     app().markRead(relayCode, 'random'); // saves once for both
     expect(app().workspaces.find((w) => w.code === relayCode)?.lastRead.random).toBeGreaterThan(0);
     await new Promise((r) => setTimeout(r, 700));
     const saved = (await kv.get('workspaces')) as { code: string; lastRead: Record<string, number> }[];
     expect(saved.find((w) => w.code === relayCode)?.lastRead.random).toBeGreaterThan(0);
-    app().toggleMute(relayCode, 'general');
-    expect(app().workspaces.find((w) => w.code === relayCode)?.muted).toContain('general');
-    app().toggleMute(relayCode, 'general');
-    expect(app().workspaces.find((w) => w.code === relayCode)?.muted).not.toContain('general');
+    app().setLevel(relayCode, 'random', 'all');
+    const sent = [...(getPeer(relayCode)?.events.values() ?? [])].find((e) => e.t === 'notify');
+    expect(sent).toMatchObject({ to: me.pub, b: { ch: 'random', level: 'all' } });
+    expect(sent?.ch).toBeUndefined();
     expect(app().publish('NOWHERE1', { t: 'msg', ch: 'general', b: { text: 'x' } })).toBeUndefined();
   });
 });
@@ -251,16 +264,25 @@ describe('notifications', () => {
     await until(() => said(anonDm).length === 1, 'their DM');
     expect(said(anonDm)).toEqual(['Someone: who am I']);
     anon.peer.leave();
-    // A muted channel stays quiet; so does everything once the browser's permission is withdrawn.
-    app().toggleMute(relayCode, 'general');
-    o.peer.publish({ t: 'msg', ch: 'general', b: { text: 'muted @ada' } });
-    app().toggleMute(relayCode, 'general');
+    // At "all" a channel's every message notifies; at "nothing" not even a mention. Nothing does once the browser's
+    // permission is withdrawn.
+    const setLevel = async (level: NotifyLevel) => {
+      app().setLevel(relayCode, 'general', level);
+      await until(() => levelOf(app().states[relayCode] ?? emptyState(relayCode), me.pub, 'general') === level, 'level ' + level);
+    };
+    await setLevel('all');
+    o.peer.publish({ t: 'msg', ch: 'general', b: { text: 'for everyone' } });
+    await until(() => said('general').length === 3, 'every message');
+    await setLevel('none');
+    o.peer.publish({ t: 'msg', ch: 'general', b: { text: 'quiet @ada' } });
+    await until(() => [...(app().states[relayCode]?.msgs.values() ?? [])].some((m) => m.text === 'quiet @ada'), 'the quiet mention');
+    await setLevel('mentions');
     await commands.setPermissions([], location.origin);
     o.peer.publish({ t: 'msg', ch: dm, to: me.pub, b: { text: 'while not allowed' } });
     await until(() => [...(app().states[relayCode]?.msgs.values() ?? [])].some((m) => m.text === 'while not allowed'), 'the last message');
     await new Promise((r) => setTimeout(r, 300));
     expect(said(dm)).toEqual(['Olu: a dm']);
-    expect(said('general')).toEqual(['Olu in #general: hey @ada', 'Agent in #general: hi @ada from a stranger agent']);
+    expect(said('general')).toEqual(['Olu in #general: hey @ada', 'Agent in #general: hi @ada from a stranger agent', 'Olu in #general: for everyone']);
     expect(said(adm)).toEqual(['Scout needs you: edit a file']);
     // Clicking one opens its conversation; reading a conversation clears its notifications.
     notificationsFor(relayCode, dm)[0]?.dispatchEvent(new Event('click'));
