@@ -1,6 +1,6 @@
 {
   "pattern": "**/*.{ts,tsx,js,jsx,mjs}",
-  "ignore": ["**/node_modules/**", "**/dist/**", "**/*.d.ts", "**/test-results/**", "**/playwright-report/**", "**/coverage/**"],
+  "ignore": ["**/node_modules/**", "**/dist/**", "**/*.d.ts", "**/test-results/**", "**/playwright-report/**", "**/coverage/**", ".claude/skills/**"],
   "minTokens": 50,
   "minLines": 5,
   "reporters": ["console"],

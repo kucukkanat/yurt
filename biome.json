@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/test-results", "!**/playwright-report", "!**/*.d.ts", "!**/*.css"]
+    "includes": ["**", "!**/dist", "!**/test-results", "!**/playwright-report", "!**/*.d.ts", "!**/*.css", "!.claude/skills"]
   },
   "formatter": {
     "indentStyle": "space",
