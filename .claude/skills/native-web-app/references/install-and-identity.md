@@ -1,3 +1,4 @@
+<!-- verified 2026-10-02: 5 corrections -->
 # Install, manifest and app identity
 
 What makes the OS treat a site as an app: manifest, icons, colours, install UX, "am I installed?" detection, OS entry points (shortcuts, share, files, links) and store packaging.
@@ -239,7 +240,7 @@ iOS 16.4+: Chrome, Edge, Firefox, Orion can Add to Home Screen (runs on Safari's
 Firefox Android: menu > Add to Home screen. Firefox 143+ Windows: address-bar button pins a taskbar web app.
 ```
 
-**Support:** `beforeinstallprompt` (44+) / `appinstalled` (64+): Chromium desktop and Chrome Android only · Safari macOS/iOS, Firefox: menu install only.
+**Support:** `beforeinstallprompt` (44+, `onbeforeinstallprompt` property 61+) / `appinstalled` (desktop 64+, Android 57+): Chromium desktop and Chrome Android only · Safari macOS/iOS, Firefox: menu install only.
 
 **Gotchas:**
 - The heuristics change: treat them as hints; debug in DevTools > Application > Manifest.
@@ -705,7 +706,7 @@ window.launchQueue?.setConsumer(({ targetURL }) => {
 });
 ```
 
-**Support:** `launch_handler`: Chromium desktop 110+ · Chrome Android 110+ per BCD · Safari, Firefox: no. `launchQueue.targetURL`: Chromium desktop 110+ (BCD lists no Android). Link capturing: Chrome 139+ on Windows/macOS/Linux opens in-scope https links in the installed app by default (per-app opt-out; ChromeOS later). Safari macOS 15+ web apps open in-scope links clicked in other apps.
+**Support:** `launch_handler`: Chromium desktop 110+ · Chrome Android 110+ per BCD · Safari, Firefox: no. `launchQueue.targetURL`: Chromium desktop 110+ (BCD lists no Android). Link capturing: Chrome 139+ on Windows/macOS/Linux opens in-scope https links in the installed app by default (per-app opt-out; ChromeOS later). Safari 18+ (macOS) web apps open in-scope links clicked in other apps.
 
 **Gotchas:**
 - `focus-existing` doesn't navigate: consume `targetURL` or the click looks ignored. `navigate-existing` reloads and loses state.
@@ -884,16 +885,16 @@ export async function installViaWebInstall(): Promise<'installed' | 'cancelled' 
     return 'installed';
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') return 'cancelled';
-    throw e; // NotAllowedError (no activation), DataError (manifest/id problem)
+    throw e; // NotAllowedError (no activation), DataError (manifest/id problem), InvalidStateError (iframe)
   }
 }
 ```
 
-**Support:** Chromium 154 behind `#web-app-installation-api` (origin trial 143–150); Intent to Ship (Sept 2026) targets desktop ~Chrome 156, Android later · Safari, Firefox: no (positions pending).
+**Support:** Chromium desktop/Android 154 behind a flag (BCD; flag `#web-app-installation-api`, unverified); `navigator.install` origin trial 143–148, `<install>` origin trial 148–153; Intent to Ship for both posted Sept 2026 (target milestone unverified) · Safari, Firefox: no (standards positions pending).
 
 **Gotchas:**
 - The shape changed during trials (the 148–153 `<install>` trial used `installurl`/`manifestid`): feature-detect, keep fallbacks.
-- Needs a manifest `id`. `<install>` fires `installresult` (`success` | `aborted` | `invalid_data`). Permissions-Policy `web-app-installation` gates cross-origin use.
+- Cross-origin: `navigator.install({ manifest, manifestId })`; resolves with an empty result object. Needs a manifest `id`. `<install>` fires `installresult` (`success` | `aborted` | `invalid_data`). Permissions-Policy `web-app-installation` gates cross-origin use.
 
 **Sources:** https://github.com/MicrosoftEdge/MSEdgeExplainers/blob/main/WebInstall/explainer.md · https://github.com/WICG/install-element/blob/main/explainer-manifest-url.md
 
@@ -913,7 +914,7 @@ declare global {
     readonly standalone?: boolean; // iOS/iPadOS Safari only
     readonly windowControlsOverlay?: WindowControlsOverlay; // Chromium desktop
     getInstalledRelatedApps?(): Promise<unknown>; // validate the result
-    install?(): Promise<unknown>; // Web Install API (flagged)
+    install?(options?: { manifest: string; manifestId?: string }): Promise<unknown>; // Web Install API (flagged)
   }
 }
 ```
