@@ -88,3 +88,6 @@ Pages once the build and tests pass. Shared setup (Bun, Node, cached Chromium) i
 - The service worker (`apps/web/src/sw.ts`) and its page glue (`lib/swClient.ts`) only exist in the built app: keep
   their decisions in `lib/swLogic.ts` (unit tested) and check the wiring in `e2e/pwa.spec.ts`.
 - Don't press the invite Share button in tests: `navigator.share` brings headless Chromium down on macOS.
+- iOS zooms into focused fields under 16px. `packages/ui/tokens/base.css` forces 16px on fields for coarse pointers and
+  disables double-tap zoom (`touch-action: manipulation`); don't "fix" it with `maximum-scale` in the viewport (that
+  blocks pinch zoom and fails axe).
