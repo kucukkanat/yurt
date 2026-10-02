@@ -286,7 +286,7 @@ browser behaves the same. Versions are first support; "yes" = long-standing.
 
 | Native feeling | API / technique | Chromium | Safari iOS | Firefox | Reference |
 |---|---|---|---|---|---|
-| Own window and icon | Manifest `display: standalone` | Install from menu or prompt; real WebAPK on Android | Add to Home Screen (16.4+ from any iOS browser) | Android: menu install; desktop: Windows taskbar web apps only | [install](references/install-and-identity.md) |
+| Own window and icon | Manifest `display: standalone` | Install from menu or prompt; real WebAPK on Android | Add to Home Screen, no prompt API (other iOS browsers 16.4+) | Android: menu install; desktop: Windows taskbar web apps only | [install](references/install-and-identity.md) |
 | Your own Install button | `beforeinstallprompt` | yes | no: show steps | no | [install](references/install-and-identity.md) |
 | Unread count on the icon | Badging API | Windows/macOS desktop; not Android | 16.4+ Home Screen app, after notification permission | no | [install](references/install-and-identity.md) |
 | Custom desktop title bar | Window Controls Overlay | 105+ installed desktop | no | no | [install](references/install-and-identity.md) |
