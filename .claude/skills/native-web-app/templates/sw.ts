@@ -29,15 +29,9 @@
  * Adapt: NAVIGATION, APP_SHELL / OFFLINE_PAGE, NAVIGATION_DENYLIST, the runtime cache names in KEEP_CACHES.
  */
 import { clientsClaim } from 'workbox-core';
-import { CacheableResponsePlugin } from 'workbox-cacheable-response';
+import type { WorkboxPlugin } from 'workbox-core/types';
 import { ExpirationPlugin } from 'workbox-expiration';
-import {
-  cleanupOutdatedCaches,
-  createHandlerBoundToURL,
-  matchPrecache,
-  type PrecacheEntry,
-  precacheAndRoute,
-} from 'workbox-precaching';
+import { cleanupOutdatedCaches, createHandlerBoundToURL, matchPrecache, type PrecacheEntry, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
 import { CacheFirst, NetworkFirst } from 'workbox-strategies';
 import { DEFAULT_TITLE, isSkipWaiting, isStaleCache, navigateMessage, noticeData, noticeUrl, parsePush, pickWindow } from './sw-logic';
@@ -71,31 +65,27 @@ function navigationRoute(mode: NavigationMode): NavigationRoute {
     // Every in-scope navigation gets the precached shell; the client-side router reads the URL.
     return new NavigationRoute(createHandlerBoundToURL(APP_SHELL), { denylist: NAVIGATION_DENYLIST });
   }
-  const offlineFallback = { handlerDidError: async () => (await matchPrecache(OFFLINE_PAGE)) ?? Response.error() };
-  return new NavigationRoute(
-    new NetworkFirst({ cacheName: PAGES_CACHE, networkTimeoutSeconds: 3, plugins: [offlineFallback] }),
-    { denylist: NAVIGATION_DENYLIST },
-  );
+  const offlineFallback: WorkboxPlugin = { handlerDidError: async () => (await matchPrecache(OFFLINE_PAGE)) ?? Response.error() };
+  return new NavigationRoute(new NetworkFirst({ cacheName: PAGES_CACHE, networkTimeoutSeconds: 3, plugins: [offlineFallback] }), { denylist: NAVIGATION_DENYLIST });
 }
 registerRoute(navigationRoute(NAVIGATION));
 
 // Images and fonts appear instantly on revisits and offline. Status 200 only: an opaque (no-cors) response hides its
 // status and costs ~7 MB of quota each in Chrome. Content-addressed URLs are ideal here.
-registerRoute(
-  ({ request }) => request.destination === 'image' || request.destination === 'font',
-  new CacheFirst({
-    cacheName: MEDIA_CACHE,
-    plugins: [
-      new CacheableResponsePlugin({ statuses: [200] }),
-      new ExpirationPlugin({ maxEntries: 300, maxAgeSeconds: 30 * 24 * 60 * 60, purgeOnQuotaError: true }),
-    ],
-  }),
-);
+const only200: WorkboxPlugin = { cacheWillUpdate: async ({ response }) => (response.status === 200 ? response : null) };
+// Workbox's plugin classes type their callbacks as `X | undefined`, which exactOptionalPropertyTypes rejects as a
+// WorkboxPlugin: copy the defined ones into a plain plugin object.
+const expiration = new ExpirationPlugin({ maxEntries: 300, maxAgeSeconds: 30 * 24 * 60 * 60, purgeOnQuotaError: true });
+const expirationPlugin: WorkboxPlugin = {
+  ...(expiration.cachedResponseWillBeUsed ? { cachedResponseWillBeUsed: expiration.cachedResponseWillBeUsed } : {}),
+  ...(expiration.cacheDidUpdate ? { cacheDidUpdate: expiration.cacheDidUpdate } : {}),
+};
+registerRoute(({ request }) => request.destination === 'image' || request.destination === 'font', new CacheFirst({ cacheName: MEDIA_CACHE, plugins: [only200, expirationPlugin] }));
 
+// Deletes every other cache on this origin except Workbox's precache, including caches your page code or another
+// worker scope created: list those in KEEP_CACHES too.
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((names) => Promise.all(names.filter((n) => isStaleCache(n, KEEP_CACHES)).map((n) => caches.delete(n)))),
-  );
+  event.waitUntil(caches.keys().then((names) => Promise.all(names.filter((n) => isStaleCache(n, KEEP_CACHES)).map((n) => caches.delete(n)))));
 });
 
 // The page posts this when the user accepts "A new version is ready - Reload".
@@ -106,12 +96,14 @@ self.addEventListener('message', (event) => {
 self.addEventListener('push', (event) => {
   // Safari Declarative Web Push with "mutable": the push carries a notification Safari will show itself unless we
   // replace it (e.g. after decrypting). Leave it to Safari here.
-  if (Reflect.get(event, 'notification') instanceof Notification) return;
+  // typeof first: Notification is not exposed in every worker, and instanceof on an undefined global throws.
+  if (typeof Notification !== 'undefined' && Reflect.get(event, 'notification') instanceof Notification) return;
 
   const scope = self.registration.scope;
   const n = parsePush(event.data?.text(), scope);
   event.waitUntil(
     (async () => {
+      // Show first: a push that ends without a notification counts against the subscription (Safari revokes it).
       await self.registration.showNotification(n?.title ?? DEFAULT_TITLE, {
         ...(n?.body === undefined ? {} : { body: n.body }),
         ...(n?.tag === undefined ? {} : { tag: n.tag }),

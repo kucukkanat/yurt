@@ -275,8 +275,6 @@ button,
    stable still needs the prefix. */
 button,
 nav,
-header,
-footer,
 label,
 [role="tab"],
 [role="button"],
@@ -474,8 +472,8 @@ dialog[open]::backdrop {
   }
 }
 
-/* No background scrolling under a modal: Chrome 144+/Firefox 150+ handle it with the backdrop rule above; this is
-   the fallback (Safari). */
+/* No background scrolling under a modal. Engines that honour overscroll-behavior on the non-scrolling backdrop
+   (recent Chromium; others unverified) handle it with the backdrop rule above; this covers the rest (Safari). */
 html:has(dialog:modal) {
   overflow: hidden;
 }

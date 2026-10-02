@@ -55,8 +55,15 @@ export function withDepth(state: unknown, depth: number): Record<string, unknown
   return { ...base, [STATE_KEY]: depth };
 }
 
-/** How many open overlays a popstate to an entry at `depth` closes (a Forward onto a stale entry closes none). */
-export const overlaysToClose = (open: number, depth: number): number => Math.max(0, open - depth);
+/**
+ * How many open overlays (their entries' depths, bottom first) a popstate to an entry at `depth` closes: every one
+ * pushed above it. A Forward onto a stale entry closes none.
+ */
+export function overlaysToClose(openDepths: readonly number[], depth: number): number {
+  let n = 0;
+  for (let i = openDepths.length - 1; i >= 0 && (openDepths[i] ?? 0) > depth; i--) n++;
+  return n;
+}
 
 /* ------------------------------------------------------------------------------------------------- DOM wiring */
 
@@ -73,16 +80,31 @@ function closeWatcherCtor(): CloseWatcherCtor | null {
 }
 const isCtor = (v: unknown): v is CloseWatcherCtor => typeof v === 'function';
 
-/** Open overlays using the history fallback, bottom first. */
-const stack: Array<(info: CloseInfo) => void> = [];
+/** An open overlay using the history fallback, and the depth of the history entry pushed for it. */
+interface Open {
+  readonly depth: number;
+  readonly close: (info: CloseInfo) => void;
+}
+/** Bottom first. Depths only grow upwards, but may have gaps (an overlay below was closed directly). */
+const stack: Open[] = [];
 let listening = false;
+
+const topDepth = (): number => stack.at(-1)?.depth ?? 0;
 
 function onPopState(e: PopStateEvent): void {
   const animate = !('hasUAVisualTransition' in e && e.hasUAVisualTransition === true);
   const depth = depthOf(e.state);
-  for (let n = overlaysToClose(stack.length, depth); n > 0; n--) stack.pop()?.({ animate });
+  for (
+    let n = overlaysToClose(
+      stack.map((o) => o.depth),
+      depth,
+    );
+    n > 0;
+    n--
+  )
+    stack.pop()?.close({ animate });
   // Forward onto an entry whose overlay is gone: bring the entry back in line with what's open.
-  if (depth > stack.length) history.replaceState(withDepth(e.state, stack.length), '');
+  if (depth > topDepth()) history.replaceState(withDepth(e.state, topDepth()), '');
 }
 
 function listen(): void {
@@ -108,37 +130,53 @@ export function onCloseRequest(onClose: (info: CloseInfo) => void): CloseRequest
   if (Watcher) {
     const watcher = new Watcher();
     watcher.addEventListener('close', () => onClose({ animate: true }), { once: true });
+    // close() on an inactive (closed or destroyed) watcher is a no-op, so repeated calls are safe.
     return { close: () => watcher.close(), dispose: () => watcher.destroy() };
   }
 
   listen();
   let done = false;
-  const entry = (info: CloseInfo) => {
-    if (done) return;
-    done = true;
-    onClose(info);
+  // history.back() is async: a second close()/dispose() before its popstate must not go back a second time
+  // (that would pop the page underneath, or leave the app).
+  let goingBack = false;
+  // Above the current entry, not stack.length + 1: a stale entry left below must not share our depth, or Back from
+  // this overlay would land on an entry of equal depth and close nothing.
+  const depth = depthOf(history.state) + 1;
+  const item: Open = {
+    depth,
+    close: (info) => {
+      if (done) return;
+      done = true;
+      onClose(info);
+    },
   };
-  stack.push(entry);
-  const depth = stack.length;
+  stack.push(item);
   history.pushState(withDepth(history.state, depth), '');
-  const ownsCurrentEntry = () => stack.at(-1) === entry && depthOf(history.state) === depth;
+  const ownsCurrentEntry = () => stack.at(-1) === item && depthOf(history.state) === depth;
+  const remove = () => {
+    const i = stack.indexOf(item);
+    if (i !== -1) stack.splice(i, 1);
+  };
 
   return {
     close: () => {
-      if (done) return;
+      if (done || goingBack) return;
       // Let Back do it, so popstate stays the single close path. If history has moved on (the app navigated above
-      // the overlay), close directly and leave the stale entry: a later Back over it is a harmless no-op.
-      if (ownsCurrentEntry()) history.back();
-      else {
-        stack.splice(stack.indexOf(entry), 1);
-        entry({ animate: true });
+      // the overlay, or it isn't the top one), close directly and leave the stale entry: a later Back over it is a
+      // harmless no-op.
+      if (ownsCurrentEntry()) {
+        goingBack = true;
+        history.back();
+      } else {
+        remove();
+        item.close({ animate: true });
       }
     },
     dispose: () => {
       if (done) return;
       done = true;
-      const top = ownsCurrentEntry();
-      stack.splice(stack.indexOf(entry), 1);
+      const top = ownsCurrentEntry() && !goingBack;
+      remove();
       if (top) history.back(); // pop our now-empty entry; popstate finds nothing left to close
     },
   };

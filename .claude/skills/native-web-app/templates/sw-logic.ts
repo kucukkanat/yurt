@@ -28,7 +28,11 @@ export interface NavigateMessage {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
-const count = (v: unknown): number | undefined => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : undefined);
+/** A badge count: a non-negative integer, or its decimal string (WebKit's Declarative Web Push example sends "1"). */
+const count = (v: unknown): number | undefined => {
+  const n = typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v;
+  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+};
 
 export const isSkipWaiting = (data: unknown): boolean => isRecord(data) && data['type'] === SKIP_WAITING.type;
 
@@ -67,8 +71,9 @@ function notice(title: string, fields: { body?: string | undefined; url?: string
 
 /**
  * Reads a push payload: either the plain shape `{ title, body?, url?, tag?, badge? }`, or Declarative Web Push
- * (`{ web_push: 8030, notification: { title, body?, navigate, tag? }, app_badge? }`, Safari 18.4+), which other
- * browsers deliver to the worker as an ordinary push. Null when unreadable: the caller must still show something.
+ * (`{ web_push: 8030, notification: { title, body?, navigate, tag?, app_badge? }, app_badge?, mutable? }`, Safari
+ * 18.4+; the spec draft puts app_badge at the top level, WebKit's example inside notification, so both are read), which
+ * other browsers deliver to the worker as an ordinary push. Null when unreadable: the caller must still show something.
  * URLs outside `scope` are dropped.
  */
 export function parsePush(text: string | null | undefined, scope: string): PushNotice | null {
@@ -88,7 +93,7 @@ export function parsePush(text: string | null | undefined, scope: string): PushN
   if (data['web_push'] === 8030 && isRecord(n)) {
     const title = str(n['title']);
     if (title === undefined) return null;
-    return notice(title, { body: str(n['body']), url: inScopeUrl(n['navigate']), tag: str(n['tag']), badge: count(data['app_badge']) });
+    return notice(title, { body: str(n['body']), url: inScopeUrl(n['navigate']), tag: str(n['tag']), badge: count(data['app_badge'] ?? n['app_badge']) });
   }
   const title = str(data['title']);
   if (title === undefined) return null;
@@ -123,9 +128,7 @@ export function navigateTargetOf(data: unknown, origin: string): { readonly url:
  * The window a notification click should reuse: the focused one, else a visible one, else the most recently focused
  * (clients.matchAll returns them in that order). Undefined means open a new window.
  */
-export function pickWindow<T extends { readonly focused: boolean; readonly visibilityState: string }>(
-  windows: readonly T[],
-): T | undefined {
+export function pickWindow<T extends { readonly focused: boolean; readonly visibilityState: string }>(windows: readonly T[]): T | undefined {
   return windows.find((w) => w.focused) ?? windows.find((w) => w.visibilityState === 'visible') ?? windows[0];
 }
 
@@ -139,5 +142,4 @@ export const shouldCheckForUpdate = (s: {
 }): boolean => s.online && !s.installing && s.now - s.lastCheck >= (s.everyMs ?? 60 * 60_000);
 
 /** Runtime caches this worker version keeps; anything else that isn't Workbox's precache is deleted on activate. */
-export const isStaleCache = (name: string, keep: ReadonlySet<string>): boolean =>
-  !name.startsWith('workbox-precache') && !keep.has(name);
+export const isStaleCache = (name: string, keep: ReadonlySet<string>): boolean => !name.startsWith('workbox-precache') && !keep.has(name);

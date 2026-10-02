@@ -8,7 +8,7 @@
  *   beforeinstallprompt / appinstalled   Chromium only (Chrome, Edge, Samsung, Opera), desktop and Android.
  *   navigator.standalone                 iOS/iPadOS only (non-standard), the reliable "Home Screen app" signal.
  *   display-mode media                   Chrome 42, Safari 13, Firefox 47; Firefox desktop never matches standalone
- *                                        (Windows taskbar apps match minimal-ui from 142).
+ *                                        (its Windows taskbar tabs may report minimal-ui; unverified).
  *   setAppBadge / clearAppBadge          Chrome/Edge 81+ desktop (Windows, macOS; ChromeOS 91), Safari macOS 17+ web
  *                                        apps, iOS/iPadOS 16.4+ Home Screen apps after notification permission. Not
  *                                        Chrome Android (it shows notification dots) or Firefox.
@@ -25,33 +25,22 @@
 /* ------------------------------------------------------------------------------------------------- pure decisions */
 
 /** Display modes that mean "running in its own app window". Add fullscreen only if your manifest uses it. */
-export const APP_DISPLAY_MODES =
-  '(display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay)';
+export const APP_DISPLAY_MODES = '(display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay)';
 
 /** Installed-app launch: an app display mode, or iOS's navigator.standalone (WebKit can report standalone false there). */
-export const isStandaloneFrom = (appDisplayMode: boolean, navigatorStandalone: unknown): boolean =>
-  appDisplayMode || navigatorStandalone === true;
+export const isStandaloneFrom = (appDisplayMode: boolean, navigatorStandalone: unknown): boolean => appDisplayMode || navigatorStandalone === true;
 
 /** iPhone, iPod or iPad, including iPadOS 13+, which reports a Mac user agent but has touch points. */
-export const isIos = (userAgent: string, maxTouchPoints: number): boolean =>
-  /iPad|iPhone|iPod/.test(userAgent) || (/Macintosh/.test(userAgent) && maxTouchPoints > 1);
+export const isIos = (userAgent: string, maxTouchPoints: number): boolean => /iPad|iPhone|iPod/.test(userAgent) || (/Macintosh/.test(userAgent) && maxTouchPoints > 1);
 
 /** Safari on a Mac (File > Add to Dock, macOS Sonoma+), not another browser and not an iPad. */
 export const isMacSafari = (userAgent: string, maxTouchPoints: number): boolean =>
-  /Macintosh/.test(userAgent) &&
-  maxTouchPoints <= 1 &&
-  /Version\/\d+.*Safari/.test(userAgent) &&
-  !/Chrome|Chromium|Edg|Firefox|OPR/.test(userAgent);
+  /Macintosh/.test(userAgent) && maxTouchPoints <= 1 && /Version\/\d+.*Safari/.test(userAgent) && !/Chrome|Chromium|Edg|Firefox|OPR/.test(userAgent);
 
 export type InstallPath = 'installed' | 'prompt' | 'ios-steps' | 'mac-dock' | 'browser-menu';
 
 /** What the "Install" entry in Settings should offer on this device. */
-export function installPath(env: {
-  readonly standalone: boolean;
-  readonly canPrompt: boolean;
-  readonly ios: boolean;
-  readonly macSafari: boolean;
-}): InstallPath {
+export function installPath(env: { readonly standalone: boolean; readonly canPrompt: boolean; readonly ios: boolean; readonly macSafari: boolean }): InstallPath {
   if (env.standalone) return 'installed';
   if (env.canPrompt) return 'prompt';
   if (env.ios) return 'ios-steps';
@@ -63,11 +52,7 @@ export function installPath(env: {
 export function installSteps(path: InstallPath): readonly string[] {
   switch (path) {
     case 'ios-steps':
-      return [
-        'Tap ••• or Share.',
-        'Choose Add to Home Screen (scroll if needed; it may hide under Edit Actions).',
-        'Keep Open as Web App on, then tap Add.',
-      ];
+      return ['Tap ••• or Share.', 'Choose Add to Home Screen (scroll if needed; it may hide under Edit Actions).', 'Keep Open as Web App on, then tap Add.'];
     case 'mac-dock':
       return ['In Safari, choose File > Add to Dock.', 'Click Add.'];
     case 'browser-menu':
@@ -83,12 +68,8 @@ export function installSteps(path: InstallPath): readonly string[] {
  * device, and only on touch devices (desktop Chromium already shows an install icon in the address bar).
  * Repeated or blocking install nags are a web tell; keep a permanent entry in Settings instead.
  */
-export const shouldOfferInstallHint = (s: {
-  readonly engaged: boolean;
-  readonly standalone: boolean;
-  readonly hintShown: boolean;
-  readonly coarsePointer: boolean;
-}): boolean => s.engaged && !s.standalone && !s.hintShown && s.coarsePointer;
+export const shouldOfferInstallHint = (s: { readonly engaged: boolean; readonly standalone: boolean; readonly hintShown: boolean; readonly coarsePointer: boolean }): boolean =>
+  s.engaged && !s.standalone && !s.hintShown && s.coarsePointer;
 
 /** The app-internal URL a launch should route to, or null if it isn't one of ours (launch params are external input). */
 export function launchTarget(targetURL: unknown, origin: string): URL | null {
@@ -108,14 +89,12 @@ interface InstallPromptEvent extends Event {
   prompt(): Promise<unknown>;
   readonly userChoice: Promise<{ readonly outcome: 'accepted' | 'dismissed' }>;
 }
-const isInstallPrompt = (e: Event): e is InstallPromptEvent =>
-  'prompt' in e && typeof e.prompt === 'function' && 'userChoice' in e && e.userChoice instanceof Promise;
+const isInstallPrompt = (e: Event): e is InstallPromptEvent => 'prompt' in e && typeof e.prompt === 'function' && 'userChoice' in e && e.userChoice instanceof Promise;
 
 /** The captured offer. Keep it out of state stores (not serialisable); expose a boolean instead. */
 let offer: InstallPromptEvent | null = null;
 
-export const isStandalone = (): boolean =>
-  isStandaloneFrom(matchMedia(APP_DISPLAY_MODES).matches, Reflect.get(navigator, 'standalone'));
+export const isStandalone = (): boolean => isStandaloneFrom(matchMedia(APP_DISPLAY_MODES).matches, Reflect.get(navigator, 'standalone'));
 
 export const thisIsIos = (): boolean => isIos(navigator.userAgent, navigator.maxTouchPoints);
 
@@ -216,25 +195,19 @@ interface LaunchParamsLike {
 interface LaunchQueueLike {
   setConsumer(consumer: (params: LaunchParamsLike) => void): void;
 }
-const isLaunchQueue = (q: unknown): q is LaunchQueueLike =>
-  typeof q === 'object' && q !== null && 'setConsumer' in q && typeof q.setConsumer === 'function';
+const isLaunchQueue = (q: unknown): q is LaunchQueueLike => typeof q === 'object' && q !== null && 'setConsumer' in q && typeof q.setConsumer === 'function';
 
 /**
  * Routes launches that reuse this window (manifest launch_handler "focus-existing": icon, shortcut, captured link,
  * file or protocol launch) instead of ignoring them; focus-existing does not navigate by itself. File handles from
  * file_handlers arrive in `onFiles`. Call early on every launch. Returns false where launchQueue doesn't exist.
  */
-export function consumeLaunches(
-  onTarget: (url: URL) => void,
-  onFiles?: (files: readonly FileSystemFileHandle[]) => void,
-): boolean {
+export function consumeLaunches(onTarget: (url: URL) => void, onFiles?: (files: readonly FileSystemFileHandle[]) => void): boolean {
   const queue: unknown = Reflect.get(window, 'launchQueue');
   if (!isLaunchQueue(queue)) return false;
   queue.setConsumer((params) => {
     const raw: readonly unknown[] = Array.isArray(params.files) ? params.files : [];
-    const files = raw.filter(
-      (f): f is FileSystemFileHandle => typeof FileSystemFileHandle !== 'undefined' && f instanceof FileSystemFileHandle,
-    );
+    const files = raw.filter((f): f is FileSystemFileHandle => typeof FileSystemFileHandle !== 'undefined' && f instanceof FileSystemFileHandle);
     if (files.length > 0 && onFiles) onFiles(files);
     const url = launchTarget(params.targetURL, location.origin);
     if (url) onTarget(url);

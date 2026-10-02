@@ -43,12 +43,10 @@ export interface HapticEnv {
 }
 
 /** Whether to vibrate at all. */
-export const shouldVibrate = (env: HapticEnv): boolean =>
-  env.enabled && env.canVibrate && !env.reducedMotion && env.hasBeenActive && env.visible;
+export const shouldVibrate = (env: HapticEnv): boolean => env.enabled && env.canVibrate && !env.reducedMotion && env.hasBeenActive && env.visible;
 
 /** Whether the iOS switch trick is the only haptic path here: a touch device without the Vibration API. */
-export const switchHapticsApply = (env: { readonly canVibrate: boolean; readonly coarsePointer: boolean }): boolean =>
-  !env.canVibrate && env.coarsePointer;
+export const switchHapticsApply = (env: { readonly canVibrate: boolean; readonly coarsePointer: boolean }): boolean => !env.canVibrate && env.coarsePointer;
 
 /* ------------------------------------------------------------------------------------------------- DOM wiring */
 
@@ -106,12 +104,16 @@ export function addSwitchHaptic(host: HTMLElement, control: HTMLElement, enabled
     control.click();
   };
   label.addEventListener('click', onClick);
+  // The label's activation also dispatches a click on the switch, which bubbles: keep it from reaching the page too.
+  const swallow = (e: Event) => e.stopPropagation();
+  input.addEventListener('click', swallow);
 
   const restorePosition = getComputedStyle(host).position === 'static' ? host.style.position : null;
   if (restorePosition !== null) host.style.position = 'relative';
   host.append(input, label);
   return () => {
     label.removeEventListener('click', onClick);
+    input.removeEventListener('click', swallow);
     input.remove();
     label.remove();
     if (restorePosition !== null) host.style.position = restorePosition;

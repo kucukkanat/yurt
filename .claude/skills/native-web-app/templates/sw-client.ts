@@ -22,7 +22,10 @@ import { navigateTargetOf, SKIP_WAITING, shouldCheckForUpdate } from './sw-logic
 
 /** A VAPID public key (base64url) as the bytes pushManager.subscribe wants. */
 export function base64UrlToBytes(base64url: string): Uint8Array<ArrayBuffer> {
-  const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(base64url.length / 4) * 4, '=');
+  const base64 = base64url
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+    .padEnd(Math.ceil(base64url.length / 4) * 4, '=');
   const raw = atob(base64);
   const bytes = new Uint8Array(new ArrayBuffer(raw.length));
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
@@ -34,9 +37,7 @@ export function isChunkLoadError(reason: unknown): boolean {
   if (!(reason instanceof Error)) return false;
   return (
     reason.name === 'ChunkLoadError' || // webpack
-    /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed/i.test(
-      reason.message,
-    )
+    /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed/i.test(reason.message)
   );
 }
 
@@ -74,7 +75,8 @@ export async function registerServiceWorker(options: RegisterOptions): Promise<R
   });
 
   let reloading = false;
-  const hadController = container.controller !== null;
+  // Updated on every controllerchange: a tab first opened uncontrolled (first visit) must still offer later updates.
+  let controlled = container.controller !== null;
 
   const apply = () => {
     const waiting = registration.waiting;
@@ -101,10 +103,12 @@ export async function registerServiceWorker(options: RegisterOptions): Promise<R
   // The new worker took control. Reload once if this tab asked for it; other tabs (which didn't ask) offer a reload
   // instead of losing their state. The first install's clientsClaim() also lands here, with nothing to reload.
   const onControllerChange = () => {
+    const wasControlled = controlled;
+    controlled = true;
     if (reloading) {
       reloading = false;
       location.reload();
-    } else if (hadController) {
+    } else if (wasControlled) {
       options.onUpdateReady(() => location.reload());
     }
   };
@@ -147,9 +151,11 @@ export async function registerServiceWorker(options: RegisterOptions): Promise<R
 
 const notificationsGranted = (): boolean => typeof Notification !== 'undefined' && Notification.permission === 'granted';
 
-/** iOS Safari tabs register a worker whose registration lacks these; check both, not one. */
-const workerCanNotify = (r: ServiceWorkerRegistration): boolean =>
-  typeof r.showNotification === 'function' && typeof r.getNotifications === 'function';
+/**
+ * iOS Safari tabs register a worker whose registration lacks these; check both, not one. showNotification also
+ * rejects (TypeError) until the registration has an active worker, e.g. during the very first install.
+ */
+const workerCanNotify = (r: ServiceWorkerRegistration): boolean => r.active !== null && typeof r.showNotification === 'function' && typeof r.getNotifications === 'function';
 
 async function registration(): Promise<ServiceWorkerRegistration | undefined> {
   return 'serviceWorker' in navigator ? navigator.serviceWorker.getRegistration() : undefined;
@@ -204,9 +210,10 @@ export async function subscribePush(vapidPublicKey: string): Promise<PushResult>
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') return 'unsupported';
   if ((await Notification.requestPermission()) !== 'granted') return 'denied';
   const reg = await navigator.serviceWorker.ready;
+  // A subscription made with a different VAPID key makes subscribe() throw InvalidStateError: unsubscribe it first
+  // if you rotate keys.
   const existing = await reg.pushManager.getSubscription();
-  const sub =
-    existing ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlToBytes(vapidPublicKey) }));
+  const sub = existing ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlToBytes(vapidPublicKey) }));
   return sub.toJSON();
 }
 

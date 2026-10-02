@@ -55,15 +55,17 @@
        A CSP needs a hash or nonce for this inline script. -->
   <script>
     try {
-      var t = localStorage.getItem('theme');
+      const t = localStorage.getItem('theme');
       if (t === 'light' || t === 'dark') {
         document.documentElement.dataset.theme = t;
-        document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
-          if (m.getAttribute('media') === '(prefers-color-scheme: ' + t + ')') m.removeAttribute('media');
+        for (const m of document.querySelectorAll('meta[name="theme-color"]')) {
+          if (m.getAttribute('media') === `(prefers-color-scheme: ${t})`) m.removeAttribute('media');
           else m.remove();
-        });
+        }
       }
-    } catch (e) { /* storage blocked: follow the OS */ }
+    } catch {
+      /* storage blocked: follow the OS */
+    }
   </script>
 
   <!-- The manifest (see manifest.webmanifest + manifest.md). Never rename or move it after launch.

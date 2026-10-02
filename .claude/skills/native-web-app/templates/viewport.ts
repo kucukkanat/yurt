@@ -25,7 +25,8 @@
 export const KEYBOARD_MIN = 120;
 
 /** Focusable text fields whose visibility we keep while the keyboard is up. */
-const FIELD = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+const FIELD =
+  'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="range"], [type="color"], [type="file"], [type="image"], [type="hidden"]), textarea, select, [contenteditable]:not([contenteditable="false"])';
 
 export type ViewportVar = '--app-height' | '--app-top' | '--safe-bottom';
 /** CSS custom properties to set on <html>; null removes the property so the stylesheet default applies. */
@@ -68,11 +69,7 @@ export const keyboardUp = (vars: ViewportVars): boolean => vars['--app-height'] 
  * How far to scroll a pane (positive = down) so `field` is visible inside it with `pad` px to spare; 0 if it already is.
  * Scrolling only the pane, never the document, keeps the locked shell from jumping ("the app moved up and stayed").
  */
-export function revealDelta(
-  field: { readonly top: number; readonly bottom: number },
-  pane: { readonly top: number; readonly bottom: number },
-  pad = 12,
-): number {
+export function revealDelta(field: { readonly top: number; readonly bottom: number }, pane: { readonly top: number; readonly bottom: number }, pad = 12): number {
   if (field.top < pane.top + pad) return field.top - (pane.top + pad);
   if (field.bottom > pane.bottom - pad) return field.bottom - (pane.bottom - pad);
   return 0;
@@ -87,13 +84,7 @@ interface VirtualKeyboardLike extends EventTarget {
 }
 
 function isVirtualKeyboard(v: unknown): v is VirtualKeyboardLike {
-  return (
-    v instanceof EventTarget &&
-    'overlaysContent' in v &&
-    typeof v.overlaysContent === 'boolean' &&
-    'boundingRect' in v &&
-    v.boundingRect instanceof DOMRectReadOnly
-  );
+  return v instanceof EventTarget && 'overlaysContent' in v && typeof v.overlaysContent === 'boolean' && 'boundingRect' in v && v.boundingRect instanceof DOMRectReadOnly;
 }
 
 function virtualKeyboard(): VirtualKeyboardLike | null {

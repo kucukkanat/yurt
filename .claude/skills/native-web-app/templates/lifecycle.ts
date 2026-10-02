@@ -37,12 +37,7 @@ export interface ResumePlan {
 }
 
 /** What to do when the app comes back. Short blips (under `staleMs`) only resync; long absences reconnect too. */
-export function resumePlan(s: {
-  readonly reason: ResumeReason;
-  readonly awayMs: number;
-  readonly online: boolean;
-  readonly staleMs?: number;
-}): ResumePlan {
+export function resumePlan(s: { readonly reason: ResumeReason; readonly awayMs: number; readonly online: boolean; readonly staleMs?: number }): ResumePlan {
   if (!s.online) return { reconnect: false, resync: false, checkForUpdate: false };
   const long = s.awayMs >= (s.staleMs ?? 30_000);
   const restored = s.reason === 'bfcache' || s.reason === 'discarded' || s.reason === 'online' || s.reason === 'woke';
@@ -53,13 +48,11 @@ export function resumePlan(s: {
 export const wasAsleep = (lastBeat: number, now: number, intervalMs: number): boolean => now - lastBeat > intervalMs * 3;
 
 /** Reconnect delay: exponential backoff capped at 30 s, with jitter so a fleet of clients doesn't reconnect at once. */
-export const backoffMs = (attempt: number, random: number = Math.random()): number =>
-  Math.min(30_000, 500 * 2 ** Math.max(0, attempt)) * (0.5 + random / 2);
+export const backoffMs = (attempt: number, random: number = Math.random()): number => Math.min(30_000, 500 * 2 ** Math.max(0, attempt)) * (0.5 + random / 2);
 
 /** navigator.onLine false is definitely offline; true is only "maybe", so combine it with the transport's real state. */
 export type Connection = 'online' | 'reconnecting' | 'offline';
-export const connectionState = (browserOnline: boolean, transportUp: boolean): Connection =>
-  !browserOnline ? 'offline' : transportUp ? 'online' : 'reconnecting';
+export const connectionState = (browserOnline: boolean, transportUp: boolean): Connection => (!browserOnline ? 'offline' : transportUp ? 'online' : 'reconnecting');
 
 /* ------------------------------------------------------------------------------------------------- DOM wiring */
 
@@ -151,7 +144,11 @@ export function watchLifecycle(h: LifecycleHandlers): () => void {
 let unsavedGuard: ((e: BeforeUnloadEvent) => void) | null = null;
 export function setUnsavedChanges(unsaved: boolean): void {
   if (unsaved && !unsavedGuard) {
-    unsavedGuard = (e) => e.preventDefault();
+    unsavedGuard = (e) => {
+      e.preventDefault();
+      // Legacy browsers (Chrome/Edge < 119) only show the prompt when returnValue is set.
+      e.returnValue = true;
+    };
     window.addEventListener('beforeunload', unsavedGuard);
   } else if (!unsaved && unsavedGuard) {
     window.removeEventListener('beforeunload', unsavedGuard);
@@ -166,11 +163,17 @@ export function setUnsavedChanges(unsaved: boolean): void {
 export function createWakeLock(): { readonly set: (on: boolean) => Promise<void>; readonly dispose: () => void } {
   let wanted = false;
   let sentinel: WakeLockSentinel | null = null;
+  // One request at a time: set(true) and a visibilitychange can race, and a second lock would leak.
+  let pending: Promise<void> | null = null;
 
-  const acquire = async () => {
-    if (!('wakeLock' in navigator) || sentinel || document.visibilityState !== 'visible') return;
+  const request = async () => {
     try {
       const s = await navigator.wakeLock.request('screen');
+      // Turned off (or already held) while the request was in flight: don't keep a lock nobody will release.
+      if (!wanted || sentinel) {
+        await s.release();
+        return;
+      }
       sentinel = s;
       s.addEventListener('release', () => {
         if (sentinel === s) sentinel = null;
@@ -178,6 +181,13 @@ export function createWakeLock(): { readonly set: (on: boolean) => Promise<void>
     } catch {
       /* NotAllowedError: carry on without it */
     }
+  };
+  const acquire = (): Promise<void> => {
+    if (!('wakeLock' in navigator) || sentinel || document.visibilityState !== 'visible') return Promise.resolve();
+    pending ??= request().finally(() => {
+      pending = null;
+    });
+    return pending;
   };
   const onVisibility = () => {
     if (wanted) void acquire();

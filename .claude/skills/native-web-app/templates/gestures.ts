@@ -91,13 +91,12 @@ export function velocity(samples: readonly Sample[], along: 'x' | 'y'): number {
   const first = samples[0];
   const end = samples.at(-1);
   if (!first || !end || end.t === first.t) return 0;
-  return ((along === 'x' ? end.x - first.x : end.y - first.y) / (end.t - first.t));
+  return (along === 'x' ? end.x - first.x : end.y - first.y) / (end.t - first.t);
 }
 
 /** Whether a drag of `distance` px released at `v` px/ms completes: far enough, or a short flick the same way. */
 export const completes = (distance: number, v: number): boolean =>
-  Math.abs(distance) >= SWIPE_PX ||
-  (Math.abs(distance) >= SHORT_PX && Math.abs(v) >= FLICK && Math.sign(v) === Math.sign(distance));
+  Math.abs(distance) >= SWIPE_PX || (Math.abs(distance) >= SHORT_PX && Math.abs(v) >= FLICK && Math.sign(v) === Math.sign(distance));
 
 /** The swipe a finished gesture made, if any. A flick that reverses at the end (pulling back to cancel) is none. */
 export function swipeOf(tr: Track): Direction | null {
@@ -115,8 +114,7 @@ export const stillHeld = (tr: Track): boolean => tr.axis === null;
  * Rubber-band resistance: how far content moves for an `overshoot` px drag past a limit, in a view `dimension` px
  * long. c = 0.55 approximates UIScrollView (community-derived, not documented by Apple).
  */
-export const rubber = (overshoot: number, dimension: number, c = 0.55): number =>
-  (overshoot * dimension * c) / (dimension + c * overshoot);
+export const rubber = (overshoot: number, dimension: number, c = 0.55): number => (overshoot * dimension * c) / (dimension + c * overshoot);
 
 /** Clamps `v` to [min, max] with rubber banding past either end, instead of a hard stop. */
 export const clampRubber = (v: number, min: number, max: number, dimension: number): number =>
@@ -215,8 +213,10 @@ export function onLongPress(el: HTMLElement, open: (x: number, y: number) => voi
   };
 
   const down = (e: PointerEvent) => {
-    if (e.pointerType !== 'touch' || !e.isPrimary) return;
+    // Any new press (mouse included) ends the previous long-press, so a stale flag can't swallow a later click.
     fired = false;
+    if (e.pointerType !== 'touch' || !e.isPrimary) return;
+    clearTimeout(timer);
     start = { x: e.clientX, y: e.clientY, id: e.pointerId };
     const { x, y } = start;
     timer = window.setTimeout(() => {
@@ -274,7 +274,7 @@ export function enableActiveStates(): () => void {
  */
 export function onContextMenu(el: HTMLElement, open: (x: number, y: number) => void): () => void {
   const handler = (e: MouseEvent) => {
-    // contextmenu is a PointerEvent in Chrome 92+, Firefox 129+, Safari 18.2+.
+    // contextmenu is a PointerEvent in newer engines (Chromium first); elsewhere it's a MouseEvent and this is skipped.
     if (typeof PointerEvent !== 'undefined' && e instanceof PointerEvent && e.pointerType === 'touch') return;
     const target = e.target instanceof Element ? e.target : null;
     if (getSelection()?.toString() || target?.closest('a[href], input, textarea, [contenteditable]')) return;
