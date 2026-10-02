@@ -201,8 +201,8 @@ describe('conversations', () => {
       'the replies',
     );
     const rec = () => app().workspaces.find((w) => w.code === code);
-    // The reply also sent to the channel counts once.
-    expect(unread(state(), rec(), 'general', me.pub, 'ada')).toEqual({ n: 3, m: 1 });
+    // The reply also sent to the channel counts once; replies in my threads alert like mentions.
+    expect(unread(state(), rec(), 'general', me.pub, 'ada')).toEqual({ n: 3, m: 3 });
     app().markRead(code, 'general');
     expect(unread(state(), rec(), 'general', me.pub, 'ada')).toEqual({ n: 0, m: 0 });
   });

@@ -110,7 +110,8 @@ describe('the app chrome', () => {
     useApp.getState().setDialog('alerts');
     await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
     useApp.getState().setDialog(null);
-    useApp.getState().go({ code, ch: 'general' });
+    // The hash still names #general, so going there wouldn't fire hashchange: restore the route directly.
+    useApp.setState({ route: { code, ch: 'general' } });
   });
 
   it('leaves the open channel unread while another window has focus, and reads it on coming back', async () => {
