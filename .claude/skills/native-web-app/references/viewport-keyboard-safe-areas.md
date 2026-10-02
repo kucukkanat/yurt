@@ -1,3 +1,4 @@
+<!-- verified 2026-10-02: 9 corrections -->
 # Viewport, keyboard, safe areas and scrolling
 
 How an app-like page fills the screen: viewport meta, zoom, viewport units, a locked shell, safe areas, the on-screen keyboard per platform, and lists that scroll like native ones.
@@ -54,11 +55,11 @@ One meta turns off the 980px virtual viewport, draws edge to edge, and makes And
      interactive-widget=resizes-content: Android shrinks the layout viewport (vh, dvh, %) for the keyboard. -->
 ```
 
-**Support:** desktop browsers ignore the meta. `viewport-fit`: Safari iOS 11+ (tab and home-screen app), Chrome Android 135+, Firefox Android 79+. `interactive-widget`: Chrome Android 108+, Samsung 21+, Firefox Android 133+; no iOS browser (tab or home-screen app) as of Safari 27 — WebKit landed it in Aug 2026, unshipped in Safari and Technology Preview as of mid-Sept.
+**Support:** desktop browsers ignore the meta. `viewport-fit`: Safari iOS 11+ (tab and home-screen app), Chrome Android 135+, Firefox Android 79+. `interactive-widget`: Chrome Android 108+, Samsung 21+, Firefox Android 133+; no iOS browser (tab or home-screen app) as of Safari 27 (BCD: `false`); WebKit reportedly landed it in Aug 2026, not yet in a Safari release (unverified).
 
 **Gotchas:**
 - Unknown keys are ignored, so the tag is safe on iOS; iOS still needs the [visualViewport fix](#ios-keyboard-size-and-move-the-shell-to-the-visual-viewport-only-while-a-keyboard-is-up).
-- Chrome Android 108+ and Firefox Android 132+ default to `resizes-visual`: set `resizes-content` explicitly.
+- Chrome Android 108+ and Firefox Android (132+, unverified) default to `resizes-visual`: set `resizes-content` explicitly.
 - With `resizes-content` every viewport unit shrinks with the Android keyboard. `overlays-content` only if you lay out around the keyboard yourself.
 - Never add `maximum-scale`, `minimum-scale`, `user-scalable` or `height=device-height`.
 
@@ -139,7 +140,7 @@ html, body { height: 100%; }                         /* locked shell: a 100% cha
 - `dvh` changes while toolbars collapse during document scroll (relayout, shifts): size scrolling content with `svh`.
 - No unit follows the iOS keyboard; on Android with `resizes-content` all of them shrink with it.
 - Field-tested: in an installed iOS app the visual viewport can be a status bar shorter than the layout (797 vs 844 px) while `100%` is exact. Default to `100%`; override only while a keyboard is up.
-- Safari 26.0 left a bottom gap under viewport-sized fixed containers; 26.1 fixed it.
+- Safari 26.0 left a bottom gap under viewport-sized fixed containers; reportedly fixed in 26.1 (unverified).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/length
 
@@ -314,9 +315,9 @@ iOS lays out fixed elements against the layout viewport, which ignores the keybo
 
 ```ts
 /** Document-scroll pages that must keep a fixed bottom bar: lift it above the visible bottom. */
-export function liftAboveKeyboard(bar: HTMLElement): void {
+export function liftAboveKeyboard(bar: HTMLElement): () => void {
   const vv = window.visualViewport;
-  if (!vv) return;
+  if (!vv) return () => {};
   const place = (): void => {
     const hidden = window.innerHeight - (vv.offsetTop + vv.height); // layout px below the visible area
     bar.style.transform = `translateY(${-Math.max(0, hidden)}px)`;
@@ -324,6 +325,7 @@ export function liftAboveKeyboard(bar: HTMLElement): void {
   vv.addEventListener('resize', place);
   vv.addEventListener('scroll', place);
   place();
+  return () => { vv.removeEventListener('resize', place); vv.removeEventListener('scroll', place); };
 }
 
 // Locked pages (document never scrolls) can stay panned after the iOS keyboard closes.
@@ -409,11 +411,11 @@ export function focusInPane(field: HTMLElement): void {
 .app-scroll { scroll-padding-top: var(--sticky-h, 0px); scroll-padding-bottom: 16px; }
 ```
 
-**Support:** `focus({ preventScroll })`: Chrome 64, Safari 15 / iOS 15.5, Firefox 68; BCD lists Chrome and Firefox for Android as unsupported (unverified, likely a data gap). `scrollIntoView({ container: 'nearest' })` (scroll only the nearest scroller): Chrome/Edge 140+ only. `scroll-padding` for `scrollIntoView`: Safari 14.1 / iOS 14.5.
+**Support:** `focus({ preventScroll })`: Chrome 64, Safari 15 / iOS 15.5, Firefox 68; BCD lists Chrome and Firefox for Android as unsupported (unverified, likely a data gap). `scrollIntoView({ container: 'nearest' })` (scroll only the nearest scroller): Chrome/Edge 140+ only (no BCD entry yet; unverified). `scroll-padding` for `scrollIntoView`: Safari 14.1 / iOS 14.5.
 
 **Gotchas:**
 - `overflow: clip` on a non-root wrapper also blocks programmatic scrolling; on html/body it acts as `hidden`.
-- Use `block: 'nearest'`: Safari still ignores `center` (BCD).
+- Prefer `block: 'nearest'`: it scrolls least. (Older reports of Safari ignoring `center` aren't reflected in BCD, which lists full options support from Safari 14; unverified.)
 - The `container` option is missing from TypeScript's lib.dom.
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/focus
@@ -597,11 +599,16 @@ Pagers (onboarding, galleries, swipeable tabs) on CSS scroll snap get native mom
 
 ```ts
 /** Calls back with the settled page; Math.abs because scrollLeft is negative in RTL. */
-export function onPageSettled(pager: HTMLElement, onPage: (index: number) => void): void {
+export function onPageSettled(pager: HTMLElement, onPage: (index: number) => void): () => void {
   const fire = (): void => onPage(Math.round(Math.abs(pager.scrollLeft) / pager.clientWidth));
-  if ('onscrollend' in window) return pager.addEventListener('scrollend', fire);
+  if ('onscrollend' in window) {
+    pager.addEventListener('scrollend', fire);
+    return () => pager.removeEventListener('scrollend', fire);
+  }
   let timer: ReturnType<typeof setTimeout> | undefined; // Safari < 26.2
-  pager.addEventListener('scroll', () => { clearTimeout(timer); timer = setTimeout(fire, 120); }, { passive: true });
+  const onScroll = (): void => { clearTimeout(timer); timer = setTimeout(fire, 120); };
+  pager.addEventListener('scroll', onScroll, { passive: true });
+  return () => { clearTimeout(timer); pager.removeEventListener('scroll', onScroll); };
 }
 
 export function goToPage(pager: HTMLElement, index: number): void {
@@ -697,8 +704,12 @@ Reflow on rotation, compact layouts for landscape phones, re-measure after sizes
 
 ```ts
 /** Re-measure in a ResizeObserver on the measured element: sizes settle after orientation events. */
-export const onOrientation = (cb: (landscape: boolean) => void): void =>
-  matchMedia('(orientation: landscape)').addEventListener('change', (e) => cb(e.matches));
+export function onOrientation(cb: (landscape: boolean) => void): () => void {
+  const mq = matchMedia('(orientation: landscape)');
+  const onChange = (e: MediaQueryListEvent): void => cb(e.matches);
+  mq.addEventListener('change', onChange);
+  return () => mq.removeEventListener('change', onChange);
+}
 ```
 
 **Support:** orientation media query: universal. `screen.orientation` `change` (replaces deprecated `orientationchange`): Chrome 38, Firefox 43, Safari 16.4. Manifest `orientation` → [install-and-identity.md](install-and-identity.md#orientation).
@@ -798,8 +809,12 @@ Half-folded (`folded`, book or laptop posture) vs flat (`continuous`) enables ta
 ```
 
 ```ts
-export const onPosture = (cb: (folded: boolean) => void): void => // never fires where unsupported
-  matchMedia('(device-posture: folded)').addEventListener('change', (e) => cb(e.matches));
+export function onPosture(cb: (folded: boolean) => void): () => void { // never fires where unsupported
+  const mq = matchMedia('(device-posture: folded)');
+  const onChange = (e: MediaQueryListEvent): void => cb(e.matches);
+  mq.addEventListener('change', onChange);
+  return () => mq.removeEventListener('change', onChange);
+}
 ```
 
 **Support:** Chrome/Edge 132+ (desktop, Android), Samsung 16.2; Safari iOS 27 behind a flag; no Firefox. Experimental. JS twin: `navigator.devicePosture.type`.
