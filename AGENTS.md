@@ -87,6 +87,8 @@ Pages once the build and tests pass. Shared setup (Bun, Node, cached Chromium) i
 - Web browser tests share one origin (IndexedDB, store), so that project runs files one at a time.
 - The service worker (`apps/web/src/sw.ts`) and its page glue (`lib/swClient.ts`) only exist in the built app: keep
   their decisions in `lib/swLogic.ts` (unit tested) and check the wiring in `e2e/pwa.spec.ts`.
+- The npm `yurt-bridge` bundles `@yurt/protocol` and `@yurt/ui`: source changes in any of the three need a bridge
+  release. See `packages/bridge/AGENTS.md`.
 - Don't press the invite Share button in tests: `navigator.share` brings headless Chromium down on macOS.
 - iOS zooms into focused fields under 16px. `packages/ui/tokens/base.css` forces 16px on fields for coarse pointers and
   disables double-tap zoom (`touch-action: manipulation`); don't "fix" it with `maximum-scale` in the viewport (that
