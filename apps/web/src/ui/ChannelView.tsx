@@ -319,6 +319,7 @@ function ChannelActions({ ch, narrow, panelType, togglePanel }: { ch: string; na
     return (
       <>
         <IconButton icon="pin" label={'Pinned, ' + pinnedN} size="sm" active={panelType === 'pinned'} onClick={() => togglePanel('pinned')} />
+        <IconButton icon="user-plus" label="Invite people" size="sm" onClick={() => app.setDialog('invite')} />
         {addAgent}
       </>
     );

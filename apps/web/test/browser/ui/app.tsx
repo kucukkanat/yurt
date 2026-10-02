@@ -88,7 +88,16 @@ export async function member(
     p.publish({ t: 'profile', b: { name, handle: name.toLowerCase() } });
     p.setPresence({ st: 'online' });
     // Only wait for the app to see it when the app is in this workspace already.
-    if (rec) await until(() => !!useApp.getState().states[code]?.profiles.has(kp.pub), 10_000, name + "'s profile");
+    if (rec) {
+      await until(() => !!useApp.getState().states[code]?.profiles.has(kp.pub), 10_000, name + "'s profile");
+      // Presence isn't stored by relays: one sent before the app subscribed is lost until the next heartbeat. Re-announce
+      // until the app sees it, so tests don't depend on that race.
+      const seen = () => [...(getPeer(code)?.presence.values() ?? [])].some((x) => x.pub === kp.pub);
+      for (let i = 0; i < 20 && !seen(); i++) {
+        p.setPresence({ st: 'online', typing: i % 2 ? null : undefined });
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
   }
   return Object.assign(p, {
     who: kp,
