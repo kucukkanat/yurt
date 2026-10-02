@@ -76,9 +76,13 @@ describe('starting up', () => {
     expect(useApp.getState().online).toBe(true);
   });
 
-  it('refreshes presence when the tab’s visibility changes', () => {
+  it('refreshes presence when the tab’s visibility or the window’s focus changes', async () => {
     document.dispatchEvent(new Event('visibilitychange'));
     expect(getPeer(relayWs.code)?.myPresence.st).toBe('online');
+    window.parent.focus(); // the test runner's page: as good as another app in front
+    await until(() => getPeer(relayWs.code)?.myPresence.st === 'away', 'away');
+    window.focus();
+    await until(() => getPeer(relayWs.code)?.myPresence.st === 'online', 'back online');
   });
 
   it('toasts a call that couldn’t start, since there is no call view to show it in', async () => {

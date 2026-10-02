@@ -7,6 +7,7 @@ import { useCurrent, roster, personFor, authorKey, channelTitle, type Person } f
 import { privateTarget } from '../lib/private';
 import { fmtDay } from '../lib/format';
 import { readUpTo } from '../lib/collab';
+import { attentive, onAttentionChange } from '../lib/visibility';
 import { MessageItem, type MsgCtx } from './Message';
 import { Composer, editLastMessage } from './Composer';
 import { HuddleStrip, HuddleButton, HuddleDock } from './Huddle';
@@ -411,7 +412,7 @@ function GuestNotice({ c }: { c: Extract<Conversation, { kind: 'guest' }> }) {
   );
 }
 
-/** Freezes "last read" on entering a conversation, so the New divider stays put while you read; marks it read as messages arrive. */
+/** Freezes "last read" on entering a conversation, so the New divider stays put while you read; marks it read as messages arrive while I'm looking (and when I look again). */
 function useReadMarks(code: string, ch: string, count: number): number {
   const { rec, state, identity } = useCurrent();
   const lastRead = readUpTo(rec?.lastRead[ch], state, identity.pub, ch);
@@ -422,10 +423,9 @@ function useReadMarks(code: string, ch: string, count: number): number {
   }, [code, ch]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `count` re-marks the conversation read as new messages arrive while it's open
   useEffect(() => {
-    const mark = () => !document.hidden && useApp.getState().markRead(code, ch);
+    const mark = () => attentive(document) && useApp.getState().markRead(code, ch);
     mark();
-    document.addEventListener('visibilitychange', mark);
-    return () => document.removeEventListener('visibilitychange', mark);
+    return onAttentionChange(mark);
   }, [code, ch, count]);
   return entryRead;
 }
