@@ -1,0 +1,112 @@
+<!--
+  head.html: the <head> of a web app or PWA that should feel native.
+
+  Adapt: every value marked ADAPT (app name, description, colours, paths). The two theme-color values and the
+  manifest's background_color/theme_color must equal your real page background (light and dark), or launch and the
+  system bars flash a different colour.
+
+  Keep the order. charset, viewport, color-scheme and theme-color come before any stylesheet or script so the first
+  paint already uses the right colours and size, and the inline theme script runs before first paint.
+
+  Browsers:
+    viewport-fit=cover         iOS/iPadOS Safari 11+, Chrome Android 135+ (edge-to-edge), Firefox Android.
+    interactive-widget         Chrome Android 108+, Firefox Android 133+, Samsung 21+. Not in any iOS browser (as of
+                               Safari 27), which is why viewport.ts handles the iOS keyboard.
+    theme-color + media        Safari 15+ (from Safari 26: installed web apps only), Chrome Android, Chrome/Edge
+                               desktop for installed apps. Firefox ignores it.
+    color-scheme meta          Chrome 81, Firefox 96, Safari 13.
+    apple-* tags               iOS/iPadOS Home Screen web apps. mobile-web-app-capable is Chrome's spelling.
+    application-title          Chrome/Edge 134+ installed desktop windows (harmless elsewhere).
+    text-scale                 Chrome/Edge 146+ (experimental).
+
+  Do NOT add:
+    - maximum-scale=1 or user-scalable=no. They block pinch zoom on Android, fail axe and WCAG 1.4.4, and iOS ignores
+      them for pinch anyway. Stop iOS focus zoom with 16px fields (native.css) and double-tap zoom with
+      touch-action: manipulation (native.css).
+    - height=device-height or minimum-scale in the viewport.
+    - A meta refresh, or an "unload" handler anywhere (it blocks the back/forward cache).
+-->
+<head>
+  <meta charset="utf-8">
+
+  <!-- width=device-width: real CSS pixels, no 980px desktop layout, no tap delay.
+       initial-scale=1: no auto zoom-out when something overflows.
+       viewport-fit=cover: draw under the notch, home indicator and Android gesture bar. env(safe-area-inset-*) become
+         non-zero, so the app MUST pad with them (native.css --safe-* tokens).
+       interactive-widget=resizes-content: Android shrinks the layout for the on-screen keyboard, so a bottom composer
+         stays above it with no JS. Set it explicitly: Chrome and Firefox default to resizes-visual. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+
+  <title>My App</title> <!-- ADAPT: keep it meaningful; an installed window shows it unless application-title is set. -->
+  <!-- ADAPT: one sentence. Search results and link previews show it. -->
+  <meta name="description" content="One sentence about what the app does.">
+
+  <!-- Native scrollbars, form controls, pickers and autofill render in the matching theme before CSS loads. -->
+  <meta name="color-scheme" content="light dark">
+
+  <!-- System bars (Android status bar, installed desktop title bar, iOS installed app) in the page colour.
+       ADAPT: exactly your page background in each scheme. If the app has its own theme switch, the inline script
+       below (and your theme code) collapses these to the active one. -->
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#161614" media="(prefers-color-scheme: dark)">
+
+  <!-- Before first paint: apply a manual theme override (if your app stores one) so there is no flash, and make
+       theme-color follow it (media-attribute pairs can only follow the OS). Delete if the app only follows the OS.
+       A CSP needs a hash or nonce for this inline script. -->
+  <script>
+    try {
+      var t = localStorage.getItem('theme');
+      if (t === 'light' || t === 'dark') {
+        document.documentElement.dataset.theme = t;
+        document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
+          if (m.getAttribute('media') === '(prefers-color-scheme: ' + t + ')') m.removeAttribute('media');
+          else m.remove();
+        });
+      }
+    } catch (e) { /* storage blocked: follow the OS */ }
+  </script>
+
+  <!-- The manifest (see manifest.webmanifest + manifest.md). Never rename or move it after launch.
+       Behind cookie auth? Add crossorigin="use-credentials": the manifest is fetched without credentials by default.
+       A CSP must allow it with manifest-src. -->
+  <link rel="manifest" href="manifest.webmanifest">
+
+  <!-- Icons. Generate all of them from one SVG (e.g. @vite-pwa/assets-generator preset minimal-2023, or
+       pwa-asset-generator). -->
+  <link rel="icon" href="favicon.ico" sizes="48x48">
+  <link rel="icon" href="icon.svg" sizes="any" type="image/svg+xml">
+  <!-- iOS/iPadOS home-screen icon: ONE opaque 180x180 PNG (iOS turns transparency black), no pre-rounded corners,
+       artwork inside the central ~80%. It wins over manifest icons on iOS and never updates after "Add to Home Screen". -->
+  <link rel="apple-touch-icon" href="apple-touch-icon-180x180.png">
+
+  <!-- Home Screen web app tags. From iOS 26 every site added to the Home Screen opens as a web app by default, but keep
+       apple-mobile-web-app-capable: startup images are reported not to show without it. mobile-web-app-capable is
+       the standard twin that stops Chrome's deprecation warning. -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <!-- ADAPT: the label under the home-screen icon; 12 characters or fewer. -->
+  <meta name="apple-mobile-web-app-title" content="MyApp">
+  <!-- iOS installed-app status bar. "default" is the predictable choice since iOS 26: an opaque bar and the web view
+       starts below it. "black-translucent" draws the app under the status bar (white status text, so it needs a dark
+       top bar, and padding with env(safe-area-inset-top)); field reports on iOS 26/27 show sizing gaps and a Liquid
+       Glass blur over the top ~110px with it. iOS reads this at install time: users must re-add the app after a change. -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+
+  <!-- Optional. Uncomment what applies. -->
+  <!-- Installed desktop window title (Chrome/Edge 134+), next to the app name, instead of document.title (which can keep
+       unread counts for tabs). Update its content per view. -->
+  <!-- <meta name="application-title" content=""> -->
+  <!-- Follow the OS text size (Chrome/Edge 146+). Only if every size is in rem and layouts reflow at 200%+. -->
+  <!-- <meta name="text-scale" content="scale"> -->
+  <!-- iOS: don't turn numbers in the UI (order ids, counts) into phone links. Apple Safari meta tag. -->
+  <!-- <meta name="format-detection" content="telephone=no"> -->
+  <!-- iOS launch screens: one image per exact device size and orientation. Generate them (pwa-asset-generator
+       --splash-only, or @vite-pwa/assets-generator combinePresetAndAppleSplashScreens) and paste the emitted links:
+  <link rel="apple-touch-startup-image" href="apple-splash-portrait-1320x2868.png"
+        media="screen and (device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)">
+       Exclude them from the service worker precache. Android builds its splash from the manifest. -->
+  <!-- Brand font for headings only (UI text stays on system-ui, see native.css):
+  <link rel="preload" href="fonts/brand.woff2" as="font" type="font/woff2" crossorigin> -->
+
+  <link rel="stylesheet" href="native.css">
+</head>

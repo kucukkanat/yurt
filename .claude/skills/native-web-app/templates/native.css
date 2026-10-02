@@ -1,0 +1,603 @@
+/*
+ * native.css: the CSS baseline that makes a web app feel like an app instead of a page.
+ *
+ * Contract (rename the classes to your own; the rules are what matters):
+ *   <body>                         the locked shell: never scrolls, sized to the visible area
+ *     <div class="app">            grid: header / one scrolling pane / footer
+ *       <header class="app-header">  top bar (also the desktop title bar in window-controls-overlay mode)
+ *       <main class="app-scroll" data-scroll-root>   the only thing that scrolls
+ *       <nav class="app-footer">     tab bar or composer
+ *   .content / [data-selectable]   user content that stays selectable (messages, documents)
+ *   .pressable                     anything tappable that is not a <button>
+ *   dialog.sheet                   bottom sheet; plain <dialog> and [popover] get enter/exit animations
+ *
+ * Adapt: the colour tokens (light-dark pairs), --accent, the font stacks, the motion tokens. Keep --surface-page equal
+ * to head.html's theme-color and the manifest's background_color.
+ *
+ * Content sites whose document scrolls should NOT use the locked shell (body overflow hidden): the browser toolbar
+ * never collapses and Chrome's pull-to-refresh only works on the document. Use min-height: 100svh screens instead
+ * (.app-screen below) and keep the rest.
+ *
+ * Browsers: everything here is supported by current Chrome, Safari and Firefox unless a rule says otherwise. The
+ * non-universal bits degrade to nothing: safe-area-max-inset (Chrome Android 135+), env(titlebar-area-*) (installed
+ * Chromium desktop), overlay/allow-discrete exit transitions (Chromium; Safari 18 has display but not overlay; Firefox
+ * has neither, so exits are instant there unless animated in JS), prefers-reduced-transparency (Chromium 118+),
+ * -webkit-touch-callout (iOS only), scrollbar-color (Safari 26.2+).
+ */
+
+/* ---------------------------------------------------------------- tokens */
+
+:root {
+  color-scheme: light dark;
+
+  /* ADAPT: page surface = theme-color = manifest background_color, per scheme. */
+  --surface-page: light-dark(#ffffff, #161614);
+  --surface-bar: light-dark(#f6f6f4, #1e1e1c);
+  --surface-raised: light-dark(#ffffff, #242422);
+  --text: light-dark(#1b1b18, #ededea);
+  --text-muted: light-dark(#5f5f5a, #a3a39e);
+  --border: light-dark(rgb(0 0 0 / 0.12), rgb(255 255 255 / 0.12));
+  --accent: light-dark(#2f6fde, #6b9cf0);
+  --press: light-dark(rgb(0 0 0 / 0.06), rgb(255 255 255 / 0.08));
+  --hover: light-dark(rgb(0 0 0 / 0.04), rgb(255 255 255 / 0.05));
+  --focus-ring: var(--accent);
+  --scrim: rgb(0 0 0 / 0.4);
+
+  /* System UI font: zero bytes, matches the OS chrome around the app. Brand fonts for headings only. */
+  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Noto Sans",
+    Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Code", Menlo, Consolas, monospace;
+
+  /* Safe areas (notch, Dynamic Island, home indicator, rounded corners, landscape cutouts). Non-zero only with
+     viewport-fit=cover. viewport.ts sets --safe-bottom to 0 while the iOS keyboard covers the home indicator.
+     Physical left/right on purpose: the cutout side flips with landscape direction, not with text direction. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  /* Android edge-to-edge (Chrome 135+): constant reserve, so bottom bars don't jitter as the browser chin retracts. */
+  --safe-bottom-stable: env(safe-area-max-inset-bottom, var(--safe-bottom));
+
+  /* Hit targets: 44px on touch (Apple 44pt, Material 48dp, WCAG 2.5.5), denser for a mouse (WCAG 2.5.8 floor is 24). */
+  --hit: 32px;
+
+  /* Motion: entrances decelerate and run longer, exits accelerate and run shorter. */
+  --dur-press: 100ms;
+  --dur-small: 200ms;
+  --dur-medium: 300ms;
+  --dur-large: 450ms;
+  --dur-exit: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15);
+  /* Damped spring (stiffness 300, damping 30) sampled into linear(); pair it with 500ms, its physical duration. */
+  --spring-smooth: linear(0, 0.074, 0.231, 0.406, 0.567, 0.699, 0.801, 0.875, 0.926, 0.96, 0.981, 0.993, 1, 1.003,
+    1.004, 1.004, 1.004, 1.003, 1.002, 1.001, 1);
+  --dur-spring: 500ms;
+
+  accent-color: var(--accent);
+}
+
+/* A manual theme switch (head.html script / your settings) also flips native controls and light-dark(). */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+@media (pointer: coarse) {
+  :root { --hit: 44px; }
+}
+
+/* Reduced motion: 1ms rather than 0 so transitionend/animationend still fire and nothing waits forever. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-small: 1ms;
+    --dur-medium: 1ms;
+    --dur-large: 1ms;
+    --dur-exit: 1ms;
+    --dur-spring: 1ms;
+  }
+}
+
+/* ---------------------------------------------------------------- root and the locked app shell */
+
+html {
+  height: 100%;
+  background: var(--surface-page);
+  color: var(--text);
+  font-family: var(--font-ui);
+  /* No landscape text inflation or Android font boosting. 100%, not none (none can break user zoom). */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* Pan and pinch-zoom stay, double-tap zoom and any tap delay go. Descendants can only restrict this further. */
+  touch-action: manipulation;
+  /* No grey tap rectangle; real :active states below replace it. */
+  -webkit-tap-highlight-color: transparent;
+  /* No page bounce or glow, no accidental pull-to-refresh, no overscroll history navigation. Set on html and body:
+     engines differ on which one carries the root value. iOS ignores it on the main frame; the locked shell is what
+     stops the bounce there. */
+  overscroll-behavior: none;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-page);
+  /* The shell is the layout viewport (100% chain), not 100dvh: in an installed iOS app with a translucent status bar,
+     dvh and the visual viewport can come up one status bar short. viewport.ts overrides --app-height/--app-top only
+     while an iOS keyboard is up, and a transform (not top) moves position:fixed overlays with the app. */
+  height: var(--app-height, 100%);
+  transform: translateY(var(--app-top, 0px));
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.app {
+  height: 100%;
+  display: grid;
+  /* minmax(0, 1fr): a plain 1fr row grows to its content and never scrolls. */
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+  /* No sideways wobble: clip stray overflow without becoming a scroll container (sticky keeps working). */
+  overflow-x: clip;
+}
+
+/* Bars stay in flow (grid rows), never position:fixed: fixed bottom bars float or hide with the iOS keyboard.
+   Backgrounds bleed to the edges, content is inset. */
+.app-header {
+  padding-top: var(--safe-top);
+  background: var(--surface-bar);
+}
+
+.app-footer {
+  padding-bottom: max(8px, var(--safe-bottom));
+  background: var(--surface-bar);
+}
+
+.app-scroll {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  /* Keep the pane's own bounce, never chain into the shell or a backdrop. */
+  overscroll-behavior-y: contain;
+  /* Desktop: no 15px layout jump when content starts to overflow; thin themed bars. */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  /* Focus and scrollIntoView land clear of sticky headers and the bottom edge. */
+  scroll-padding-top: var(--sticky-header-height, 0px);
+  scroll-padding-bottom: 16px;
+}
+
+/* Grid and flex children default to min-width: auto and refuse to shrink around long words and URLs. */
+.app > *,
+.app-scroll > * {
+  min-width: 0;
+}
+
+/* Long content never widens the page. */
+.content {
+  overflow-wrap: anywhere;
+}
+img,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Full-height screens in a page whose document scrolls (no locked shell). svh: fully visible on first paint, never
+   jumps as browser bars collapse. vh first for engines without the new units. */
+.app-screen {
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
+/* Horizontal strips and pagers: native momentum and snapping, no chaining into history swipes at the ends. */
+.app-strip {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+.app-strip > * {
+  scroll-snap-align: start;
+}
+
+/* Long lists: skip layout and paint for off-screen rows; "auto" remembers each row's last rendered height. */
+.app-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+}
+
+/* ---------------------------------------------------------------- touch, press and hover */
+
+/* Pressed feedback on touch-down, like native controls. iOS applies :active only when a touchstart listener exists
+   (gestures.ts enableActiveStates() adds a passive one on body). The tint is a background-image layer, so it darkens
+   or lightens whatever background-color the control already has instead of replacing it. */
+button,
+.pressable {
+  transition: transform var(--dur-press) ease-out;
+}
+button:active:not(:disabled),
+.pressable:active {
+  transform: scale(0.97);
+  background-image: linear-gradient(var(--press), var(--press));
+  transition-duration: 0s;
+}
+
+/* List rows: no shrink, just the tint, and none at all for a touch that turns into a scroll within ~60ms. */
+.app-row.pressable:active {
+  transform: none;
+  animation: press-tint 0s 60ms both;
+  background-image: none;
+}
+@keyframes press-tint {
+  to { background-image: linear-gradient(var(--press), var(--press)); }
+}
+
+/* Hover only where the primary pointer can hover: :hover sticks after a tap on phones and makes iOS need two taps.
+   pointer: fine because some Android devices wrongly match hover: hover. */
+@media (hover: hover) and (pointer: fine) {
+  button:hover:not(:disabled, :active),
+  .pressable:hover:not(:active) {
+    background-image: linear-gradient(var(--hover), var(--hover));
+  }
+}
+
+/* Hit targets. .hit-expand grows the tappable area of a small icon without changing layout (keep 8px between
+   neighbours so expanded areas don't overlap). */
+button,
+[role="button"],
+.pressable {
+  min-width: var(--hit);
+  min-height: var(--hit);
+}
+.hit-expand {
+  position: relative;
+}
+.hit-expand::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+}
+
+/* Gesture surfaces declare what the browser keeps. Rows with a horizontal swipe keep vertical scroll AND pinch
+   (plain pan-y would block pinch zoom when it starts on the row). Handles and canvases take everything: keep them small. */
+.swipe-x {
+  touch-action: pan-y pinch-zoom;
+}
+.drag-handle,
+.sketch-surface {
+  touch-action: none;
+}
+
+/* ---------------------------------------------------------------- selection, callouts, cursors */
+
+/* UI chrome is not text: no selection highlight on double-click, no iOS loupe on long-press. Both spellings: Safari
+   stable still needs the prefix. */
+button,
+nav,
+header,
+footer,
+label,
+[role="tab"],
+[role="button"],
+.app-header,
+.app-footer {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Content stays selectable, and fields must never inherit none (older iOS made such fields uneditable). */
+.content,
+[data-selectable],
+input,
+textarea,
+[contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* One tap selects the whole code, hash or invite link. */
+.select-all {
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* No iOS save/preview/share callout and no drag ghost on UI images and app-chrome links. Content images (shared
+   photos) stay draggable and saveable. */
+@media (pointer: coarse) {
+  .app-header,
+  .app-footer,
+  nav,
+  .pressable {
+    -webkit-touch-callout: none;
+  }
+}
+.app-header img,
+.app-footer img,
+nav img,
+nav a,
+button img {
+  -webkit-user-drag: none;
+}
+
+/* Desktop: arrow cursor over chrome, hand only for real links, I-beam only where text is. */
+.app-header,
+.app-footer,
+nav {
+  cursor: default;
+}
+a[href] {
+  cursor: pointer;
+}
+.drag-handle {
+  cursor: grab;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* ---------------------------------------------------------------- forms */
+
+/* iOS zooms into any focused field under 16px. Force 16px on touch-first devices only; max() keeps fields growing
+   with the user's text size. !important on purpose: component styles set 13-14px and iOS checks the computed size.
+   Do not "fix" this with maximum-scale in the viewport. */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select,
+  [contenteditable] {
+    font-size: max(16px, 1rem) !important;
+  }
+}
+
+/* Auto-growing composer (Chrome 123, Safari 26.2, Firefox 152); older engines need a scrollHeight fallback in JS. */
+textarea.autogrow {
+  field-sizing: content;
+  min-block-size: 2.75rem;
+  max-block-size: 8lh;
+  overflow-y: auto;
+  resize: none;
+}
+
+/* ---------------------------------------------------------------- type */
+
+body {
+  font-family: var(--font-ui);
+}
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
+}
+time,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+/* Optional: iOS Dynamic Type (Settings > Text Size) for rem-sized UIs. -webkit-touch-callout limits it to iOS, so
+   macOS Safari's small system size stays out. Only enable if every size is rem and layouts reflow at 200%+.
+@supports (font: -apple-system-body) and (-webkit-touch-callout: none) {
+  html { font: -apple-system-body; }
+  body { font-family: var(--font-ui); }
+}
+*/
+
+/* ---------------------------------------------------------------- focus */
+
+/* Rings for keyboard users only; never remove focus styles outright. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------- translucent bars */
+
+.app-bar-translucent {
+  background: color-mix(in srgb, var(--surface-bar) 72%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .app-bar-translucent { background: var(--surface-bar); }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .app-bar-translucent {
+    background: var(--surface-bar);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* ---------------------------------------------------------------- dialogs, popovers, sheets */
+
+/* Enter from @starting-style, exit with allow-discrete so the element stays rendered (and in the top layer, Chromium
+   'overlay') until the exit finishes. The closed state carries the exit timing; the open state the entry timing. */
+dialog,
+[popover] {
+  opacity: 0;
+  scale: 0.96;
+  transition:
+    opacity var(--dur-exit) var(--ease-exit),
+    scale var(--dur-exit) var(--ease-exit),
+    display var(--dur-exit) allow-discrete,
+    overlay var(--dur-exit) allow-discrete;
+}
+dialog[open],
+[popover]:popover-open {
+  opacity: 1;
+  scale: 1;
+  transition-duration: var(--dur-medium);
+  transition-timing-function: var(--ease-enter);
+}
+@starting-style {
+  dialog[open],
+  [popover]:popover-open {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+
+dialog {
+  /* The UA makes modal dialogs scroll containers: don't chain their scroll into the page. */
+  overscroll-behavior: contain;
+  background: var(--surface-raised);
+  color: var(--text);
+}
+dialog::backdrop {
+  background-color: rgb(0 0 0 / 0);
+  overflow: hidden;
+  overscroll-behavior: contain;
+  transition:
+    background-color var(--dur-exit),
+    display var(--dur-exit) allow-discrete,
+    overlay var(--dur-exit) allow-discrete;
+}
+dialog[open]::backdrop {
+  background-color: var(--scrim);
+}
+@starting-style {
+  dialog[open]::backdrop {
+    background-color: rgb(0 0 0 / 0);
+  }
+}
+
+/* No background scrolling under a modal: Chrome 144+/Firefox 150+ handle it with the backdrop rule above; this is
+   the fallback (Safari). */
+html:has(dialog:modal) {
+  overflow: hidden;
+}
+
+/* Bottom sheet: a modal <dialog class="sheet"> pinned to the bottom edge that springs up. Drag-to-dismiss and an
+   animated exit from the current drag offset need JS (WAAPI); without it the exit uses the dialog rule above. */
+dialog.sheet {
+  margin: auto auto 0;
+  width: min(100%, 640px);
+  max-width: 100%;
+  max-height: 92vh;
+  max-height: 92dvh;
+  border: 0;
+  border-radius: 16px 16px 0 0;
+  padding: 8px max(16px, var(--safe-right)) calc(16px + var(--safe-bottom)) max(16px, var(--safe-left));
+  opacity: 1;
+  scale: 1;
+  translate: 0 100%;
+  transition:
+    translate var(--dur-exit) var(--ease-exit),
+    display var(--dur-exit) allow-discrete,
+    overlay var(--dur-exit) allow-discrete;
+}
+dialog.sheet[open] {
+  translate: 0 0;
+  transition-duration: var(--dur-spring);
+  transition-timing-function: var(--spring-smooth);
+}
+@starting-style {
+  dialog.sheet[open] {
+    opacity: 1;
+    scale: 1;
+    translate: 0 100%;
+  }
+}
+/* While a finger drags the sheet, it follows 1:1 with no transition. */
+dialog.sheet.dragging {
+  transition: none;
+}
+.sheet-grabber {
+  touch-action: none;
+  inline-size: 36px;
+  block-size: 5px;
+  margin: 0 auto 8px;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+/* Shared presentation keyframes for JS (WAAPI) or class-driven animation. Keyframes without "to" animate back to
+   the element's own style, so they stay reusable. */
+@keyframes sheet-in {
+  from { translate: 0 100%; }
+}
+@keyframes sheet-out {
+  to { translate: 0 100%; }
+}
+@keyframes dialog-in {
+  from { opacity: 0; translate: 0 12px; scale: 0.97; }
+}
+@keyframes toast-in {
+  from { opacity: 0; translate: 0 16px; scale: 0.96; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
+/* Toasts above the home indicator and the keyboard-free bottom edge. */
+.toast {
+  position: fixed;
+  left: max(16px, var(--safe-left));
+  right: max(16px, var(--safe-right));
+  bottom: calc(16px + var(--safe-bottom-stable));
+  animation: toast-in var(--dur-medium) var(--ease-enter) both;
+}
+
+/* ---------------------------------------------------------------- installed-app modes */
+
+/* Hide "Install" UI inside the installed app (JS: install.ts isStandalone() also covers iOS navigator.standalone). */
+@media (display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay) {
+  [data-hide-when-installed] {
+    display: none;
+  }
+}
+
+/* Window Controls Overlay (installed Chromium desktop, manifest display_override): the header becomes the title bar.
+   Pad it clear of the OS window buttons, make it draggable, and keep its controls clickable. Users can switch the
+   overlay off, so the env() fallbacks reproduce the normal layout. */
+@media (display-mode: window-controls-overlay) {
+  .app-header {
+    min-height: env(titlebar-area-height, 0px);
+    padding-left: max(var(--safe-left), env(titlebar-area-x, 0px));
+    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .app-header :is(button, a, input, select, textarea, [role="button"], [contenteditable]) {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+}
+
+/* ---------------------------------------------------------------- reduced motion (last, so it wins) */
+
+/* Remove movement, keep feedback: colour changes still happen, just instantly. JS-driven motion (WAAPI, smooth
+   scrolling) must check matchMedia('(prefers-reduced-motion: reduce)') itself. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* "*" doesn't match view-transition pseudo-elements. */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+  button:active:not(:disabled),
+  .pressable:active {
+    transform: none;
+  }
+}
