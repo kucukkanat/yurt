@@ -29,7 +29,7 @@ Optionally, `yurt-bridge` runs on your machine and brings your own coding agents
   </tr>
   <tr>
     <td valign="top"><b>Sealed by default</b><br>The invite link carries a 256-bit key; relays see only ciphertext. DMs get their own pairwise key.</td>
-    <td valign="top"><b>Everything a team chat needs</b><br>Channels, DMs, threads, reactions, pins, files up to 25 MB, and huddles with video and screen share.</td>
+    <td valign="top"><b>Everything a team chat needs</b><br>Channels, DMs, threads, reactions, pins, files up to 25 MB, huddles with video and screen share, plus tasks, polls, meetings, a decision log, and docs and boards everyone (agents too) writes in at once.</td>
     <td valign="top"><b>Installable</b><br>A PWA that opens offline, with touch gestures, haptics and an unread badge on the home-screen icon.</td>
   </tr>
 </table>
@@ -76,6 +76,7 @@ That's the only terminal step. The bridge opens `http://127.0.0.1:7717`, where y
 - Per agent, tick what it answers (@mentions, replies to its messages, or both) and where it posts (in a thread, in the channel, or both: a thread reply that also shows in the channel). It always answers in your private chat with it. Agents see the last N messages (per agent). Files attached to the message that triggers them are saved under `.yurt/files/` in the agent's folder so the agent can open them.
 - **Discoverable** agents can be found by other members (⌘K, the agent's profile) and messaged privately. Those chats run on your machine, so you can read them, and the sender is told so. Each member gets their own agent session. Agents that aren't discoverable can only be @mentioned in channels or replied to.
 - Every tool call shows up in the room as an expandable trace. Tool kinds not on the agent's auto-approve list pause the run and ask you in your private chat with it, with a desktop notification.
+- **Agents collaborate like members**: assign a task to an agent and it starts on it, reports in the task's thread and marks it done, blocked, or hands it back with a note. Through the bridge's Yurt tools (MCP) agents also create and update tasks, post polls and vote, record decisions, write docs, suggest edits that you accept or reject, add notes to boards and schedule meetings. What they do is ordinary workspace data, so everyone sees it with or without a bridge; their badge shows what they're working on.
 - One ACP session per agent, kept alive across prompts.
 - Config lives in `~/.yurt/` (JSON, written by the bridge UI; you never edit it).
 
@@ -90,6 +91,17 @@ The bridge launches each CLI's ACP mode. Adapters move fast, so check these agai
 | Codex | `npx @zed-industries/codex-acp` | `@openai/codex` |
 | Claude Code | `npx @zed-industries/claude-code-acp` | `@anthropic-ai/claude-code` |
 | Pi | `npx pi-acp` | `@mariozechner/pi-coding-agent` |
+
+## Working together
+
+Everything here works without the bridge and stays as private as the workspace (sealed on relays).
+
+- **The hub** (☑ in a conversation's header): tasks (yours and your agents' first, with status, assignee, due date and activity), docs and boards, the decision log, and your saved messages. Create tasks, polls, meetings, docs and boards from it.
+- **From any message**: save it for later (only your devices see what you saved), make it a task, or mark it as a decision.
+- **Polls** count votes live and can close at a set time; **meetings** collect RSVPs and show when they're on.
+- **Docs** are written by everyone at once and merge (CRDT); you see who's in a doc and on which line. **Boards** hold sticky notes anyone adds, moves and recolors.
+- **Who's here**: avatars show who's in a conversation or doc. **Follow** someone from their profile to go where they look. **Focus mode** (☾ by your name) silences notifications and tells others you may answer later.
+- What you've read syncs privately between your devices.
 
 ## Things to know
 

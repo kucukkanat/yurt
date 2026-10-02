@@ -23,7 +23,7 @@ import type { Config } from '../src/config';
 import type { Workspaces } from '../src/workspaces';
 import { AgentHost } from '../src/agents';
 import { onLog } from '../src/log';
-import { FAKE_AGENT, answersOf, askAgent, fakeBins, memberPeer, must, startBridge, tempDir, until } from './helpers';
+import { FAKE_AGENT, fakeAgent, answersOf, askAgent, fakeBins, memberPeer, must, startBridge, tempDir, until } from './helpers';
 
 // The agent host end to end: the real bridge (Workspaces + AgentHost) runs real fake-ACP agent processes, members and
 // the owner's own browser are real WorkspacePeers, all over a local Nostr relay and Blossom server. No mocks.
@@ -36,26 +36,7 @@ const X = keyFromPhrase(newRecoveryPhrase()); // someone else's identity, for ev
 const home = tempDir('yurt-host-');
 const agentsDir = tempDir('yurt-host-agents-');
 
-const agentCfg = (id: string, mode: string, p: Partial<AgentConfig> = {}): AgentConfig => {
-  const workdir = path.join(agentsDir, id);
-  fs.mkdirSync(workdir, { recursive: true });
-  fs.writeFileSync(path.join(workdir, '.fake-mode'), mode);
-  return {
-    id,
-    name: id[0]?.toUpperCase() + id.slice(1),
-    handle: id,
-    runtime: 'copilot',
-    workdir,
-    instructions: '',
-    autoApprove: ['edit'],
-    contextSize: 20,
-    respondTo: { mentions: true, replies: false },
-    postIn: { thread: false, channel: true },
-    discoverable: false,
-    online: true,
-    ...p,
-  };
-};
+const agentCfg = (id: string, mode: string, p: Partial<AgentConfig> = {}) => fakeAgent(agentsDir, id, mode, p);
 const AGENTS = [
   agentCfg('echo', 'echo', { discoverable: true }),
   agentCfg('teller', 'prompt', { instructions: 'Be brief.', contextSize: 3, discoverable: true, postIn: { thread: true, channel: false } }),

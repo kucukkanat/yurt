@@ -37,7 +37,7 @@ Every change is an immutable, signed event:
 | `profile` | `{name, handle}` | Latest per key wins. |
 | `ch.create` | `{id, name, topic}` | First per id wins. |
 | `ch.update` | `{id, name?, topic?}` | Any member. |
-| `msg` | `{text, parent?, alsoInChannel?, files?, trace?, meta?, approval?}` | `ch` is a channel id, `dm:<pubA>:<pubB>` (sorted), `adm:<owner>:<agentId>` (an owner and their agent) or `gdm:<member>:<owner>:<agentId>` (a member and someone else's agent). `parent` makes a thread reply; `alsoInChannel: true` on a thread reply also lists it in the channel. |
+| `msg` | `{text, parent?, alsoInChannel?, files?, trace?, meta?, approval?, poll?, meet?}` | `ch` is a channel id, `dm:<pubA>:<pubB>` (sorted), `adm:<owner>:<agentId>` (an owner and their agent) or `gdm:<member>:<owner>:<agentId>` (a member and someone else's agent). `parent` makes a thread reply; `alsoInChannel: true` on a thread reply also lists it in the channel. |
 | `edit` / `del` | `{target, text?}` | Same author and agent, not before the original. The 15-minute edit window is advisory: authors choose `ts`, so only honest clients can enforce it. |
 | `react` | `{target, icon, on}` | Reactor = `pub` or `pub/agentId`. |
 | `pin` | `{target, on}` | Any member. |
@@ -46,6 +46,20 @@ Every change is an immutable, signed event:
 | `agent` | `{id, name, handle, runtime, model?, replyIn, respondTo?, postIn?, discoverable?, removed?}` | Declares one of the author's agents. `respondTo {mentions, replies}`: what triggers it. `postIn {thread, channel}`: where it answers (both = a thread reply also in the channel). `discoverable`: other members may DM it. `replyIn` (`'thread'` when `postIn.thread`, else `'channel'`) is kept for older peers, which drop agent events without it; when the newer fields are missing or malformed they are derived from it (mentions on, replies off, not discoverable). |
 | `approve` | `{req, option}` | Owner's answer to an agent permission request (private, `to` = owner). |
 | `rekey` | `{epoch, keys, history}` | Replaces the workspace key (see [Key rotation](#key-rotation)). Counts when its author has ever been made an admin (or is the creator) and isn't banned; the earliest `(ts, id)` wins an epoch. |
+| `task` | `{id, title, ch, src?, assignee?, due?}` | First per id wins; `ch` must be a channel. `assignee` is an actor: `pub`, or `pub/agentId` for an agent. `src` is the message it was made from. |
+| `task.set` | `{id, title?, assignee?, due?, status?, note?}` | Any member or agent. `status` ∈ `open`, `doing`, `blocked`, `done`; `assignee: null` / `due: null` clear them. Every change (and its `note`) is kept as the task's activity. |
+| `vote` | `{target, choices}` | On a `msg` with `poll`. Latest per actor wins; an empty list takes the vote back; one choice unless `poll.multi`. Votes with `ts ≥ poll.closes` don't count. |
+| `rsvp` | `{target, going}` | On a `msg` with `meet`; `going` ∈ `yes`, `no`, `maybe`. Latest per actor wins. |
+| `decide` | `{target, text, on}` | Marks a message as a decision (`text`, or the message's text when empty), or takes that back. |
+| `doc` | `{id, title, ch, kind}` | A shared doc (`kind: 'text'`) or board (`'board'`) in a channel. First per id wins. |
+| `doc.set` | `{id, title?, archived?}` | Rename or archive. An archived doc takes no more ops or suggestions. |
+| `doc.op` | `{doc, u}` | A [Yjs](https://yjs.dev) update (base64url, ≤ 256 KiB). A doc's content is all its ops merged; Yjs merges them the same in any order. Text docs are one `Y.Text` (`text`); boards a `Y.Map` (`notes`) of `{text, x, y, color, by}`, each checked when read. |
+| `suggest` | `{doc, find, replace, note?}` | A proposed change to a text doc: replace the first `find` (empty: append). The event id is the suggestion's id. |
+| `suggest.res` | `{target, accept}` | Accepts or rejects an open suggestion. People only (no `ag`): an agent can't accept its own. Accepting clients also send the `doc.op` that applies it. |
+| `save` | `{target, on}` | A message saved for later. Only counts with `to` = the author and no `ch`: it reaches only the author's own devices (and bridge). |
+| `read` | `{ch, ts}` | Read up to `ts` in `ch`, for the author's other devices (`to` = author). The latest `ts` wins. |
+
+A `msg` can carry a **poll** `{q, options (2–10), multi?, closes?}` or a **meeting** `{title, at, dur?}` (minutes); its `text` repeats the question or title for apps that predate them. `vote`, `rsvp` and `decide` on a message in a private conversation must be addressed like it (`to`, between the same two keys), so they never reach the rest of the workspace. Changes (`task.set`, `vote`, `rsvp`, `decide`, `doc.*`, `suggest*`) are applied after everything else, in `(ts, id)` order, so a change whose author's clock was behind its target still lands. Peers that predate these types reject them as unknown, so they just don't see them.
 
 State is `reduce(events)`: roles and bans are computed first, then the remaining events are applied in `(ts, id)` order, skipping banned authors. Every peer with the same events computes the same state. Events must be well formed (string fields, integer `ts`, known `t`) and bodies are treated as untrusted: a malformed field is ignored, and no single event can abort the reduction. Messages in `dm:`/`adm:` channels must be addressed (`to`) to the other party and written by one of them; approvals count only from the owner (no `ag`). In `gdm:<member>:<owner>:<agentId>` the member writes to the owner (no `ag`) and the owner writes only as that agent (`ag = agentId`) to the member; member and owner must differ, and approvals are dropped. Transports route and seal it like a DM between member and owner, so other members never receive it. Whether an agent is discoverable is enforced by the bridge (it doesn't answer otherwise) and the UI, not the reducer, so history survives a settings change.
 
@@ -85,6 +99,8 @@ A private pair's key is `HKDF(ikm = X25519(edToMontgomery(mySec), edToMontgomery
 | `4344` | yes | session key | Public event: `seal(enc, JSON(ev))`, `y = tag`. |
 | `4344` | yes | one-off key per copy | Private event (`to` set): two copies, one tagged `y = inbox(to)` and one `y = inbox(a)`, each `seal(enc, JSON({a, to, c: seal(pairKey, JSON(ev))}))`. |
 | `24344` | no (ephemeral) | session key | Presence: `seal(enc, JSON({j, t, s}))` with `j = JSON(presence)`, `s = ed25519("yurt-pres:" + code + ":" + t + ":" + j)`; dropped when `t` is more than 150 s off. Sent on change and every 60 s, but only while the member is in the foreground, needs the room, or is a bridge. |
+
+Presence is `{pub, st, typing?, agents?, bridge?, rtc?, view?, focus?, cur?}`: typing, agents' working state (`agents: {id: {working, on?}}`, `on` = `task:<id>` or `doc:<id>`), what the member is looking at (`view`: a channel id, `thread:<msgId>` or `doc:<id>`; others can follow it), focus mode, and the caret's line in a doc (`cur {doc, line}`).
 
 The session key is a fresh random secp256k1 key per app session, never the member's identity (a shared key would also let any member file NIP-09 deletions for everyone). Private copies use one-off keys, so a relay can't link the two inboxes as a pair or tie a DM to the session's other traffic.
 
@@ -161,13 +177,19 @@ pubkey that is in no workspace. Not the identity or its workspaces; the padded s
 1. `hello {token?}` → `hello {paired, admin}`. The bridge's own page gets an admin token embedded in its same-origin HTML.
 2. Unpaired browsers send `pair {code}` with the 6-digit code shown by the bridge (rotates on use, every 10 min, and after 5 misses) → `paired {token}`.
 3. The browser sends `identity {phrase, name, handle}`; the bridge stores it in `~/.yurt/identity.json` (0600) and joins workspaces as a headless peer with that key.
-4. `ws.join {code, name, transport, creator, agents}` (a later join with the same key but different relays moves the bridge to those relays) / `ws.agents` / `ws.leave` choose which agents sit in which workspace. The bridge publishes `agent` events and presence `{bridge: true, agents: {id: {working}}}`.
+4. `ws.join {code, name, transport, creator, agents}` (a later join with the same key but different relays moves the bridge to those relays) / `ws.agents` / `ws.leave` choose which agents sit in which workspace. The bridge publishes `agent` events and presence `{bridge: true, agents: {id: {working, on?}}}`.
+
+### Yurt tools (MCP)
+
+Agents work with tasks, polls, decisions, docs, boards, meetings and the owner's saved messages through an [MCP](https://modelcontextprotocol.io) server named `yurt` that the bridge passes in `session/new`'s `mcpServers` (main sessions only: a guest DM's session gets none, since the tools reach the whole workspace). It's a stdio server: `~/.yurt/mcp-proxy.mjs`, run with the bridge's own Node or Bun, forwards each JSON-RPC line to `POST http://127.0.0.1:7717/mcp` with `Authorization: Bearer <token>`. The token is random per session and forgotten when it ends; requests with an `Origin` (any web page) are refused. Tools act on the agent's current run's workspace and publish ordinary events signed by the owner's key with `ag` = the agent, so they need no bridge to be seen. Tool calls go through the agent CLI's own permission prompts, which reach the owner as approvals like any other tool.
+
+Tools: `list_channels`, `read_messages`, `list_tasks`, `create_task`, `update_task`, `create_poll`, `vote`, `record_decision`, `list_decisions`, `list_docs`, `read_doc`, `create_doc`, `suggest_edit` (agents propose text changes; people accept them), `add_note`, `schedule_meeting`, `rsvp`, `list_saved`.
 
 ### ACP mapping
 
 - One process and one `session/new {cwd: workdir}` per agent, reused for every prompt. Each member DMing a discoverable agent gets a separate session, so nothing from the owner's chats or other members' leaks into theirs.
-- Triggers (fresh messages only): an @mention of the agent's handle in a channel when `respondTo.mentions`; a reply in a thread the agent started or answered in when `respondTo.replies` (no @ needed, never its own messages); the owner writing in `adm:<owner>:<agentId>`; a member writing in `gdm:<member>:<owner>:<agentId>` while the agent is in that workspace and `discoverable`. Agent-written triggers are capped at 4 runs per channel per 5 minutes.
-- Prompt: identity, owner instructions, the last N messages of the channel or thread, and the triggering message.
+- Triggers (fresh events only): a `task` or `task.set` that assigns a task to the agent (not one the agent gave itself, nor a done one; agent-made assignments count toward the chain cap below); an @mention of the agent's handle in a channel when `respondTo.mentions`; a reply in a thread the agent started or answered in when `respondTo.replies` (no @ needed, never its own messages); the owner writing in `adm:<owner>:<agentId>`; a member writing in `gdm:<member>:<owner>:<agentId>` while the agent is in that workspace and `discoverable`. Agent-written triggers are capped at 4 runs per channel per 5 minutes.
+- Prompt: identity, owner instructions, the last N messages of the channel or thread, and the triggering message. A task's prompt has the task, its notes, who assigned it and the conversation it came from; the run marks an open task `doing` and reports in the source message's thread (else the task's channel).
 - `session/update`: `agent_message_chunk` → reply text; `tool_call` / `tool_call_update` → trace steps with timings.
 - `session/request_permission`: tool kinds on the auto-approve list get `allow_once`. Anything else posts a private `msg` with `approval` to the owner and waits (30 min timeout → reject) for an `approve` event.
 - Attachments: the triggering message's files are fetched from Blossom and written to `<workdir>/.yurt/files/<msgId>/<name>` (dirs `0700`, files `0600`; names reduced to plain characters and kept inside that folder). The prompt lists `name → path`, or `name (couldn't download)`. Earlier messages' files are listed by name only.

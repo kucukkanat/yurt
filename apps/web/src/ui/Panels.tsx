@@ -10,10 +10,12 @@ import { MessageItem, type MsgCtx } from './Message';
 import { Composer } from './Composer';
 import { useTyping } from './ChannelView';
 import { messageOf, must } from './must';
+import { WorkPanel, FollowButton } from './Collab';
+import { DocPanel } from './DocView';
 
 export function RightPanel({ narrow }: { narrow: boolean }) {
   const panel = useApp((s) => s.panel);
-  const { route } = useCurrent();
+  const { route, state } = useCurrent();
   const code = must(route.code, 'The side panel only opens inside a workspace');
   const close = () => {
     if (panel.type === 'thread') useApp.getState().go({ code, ch: route.ch });
@@ -21,8 +23,11 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
   };
   // Full screen on narrow screens: swipe it away to the right, like going back.
   const swipe = useSwipe({ right: close });
-  const titles = { members: 'Members', profile: 'Profile', thread: 'Thread', pinned: 'Pinned', search: 'Search' } as const;
-  const title = titles[must(panel.type, 'The side panel is mounted for an open panel')];
+  const titles = { members: 'Members', profile: 'Profile', thread: 'Thread', pinned: 'Pinned', search: 'Search', work: 'Hub', doc: 'Doc' } as const;
+  // Docs and boards need room to write and lay out notes.
+  const wide = panel.type === 'doc';
+  const board = panel.type === 'doc' && state?.docs.get(panel.id ?? '')?.kind === 'board';
+  const title = board ? 'Board' : titles[must(panel.type, 'The side panel is mounted for an open panel')];
   return (
     <aside
       aria-label={title}
@@ -42,7 +47,7 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
               animation: 'ag-rise var(--dur-base) var(--ease-out)',
             }
           : {
-              width: 'var(--layout-panel, 320px)',
+              width: wide ? 'min(520px, 40vw)' : 'var(--layout-panel, 320px)',
               minWidth: 300,
               flexShrink: 0,
               borderLeft: '1px solid var(--border-subtle)',
@@ -63,6 +68,8 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
         {panel.type === 'thread' && panel.id && <Thread id={panel.id} code={code} ch={must(route.ch, 'A thread route names its channel')} />}
         {panel.type === 'pinned' && <Pinned code={code} />}
         {panel.type === 'search' && <Search code={code} />}
+        {panel.type === 'work' && state && <WorkPanel tab={panel.id} state={state} code={code} />}
+        {panel.type === 'doc' && panel.id && state && <DocPanel id={panel.id} state={state} />}
       </div>
     </aside>
   );
@@ -70,8 +77,10 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
 
 /** The second line under a member: whose an agent is and what it's doing, or a person's role. */
 function memberMeta(p: Person): string | undefined {
-  if (p.kind === 'agent') return (p.owner?.self ? 'Yours' : p.owner?.name + '’s') + (p.presence === 'offline' ? ' · machine off' : p.working ? ' · working' : '');
-  return p.creator ? 'Creator' : p.admin ? 'Admin' : undefined;
+  if (p.kind === 'agent')
+    return (p.owner?.self ? 'Yours' : p.owner?.name + '’s') + (p.presence === 'offline' ? ' · machine off' : p.workingOn ? ' · on ' + p.workingOn : p.working ? ' · working' : '');
+  const role = p.creator ? 'Creator' : p.admin ? 'Admin' : undefined;
+  return p.focus ? [role, 'Focusing'].filter(Boolean).join(' · ') : role;
 }
 
 function Members() {
@@ -161,6 +170,8 @@ function ProfileHeader({ p }: { p: Person }) {
         </div>
         <span style={{ fontSize: 13.5, color: 'var(--text-muted)' }}>
           @{p.handle} · {presenceLabel(p)}
+          {p.focus ? ' · in focus mode, may answer later' : ''}
+          {p.workingOn ? ' · working on ' + p.workingOn : ''}
         </span>
       </div>
       <div>
@@ -185,9 +196,12 @@ function ProfileActions({ p, code, me }: { p: Person; code: string; me: string }
   const app = useApp.getState();
   if (p.kind === 'human')
     return (
-      <Button variant="primary" size="sm" iconLeft="message-square" onClick={() => app.go({ code, ch: dmChannel(me, p.pub) })}>
-        {p.self ? 'Notes to self' : 'Message'}
-      </Button>
+      <>
+        <Button variant="primary" size="sm" iconLeft="message-square" onClick={() => app.go({ code, ch: dmChannel(me, p.pub) })}>
+          {p.self ? 'Notes to self' : 'Message'}
+        </Button>
+        {!p.self && p.presence === 'online' && <FollowButton pub={p.pub} />}
+      </>
     );
   const agentId = must(p.agentId, 'an agent person carries its agent id');
   if (p.owner?.self)

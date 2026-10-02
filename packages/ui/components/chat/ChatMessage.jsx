@@ -227,8 +227,8 @@ function ReactionPicker({ onPick }) {
   );
 }
 
-/** Hover/focus toolbar: react, pin, reply, and edit/delete (or the lock) for your own messages. */
-function ActionBar({ self, pinned, locked, editLabel, lockedLabel, picker, setPicker, onReact, onPin, onReply, onEdit, onDelete, onLocked }) {
+/** Hover/focus toolbar: react, pin, the app's own actions (`more`), reply, and edit/delete (or the lock) for your own messages. */
+function ActionBar({ self, pinned, locked, editLabel, lockedLabel, picker, setPicker, onReact, onPin, more, onReply, onEdit, onDelete, onLocked }) {
   return (
     <div
       role="toolbar"
@@ -250,6 +250,9 @@ function ActionBar({ self, pinned, locked, editLabel, lockedLabel, picker, setPi
       <Act icon="thumbs-up" label="React" onClick={() => onReact?.('thumbs-up')} />
       <Act icon="smile-plus" label="Add reaction" onClick={() => setPicker((p) => !p)} />
       {onPin && <Act icon="pin" label={pinned ? 'Unpin' : 'Pin'} onClick={onPin} />}
+      {more.map((a) => (
+        <Act key={a.id} icon={a.icon} label={a.label} onClick={a.onSelect} testId={'msg-' + a.id} />
+      ))}
       <Act icon="reply" label="Reply in thread" onClick={onReply} />
       {/* Past the edit window, one muted lock replaces Edit and Delete and explains why when clicked. */}
       {self && !locked && <Act icon="pencil" label={editLabel} onClick={onEdit} testId="msg-edit" />}
@@ -313,6 +316,7 @@ export function ChatMessage({
   reactions = [],
   onReact,
   onPin,
+  more = [],
   editor,
   replies,
   onReplies,
@@ -393,6 +397,7 @@ export function ChatMessage({
           setPicker={setPicker}
           onReact={onReact}
           onPin={onPin}
+          more={more}
           onReply={onReply}
           onEdit={onEdit}
           onDelete={onDelete}

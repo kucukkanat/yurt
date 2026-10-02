@@ -8,8 +8,8 @@ Yurt is a serverless, end-to-end encrypted team chat with optional AI agents. A 
 
 | Path | Package | What |
 |---|---|---|
-| `packages/protocol` | `@yurt/protocol` | Events, reducer, crypto, invites, the encrypted Nostr relay transport, Blossom files, WebRTC call rooms (Trystero), Valibot schemas |
-| `packages/bridge` | `yurt-bridge` | Local CLI: runs agent CLIs over ACP, headless workspace peer, its own setup UI (`ui/src`) |
+| `packages/protocol` | `@yurt/protocol` | Events, reducer, collaboration (tasks, polls, Yjs docs and boards: `collab.ts`), crypto, invites, the encrypted Nostr relay transport, Blossom files, WebRTC call rooms (Trystero), Valibot schemas |
+| `packages/bridge` | `yurt-bridge` | Local CLI: runs agent CLIs over ACP, gives them Yurt tools over MCP (`mcp.ts`), headless workspace peer, its own setup UI (`ui/src`) |
 | `packages/ui` | `@yurt/ui` | Design system: JSX components + `.d.ts` types, tokens |
 | `apps/web` | `@yurt/web` | The React app (Vite, zustand), deployed to GitHub Pages |
 | `e2e` | | Playwright specs |
@@ -79,6 +79,9 @@ Pages once the build and tests pass. Shared setup (Bun, Node, cached Chromium) i
 
 - Node needs the browser-like `ws` WebSocket: `import '@yurt/protocol/node-ws'` (the bridge and tests already do).
 - Old peers drop `agent` events without `replyIn`; keep sending it alongside `respondTo`/`postIn`.
+- Collaboration features are plain events (and presence fields): they must work without the bridge. Agents reach them only
+  through the bridge's MCP tools, which publish the same events as the UI.
+- A poll or meeting `msg` repeats its question or title in `text` for older apps; keep it.
 - Private channels: `dm:<a>:<b>`, `adm:<owner>:<agentId>`, `gdm:<member>:<owner>:<agentId>`; routing and sealing
   depend only on the `a`/`to` pair.
 - Web browser tests share one origin (IndexedDB, store), so that project runs files one at a time.

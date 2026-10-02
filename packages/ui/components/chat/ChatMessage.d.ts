@@ -32,6 +32,8 @@ export interface ChatMessageProps {
   onReact?: ((icon: IconName) => void) | undefined;
   /** Adds Pin/Unpin to the action bar */
   onPin?: (() => void) | undefined;
+  /** More actions for the action bar (after Pin), e.g. save or make a task; each gets data-testid `msg-<id>` */
+  more?: Array<{ id: string; icon: IconName; label: string; onSelect: () => void }> | undefined;
   /** Replaces the body, e.g. an inline edit field; hides the action bar */
   editor?: React.ReactNode | undefined;
   replies?: { count: number; last?: string | undefined; people?: AvatarProps[] | undefined } | undefined;

@@ -1,7 +1,9 @@
 import * as v from 'valibot';
-import type { WorkspacePeer, Msg, TraceStep, AgentConfig } from '@yurt/protocol';
+import crypto from 'node:crypto';
+import type { WorkspacePeer, Msg, TraceStep, AgentConfig, Task } from '@yurt/protocol';
 import { agentDmChannel, mentions, agentKey, parseBody, parseGuestDm, parseOr } from '@yurt/protocol';
 import type { Ev, WsState } from '@yurt/protocol';
+import { handleMcp, type ToolCtx } from './mcp';
 import { AcpConnection, isAuthError, type AcpUpdate } from './acp';
 import { NewSessionResultSchema, PermissionRequestSchema } from './schemas';
 import { RUNTIMES, acpCommand } from './runtimes';
@@ -14,6 +16,8 @@ import { errorMessage, listAt } from './util';
 type Status = 'idle' | 'working' | 'waiting' | 'error';
 /** What started a run: an @mention, a follow-up in its thread, its owner's private chat, or another member's DM. */
 type Kind = 'mention' | 'reply' | 'dm' | 'guest';
+/** A run: answering a message, or working on a task someone assigned to the agent. */
+type Job = { kind: Kind; msg: Msg } | { kind: 'task'; task: Task; by: Ev };
 interface Session {
   conn: AcpConnection;
   id: string;
@@ -26,6 +30,19 @@ interface Run {
   trace: TraceStep[];
   /** The owner's key, which approvals are addressed to. */
   me: string;
+  /** Where it works and on what, as presence shows it (the entry in `working`). */
+  work: Work;
+}
+interface Work {
+  code: string;
+  ch: string;
+  on?: string;
+}
+
+/** Where the bridge's MCP endpoint is and the stdio proxy that reaches it (set once the server listens). */
+export interface McpEndpoint {
+  url: string;
+  proxy: string;
 }
 
 /** How long a message stays worth answering, and how long a run waits for its owner's approval. Tests shorten them. */
@@ -114,10 +131,35 @@ export function placement(a: Pick<AgentConfig, 'postIn'>, trigger: Pick<Msg, 'id
   return { parent: trigger.parent || trigger.id, ...(a.postIn.channel ? { alsoInChannel: true as const } : {}) };
 }
 
+const ownerName = (s: WsState, me: string) => s.profiles.get(me)?.name || 'your owner';
+
+/** How a message reads in a prompt. Only the trigger's files were fetched (`saved`); earlier ones are listed by name. */
+function messageLines(s: WsState, ids: readonly string[], triggerId: string, saved: ReadonlyMap<string, string>): string[] {
+  const nameOf = (m: Msg) =>
+    m.ag ? (s.agents.get(agentKey(m.a, m.ag))?.name || m.ag) + ' (agent)' : (s.profiles.get(m.a)?.name || 'Someone') + ' (@' + (s.profiles.get(m.a)?.handle || '?') + ')';
+  const fileLine = (m: Msg, f: Msg['files'][number]) => (m.id !== triggerId ? f.name : saved.has(f.id) ? `${f.name} → ${saved.get(f.id)}` : `${f.name} (couldn't download)`);
+  return ids
+    .map((id) => s.msgs.get(id))
+    .filter((m): m is Msg => m?.deleted === false)
+    .map(
+      (m) => `[${new Date(m.ts).toISOString().slice(11, 16)}] ${nameOf(m)}: ${m.text}${m.files.length ? ' [attached: ' + m.files.map((f) => fileLine(m, f)).join(', ') + ']' : ''}`,
+    );
+}
+
+/** A task's report goes in the thread of the message it was made from, else at the top of its channel. */
+function taskPlacement(s: WsState, task: Pick<Task, 'src' | 'ch'>): { parent?: string } {
+  const src = task.src ? s.msgs.get(task.src) : undefined;
+  return src?.ch === task.ch ? { parent: src.parent || src.id } : {};
+}
+
 /** Runs the owner's agents: one ACP session per agent, prompts queued, replies posted back into the room. */
 export class AgentHost {
   status = new Map<string, Status>();
-  working = new Map<string, { code: string; ch: string }>();
+  working = new Map<string, Work>();
+  /** Set once the bridge listens: agents' main sessions get the Yurt tools over MCP. */
+  mcp: McpEndpoint | null = null;
+  /** MCP token → the agent whose main session holds it. */
+  private mcpTokens = new Map<string, string>();
   private sessions = new Map<string, Session>();
   private queues = new Map<string, Promise<void>>();
   private approvals = new Map<string, (optionId: string) => void>();
@@ -145,6 +187,35 @@ export class AgentHost {
     return w && w.code === code ? w.ch : null;
   }
 
+  /** What the agent is working on in `code` beyond a reply (`task:<id>`, `doc:<id>`), if anything. */
+  workingOn(id: string, code: string): string | null {
+    const w = this.working.get(id);
+    return (w?.code === code && w.on) || null;
+  }
+
+  /**
+   * One MCP message from an agent's tool proxy. Null when the token is unknown (the server refuses it). Tools act
+   * on the agent's current run, so they only work while it's answering.
+   */
+  mcpCall(token: string, body: unknown): Promise<Record<string, unknown> | null> | null {
+    const a = this.cfg.agents.find((x) => x.id === this.mcpTokens.get(token));
+    if (!a) return null;
+    const run = this.runs.get(a.id);
+    const ctx: ToolCtx | null = run
+      ? {
+          peer: run.peer,
+          agent: a,
+          me: run.me,
+          touch: (on) => {
+            if (run.work.on === on) return;
+            run.work.on = on;
+            this.presence(run.peer.code);
+          },
+        }
+      : null;
+    return handleMcp(body, ctx);
+  }
+
   /** Closes every session of an agent: its main one and each member's guest session. */
   drop(id: string) {
     for (const [slot, s] of this.sessions)
@@ -167,7 +238,9 @@ export class AgentHost {
       if (b) this.approvals.get(b.req)?.(b.option);
       return;
     }
-    if (e.t !== 'msg' || !e.ch || Date.now() - e.ts > this.timing.staleMs) return;
+    if (Date.now() - e.ts > this.timing.staleMs) return;
+    if (e.t === 'task' || e.t === 'task.set') return this.onTaskAssigned(peer, wsAgents, e, me);
+    if (e.t !== 'msg' || !e.ch) return;
     const m = peer.state.msgs.get(e.id);
     if (!m) return;
     // Private channels: the reducer already checked who may write there (the owner in `adm:`, the member or the
@@ -176,17 +249,32 @@ export class AgentHost {
       const rest = e.ch.slice(4);
       const owner = rest.slice(0, rest.indexOf(':'));
       const id = rest.slice(rest.indexOf(':') + 1);
-      if (owner === me && !e.ag && this.agent(id)) this.enqueue(id, peer, m, 'dm', me);
+      if (owner === me && !e.ag && this.agent(id)) this.enqueue(id, peer, { kind: 'dm', msg: m }, me);
       return;
     }
     const g = parseGuestDm(e.ch);
     if (g) {
       // Another member messaging one of my agents: only while it's in this workspace and discoverable.
       const a = this.agent(g.agentId);
-      if (g.owner === me && !e.ag && a?.discoverable && wsAgents.includes(a.id)) this.enqueue(a.id, peer, m, 'guest', me);
+      if (g.owner === me && !e.ag && a?.discoverable && wsAgents.includes(a.id)) this.enqueue(a.id, peer, { kind: 'guest', msg: m }, me);
       return;
     }
     if (!e.ch.startsWith('dm:')) this.onRoomMessage(peer, wsAgents, e.ch, m, me, e.ag);
+  }
+
+  /**
+   * A task given to one of my agents in this workspace: it gets to work. Only the event that assigns it counts
+   * (not later status changes), and never the agent assigning itself.
+   */
+  private onTaskAssigned(peer: WorkspacePeer, wsAgents: string[], e: Ev, me: string) {
+    const b = e.t === 'task' ? parseBody('task', e.b) : parseBody('task.set', e.b);
+    const task = b ? peer.state.tasks.get(b.id) : undefined;
+    if (!b?.assignee || !task || task.assignee !== b.assignee || task.status === 'done') return;
+    const i = b.assignee.indexOf('/');
+    const id = b.assignee.slice(i + 1);
+    if (i < 0 || b.assignee.slice(0, i) !== me || !wsAgents.includes(id) || (e.a === me && e.ag === id)) return;
+    if (e.ag && !this.allowAgentChain(task.ch)) return;
+    this.enqueue(id, peer, { kind: 'task', task, by: e }, me);
   }
 
   /** A channel message: @mentions and follow-ups in agents' threads. */
@@ -195,8 +283,8 @@ export class AgentHost {
     const replied = repliedAgents(this.cfg.agents, wsAgents, peer.state, m, me, from).filter((id) => !mentioned.includes(id));
     // Only agent messages that actually hand off to another agent count toward the chain limit.
     if ((!mentioned.length && !replied.length) || (from && !this.allowAgentChain(ch))) return;
-    for (const id of mentioned) this.enqueue(id, peer, m, 'mention', me);
-    for (const id of replied) this.enqueue(id, peer, m, 'reply', me);
+    for (const id of mentioned) this.enqueue(id, peer, { kind: 'mention', msg: m }, me);
+    for (const id of replied) this.enqueue(id, peer, { kind: 'reply', msg: m }, me);
   }
 
   /** Agents may @mention each other in public, but a chain stops after 4 agent-triggered runs per channel per 5 minutes. */
@@ -209,9 +297,9 @@ export class AgentHost {
     return true;
   }
 
-  private enqueue(id: string, peer: WorkspacePeer, m: Msg, kind: Kind, me: string) {
+  private enqueue(id: string, peer: WorkspacePeer, job: Job, me: string) {
     if (!this.agent(id)?.online) return;
-    const q = (this.queues.get(id) ?? Promise.resolve()).then(() => this.exec(id, peer, m, kind, me)).catch((e: unknown) => log('error', id, errorMessage(e)));
+    const q = (this.queues.get(id) ?? Promise.resolve()).then(() => this.exec(id, peer, job, me)).catch((e: unknown) => log('error', id, errorMessage(e)));
     this.queues.set(id, q);
   }
 
@@ -232,7 +320,7 @@ export class AgentHost {
     };
     try {
       await conn.initialize();
-      const res = parseOr(NewSessionResultSchema, await conn.request('session/new', { cwd: a.workdir, mcpServers: [] }, 120_000));
+      const res = parseOr(NewSessionResultSchema, await conn.request('session/new', { cwd: a.workdir, mcpServers: this.mcpServers(a, slot, conn) }, 120_000));
       if (!res) throw new Error('the agent opened no session');
       s.id = res.sessionId;
     } catch (e) {
@@ -244,6 +332,32 @@ export class AgentHost {
     this.sessions.set(slot, s);
     log('info', a.name, `session ${s.id} on ${RUNTIMES[a.runtime].name} in ${a.workdir}`);
     return s;
+  }
+
+  /**
+   * The Yurt tools for the agent's main session. Guest sessions (another member's DM) get none: tools reach the
+   * whole workspace and the owner's saved messages, which that member's chat must not.
+   */
+  private mcpServers(a: AgentConfig, slot: string, conn: AcpConnection) {
+    if (slot !== a.id || !this.mcp) return [];
+    const token = crypto.randomBytes(24).toString('hex');
+    this.mcpTokens.set(token, a.id);
+    const onExit = conn.onExit;
+    conn.onExit = () => {
+      this.mcpTokens.delete(token);
+      onExit?.();
+    };
+    return [
+      {
+        name: 'yurt',
+        command: process.execPath,
+        args: [this.mcp.proxy],
+        env: [
+          { name: 'YURT_MCP_URL', value: this.mcp.url },
+          { name: 'YURT_MCP_TOKEN', value: token },
+        ],
+      },
+    ];
   }
 
   /** Saves the triggering message's attachments into the agent's folder; file id → path relative to it. */
@@ -264,48 +378,68 @@ export class AgentHost {
 
   private prompt(a: AgentConfig, peer: WorkspacePeer, trigger: Msg, kind: Kind, me: string, saved: ReadonlyMap<string, string>): string {
     const s = peer.state;
-    const nameOf = (m: Msg) =>
-      m.ag ? (s.agents.get(agentKey(m.a, m.ag))?.name || m.ag) + ' (agent)' : (s.profiles.get(m.a)?.name || 'Someone') + ' (@' + (s.profiles.get(m.a)?.handle || '?') + ')';
-    const owner = s.profiles.get(me)?.name || 'your owner';
+    const owner = ownerName(s, me);
     const { ids, where } = promptScope(s, trigger, kind, owner);
     // Up to the trigger: messages that arrived after it aren't what it asks about.
     const recent = ids.slice(0, ids.indexOf(trigger.id) + 1).slice(-Math.max(1, a.contextSize));
-    // Only the triggering message's files are fetched; earlier ones are listed by name.
-    const fileLine = (m: Msg, f: Msg['files'][number]) => (m.id !== trigger.id ? f.name : saved.has(f.id) ? `${f.name} → ${saved.get(f.id)}` : `${f.name} (couldn't download)`);
-    const lines = recent
-      .map((id) => s.msgs.get(id))
-      .filter((m): m is Msg => m?.deleted === false)
-      .map(
-        (m) =>
-          `[${new Date(m.ts).toISOString().slice(11, 16)}] ${nameOf(m)}: ${m.text}${m.files.length ? ' [attached: ' + m.files.map((f) => fileLine(m, f)).join(', ') + ']' : ''}`,
-      );
     const ask = kind === 'guest' ? ' from ' + (s.profiles.get(trigger.a)?.name || 'them') : ASK[kind];
     return [
       `You are ${a.name} (@${a.handle}), an AI agent in the Yurt workspace "${s.name}", speaking in ${where}. ${owner} owns you and runs you on their machine.`,
       a.instructions ? `\nYour instructions from ${owner}:\n${a.instructions}` : '',
-      `\nRecent messages, oldest first:\n${lines.join('\n')}`,
+      `\nRecent messages, oldest first:\n${messageLines(s, recent, trigger.id, saved).join('\n')}`,
+      kind === 'guest' ? '' : this.toolsHint(),
       `\nReply to the last message${ask}. Your reply is posted to the room exactly as you write it, so write the message itself: concise, plain text or light Markdown, no preamble.`,
     ].join('\n');
   }
 
-  private async exec(id: string, peer: WorkspacePeer, trigger: Msg, kind: Kind, me: string) {
+  /** What a run on an assigned task is told: the task, its history, and the conversation it came from. */
+  private taskPrompt(a: AgentConfig, peer: WorkspacePeer, task: Task, by: Ev, me: string): string {
+    const s = peer.state;
+    const owner = ownerName(s, me);
+    const who = by.ag ? (s.agents.get(agentKey(by.a, by.ag))?.name || by.ag) + ' (agent)' : s.profiles.get(by.a)?.name || 'Someone';
+    const src = task.src ? s.msgs.get(task.src) : undefined;
+    const root = src?.parent ? s.msgs.get(src.parent) : src;
+    const ids = root ? [root.id, ...root.replies].slice(-Math.max(1, a.contextSize)) : [];
+    const notes = task.log.filter((c) => c.note).map((c) => `- ${new Date(c.ts).toISOString().slice(0, 16)}: ${c.note}`);
+    return [
+      `You are ${a.name} (@${a.handle}), an AI agent in the Yurt workspace "${s.name}". ${owner} owns you and runs you on their machine.`,
+      a.instructions ? `\nYour instructions from ${owner}:\n${a.instructions}` : '',
+      `\n${who} assigned you a task in #${s.channels.get(task.ch)?.name}: "${task.title}" (task ${task.id}${task.due ? ', due ' + new Date(task.due).toISOString() : ''}).`,
+      notes.length ? `\nNotes on it so far:\n${notes.join('\n')}` : '',
+      ids.length ? `\nThe conversation it came from, oldest first:\n${messageLines(s, ids, '', new Map()).join('\n')}` : '',
+      this.mcp
+        ? `\nWork on it now. Report with the Yurt tools: update_task with status "done" and a short note when it's finished, "blocked" with a note when you can't go on, or assign it to "owner" with a summary to hand it back.`
+        : '\nWork on it now.',
+      `\nYour final message is posted ${root ? 'in the thread it came from' : 'in #' + s.channels.get(task.ch)?.name}: a concise summary of what you did, plain text or light Markdown, no preamble.`,
+    ].join('\n');
+  }
+
+  private toolsHint(): string {
+    return this.mcp
+      ? '\nYou have Yurt tools (MCP server "yurt") for this workspace: tasks, polls, decisions, shared docs and boards, meetings. Use them when asked to track, decide, write or schedule something.'
+      : '';
+  }
+
+  private async exec(id: string, peer: WorkspacePeer, job: Job, me: string) {
     const a = this.agent(id);
     if (!a) return; // removed while queued
     const t0 = Date.now();
     const trace: TraceStep[] = [];
     const tools: Tools = new Map();
     let text = '';
-    this.working.set(id, { code: peer.code, ch: trigger.ch });
+    const ch = job.kind === 'task' ? job.task.ch : job.msg.ch;
+    const work: Work = { code: peer.code, ch, ...(job.kind === 'task' ? { on: 'task:' + job.task.id } : {}) };
+    this.working.set(id, work);
     this.presence(peer.code);
     this.setStatus(id, 'working');
-    this.runs.set(id, { peer, trace, me });
+    this.runs.set(id, { peer, trace, me, work });
     try {
-      const s = await this.session(a, kind === 'guest' ? a.id + '|guest:' + trigger.a : a.id);
+      const s = await this.session(a, job.kind === 'guest' ? a.id + '|guest:' + job.msg.a : a.id);
       s.onUpdate = (u) => {
         text += applyUpdate(u, trace, tools);
       };
-      const saved = await this.deliverFiles(a, peer, trigger);
-      await s.conn.request('session/prompt', { sessionId: s.id, prompt: [{ type: 'text', text: this.prompt(a, peer, trigger, kind, me, saved) }] });
+      const prompt = await this.promptFor(a, peer, job, me);
+      await s.conn.request('session/prompt', { sessionId: s.id, prompt: [{ type: 'text', text: prompt }] });
       s.onUpdate = undefined;
       if (!text.trim()) text = 'Done.';
       this.setStatus(id, 'idle');
@@ -323,17 +457,29 @@ export class AgentHost {
     }
     const secs = ((Date.now() - t0) / 1000).toFixed(1) + 's';
     const nTools = tools.size;
+    this.answer(a, peer, job, me, { text: text.trim(), ...(trace.length ? { trace } : {}), meta: (nTools ? nTools + (nTools === 1 ? ' tool · ' : ' tools · ') : '') + secs });
+  }
+
+  /** What the agent is asked: a task (marked in progress as it starts) or a message (its files saved first). */
+  private async promptFor(a: AgentConfig, peer: WorkspacePeer, job: Job, me: string): Promise<string> {
+    if (job.kind !== 'task') return this.prompt(a, peer, job.msg, job.kind, me, await this.deliverFiles(a, peer, job.msg));
+    if (job.task.status === 'open') peer.publish({ t: 'task.set', ag: a.id, b: { id: job.task.id, status: 'doing' } });
+    return this.taskPrompt(a, peer, job.task, job.by, me);
+  }
+
+  /** Posts the run's answer where its job belongs. */
+  private answer(a: AgentConfig, peer: WorkspacePeer, job: Job, me: string, b: { text: string; trace?: TraceStep[]; meta: string }) {
+    if (job.kind === 'task') {
+      peer.publish({ t: 'msg', ch: job.task.ch, ag: a.id, b: { ...b, ...taskPlacement(peer.state, job.task) } });
+      return;
+    }
+    const { kind, msg } = job;
     peer.publish({
       t: 'msg',
-      ch: trigger.ch,
+      ch: msg.ch,
       ag: a.id,
-      ...(kind === 'dm' ? { to: me } : kind === 'guest' ? { to: trigger.a } : {}),
-      b: {
-        text: text.trim(),
-        ...placement(a, trigger, kind),
-        ...(trace.length ? { trace } : {}),
-        meta: (nTools ? nTools + (nTools === 1 ? ' tool · ' : ' tools · ') : '') + secs,
-      },
+      ...(kind === 'dm' ? { to: me } : kind === 'guest' ? { to: msg.a } : {}),
+      b: { ...b, ...placement(a, msg, kind) },
     });
   }
 

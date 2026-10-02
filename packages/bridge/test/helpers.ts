@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WorkspacePeer, newRecoveryPhrase, type KeyPair, type Msg, type WorkspacePeerOpts, type WsTransport } from '@yurt/protocol';
+import { WorkspacePeer, newRecoveryPhrase, type AgentConfig, type KeyPair, type Msg, type WorkspacePeerOpts, type WsTransport } from '@yurt/protocol';
 import { memStore as memoryStore, until as waitUntil } from '../../protocol/test/util';
 
 export const FAKE_ACP = fileURLToPath(new URL('./fixtures/fake-acp.mjs', import.meta.url));
@@ -49,6 +49,28 @@ export const alive = (pid: number) => {
 };
 
 export { until } from '../../protocol/test/util';
+
+/** An agent run by the fake ACP agent in `mode` (see fixtures/fake-acp.mjs), with its own folder under `dir`. */
+export function fakeAgent(dir: string, id: string, mode: string, p: Partial<AgentConfig> = {}): AgentConfig {
+  const workdir = path.join(dir, id);
+  fs.mkdirSync(workdir, { recursive: true });
+  fs.writeFileSync(path.join(workdir, '.fake-mode'), mode);
+  return {
+    id,
+    name: id[0]?.toUpperCase() + id.slice(1),
+    handle: id,
+    runtime: 'copilot',
+    workdir,
+    instructions: '',
+    autoApprove: ['edit'],
+    contextSize: 20,
+    respondTo: { mentions: true, replies: false },
+    postIn: { thread: false, channel: true },
+    discoverable: false,
+    online: true,
+    ...p,
+  };
+}
 
 export interface BridgeOpts {
   /** Edits the config before any peer starts. */

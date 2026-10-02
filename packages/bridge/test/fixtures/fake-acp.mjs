@@ -13,12 +13,16 @@
 //   exit-on-prompt  the agent exits when prompted
 //   auth-methods  offers a sign-in method; `authenticate` succeeds
 //   crash         exits at once
+//   mcp           a prompt starts the session's first MCP server (as an agent CLI would), lists its tools, makes the
+//                 calls in `.fake-mcp` (JSON [{name, arguments}]) and answers with JSON {tools, out, servers};
+//                 session/new writes the servers it was given (if any) to `.fake-mcp-servers`
 //   script        on initialize, first prints every line of `.fake-script` (raw; `#stderr ` lines go to stderr), then answers
 // While `.fake-hold` exists in its folder, a prompt waits (tests delete it to let the run go on).
 // Permission requests offer allow_once/reject_once, or the options in FAKE_ACP_OPTIONS (JSON).
 // In every mode, `test/reply` answers with its params as the response body (e.g. { error: … }), so tests can shape replies.
 import fs from 'node:fs';
 import readline from 'node:readline';
+import { spawn } from 'node:child_process';
 
 if (process.argv.includes('--version')) {
   console.log(process.env.FAKE_ACP_VERSION ?? 'fake-acp 9.9.9');
@@ -30,6 +34,41 @@ if (mode === 'crash') process.exit(3);
 const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\n');
 const update = (u) => send({ method: 'session/update', params: { sessionId: 'fake-session', update: u } });
 let promptId = null;
+let mcpServers = [];
+
+/** Talks MCP to the session's first server the way an agent CLI does: initialize, tools/list, then each call. */
+const runMcp = async (m) => {
+  const srv = mcpServers[0];
+  const answer = (text) => {
+    update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
+    send({ id: m.id, result: { stopReason: 'end_turn' } });
+  };
+  if (!srv) return answer(JSON.stringify({ servers: 0 }));
+  const child = spawn(srv.command, srv.args, { env: { ...process.env, ...Object.fromEntries(srv.env.map((e) => [e.name, e.value])) }, stdio: ['pipe', 'pipe', 'inherit'] });
+  const waiting = new Map();
+  readline.createInterface({ input: child.stdout }).on('line', (l) => {
+    const r = JSON.parse(l);
+    waiting.get(r.id)?.(r);
+  });
+  let n = 0;
+  const call = (method, params) =>
+    new Promise((res) => {
+      const id = ++n;
+      waiting.set(id, res);
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+    });
+  await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fake-acp', version: '1' } });
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+  const list = await call('tools/list', {});
+  const calls = fs.existsSync('.fake-mcp') ? JSON.parse(fs.readFileSync('.fake-mcp', 'utf8')) : [];
+  const out = [];
+  for (const c of calls) {
+    const r = await call('tools/call', c);
+    out.push(r.result ? (r.result.isError ? 'ERR ' : '') + r.result.content[0].text : 'RPC ' + r.error.message);
+  }
+  child.kill();
+  answer(JSON.stringify({ servers: mcpServers.length, tools: list.result.tools.map((t) => t.name), out }));
+};
 
 const permission = () =>
   send({
@@ -58,6 +97,10 @@ const onPrompt = (m) => {
   if (mode === 'one-tool') {
     update({ sessionUpdate: 'tool_call', toolCallId: 'only', title: 'List files', kind: 'read', status: 'completed' });
     send({ id: m.id, result: { stopReason: 'end_turn' } });
+    return;
+  }
+  if (mode === 'mcp') {
+    void runMcp(m);
     return;
   }
   if (mode === 'echo') {
@@ -119,7 +162,11 @@ const METHODS = {
   },
   authenticate: (m) => send({ id: m.id, result: {} }),
   'test/reply': (m) => send({ id: m.id, ...m.params }),
-  'session/new': (m) => send({ id: m.id, ...(NEW_SESSION[mode] ?? { result: { sessionId: 'fake-session' } }) }),
+  'session/new': (m) => {
+    mcpServers = m.params.mcpServers ?? [];
+    if (mode === 'mcp' && mcpServers.length) fs.writeFileSync('.fake-mcp-servers', JSON.stringify(mcpServers));
+    send({ id: m.id, ...(NEW_SESSION[mode] ?? { result: { sessionId: 'fake-session' } }) });
+  },
   'session/set_model': (m) => send({ id: m.id, ...(m.params.modelId === 'bad-model' ? { error: { code: -32602, message: 'Unknown model' } } : { result: {} }) }),
   'session/prompt': (m) => hold(() => onPrompt(m)),
 };

@@ -8,6 +8,7 @@ import { BridgeServer } from './server';
 import { VERSION } from './version';
 import { detectAll, check, runtimeStatus } from './runtimes';
 import { log } from './log';
+import { writeProxy } from './mcp';
 
 /** A bridge that is up: its server and workspaces, and how to stop both. */
 export interface Running {
@@ -68,6 +69,8 @@ export async function main(argv: string[], uiDir: string, platform: NodeJS.Platf
     if (!noOpen) openUrl(`http://127.0.0.1:${port}/`, platform);
     return { exit: 0 };
   }
+
+  host.mcp = { url: `http://127.0.0.1:${server.boundPort}/mcp`, proxy: writeProxy(HOME) };
 
   const id = loadIdentity();
   if (id) workspaces.setIdentity(id.phrase);

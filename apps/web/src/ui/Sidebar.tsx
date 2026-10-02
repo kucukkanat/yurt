@@ -411,36 +411,50 @@ export function Sidebar() {
         onClick={() => openSettings('agents')}
       />
       {/* You: opens your profile in Settings (the gear in the rail is the one Settings button). */}
-      <button
-        type="button"
-        data-testid="me-row"
-        aria-label="Your profile and settings"
-        onClick={() => openSettings('profile')}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '10px 4px 0 6px',
-          border: 0,
-          borderTop: '1px solid var(--border-subtle)',
-          background: 'none',
-          cursor: 'pointer',
-          textAlign: 'left',
-          font: 'inherit',
-        }}
-      >
-        <Avatar name={identity.name} self presence="online" size={30} cutout="var(--surface-sunken)" />
-        <span style={{ display: 'block', flex: 1, lineHeight: 1.25, minWidth: 0 }}>
-          <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: 'var(--text-strong)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {identity.name}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingTop: 10, borderTop: '1px solid var(--border-subtle)' }}>
+        <button
+          type="button"
+          data-testid="me-row"
+          aria-label="Your profile and settings"
+          onClick={() => openSettings('profile')}
+          style={{
+            display: 'flex',
+            flex: 1,
+            minWidth: 0,
+            alignItems: 'center',
+            gap: 10,
+            padding: '0 4px 0 6px',
+            border: 0,
+            background: 'none',
+            cursor: 'pointer',
+            textAlign: 'left',
+            font: 'inherit',
+          }}
+        >
+          <Avatar name={identity.name} self presence="online" size={30} cutout="var(--surface-sunken)" />
+          <span style={{ display: 'block', flex: 1, lineHeight: 1.25, minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, color: 'var(--text-strong)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {identity.name}
+            </span>
+            <span
+              style={{ display: 'block', font: '400 11px/1.3 var(--font-mono)', color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+            >
+              @{identity.handle} · {fingerprint(me)}
+            </span>
           </span>
-          <span
-            style={{ display: 'block', font: '400 11px/1.3 var(--font-mono)', color: 'var(--text-subtle)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-          >
-            @{identity.handle} · {fingerprint(me)}
-          </span>
-        </span>
-      </button>
+        </button>
+        <FocusToggle />
+      </div>
     </aside>
+  );
+}
+
+/** Focus mode: others see I may answer later, and this device doesn't notify. */
+function FocusToggle() {
+  const focus = useApp((s) => s.focus);
+  return (
+    <Tooltip content={focus ? 'Focus mode is on: no notifications' : 'Focus mode: pause notifications and tell others'} placement="top">
+      <IconButton icon="moon" size="sm" label="Focus mode" active={focus} data-testid="focus-toggle" onClick={() => useApp.getState().setFocus(!focus)} />
+    </Tooltip>
   );
 }

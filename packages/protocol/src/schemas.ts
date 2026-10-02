@@ -47,7 +47,35 @@ const stringsOf = (o: Record<string, unknown>, ok: (k: string, val: string) => b
 
 /* ---------- events ---------- */
 
-export const EV_TYPES = ['ws.create', 'profile', 'ch.create', 'ch.update', 'msg', 'edit', 'del', 'react', 'pin', 'role', 'ban', 'agent', 'approve', 'rekey'] as const;
+export const EV_TYPES = [
+  'ws.create',
+  'profile',
+  'ch.create',
+  'ch.update',
+  'msg',
+  'edit',
+  'del',
+  'react',
+  'pin',
+  'role',
+  'ban',
+  'agent',
+  'approve',
+  'rekey',
+  // Collaboration (see collab.ts). Peers that predate them reject the type, so they just never see these.
+  'task',
+  'task.set',
+  'vote',
+  'rsvp',
+  'decide',
+  'doc',
+  'doc.set',
+  'doc.op',
+  'suggest',
+  'suggest.res',
+  'save',
+  'read',
+] as const;
 
 /** The signed envelope. The body is checked per type (BODY_SCHEMAS); the signature by verifyEvent. */
 export const EventSchema = obj({
@@ -85,6 +113,21 @@ export const ApprovalReqSchema = obj({
   options: v.pipe(v.array(v.unknown()), keep(obj({ id: v.string(), name: v.string(), kind: v.string() }))),
 });
 
+const int = v.pipe(v.number(), v.safeInteger());
+const shortText = (max: number) => v.pipe(v.string(), v.nonEmpty(), v.maxLength(max));
+/** A member (`pub`) or one of their agents (`pub/agentId`). */
+export const ActorSchema = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}(\/[^/\s]{1,64})?$/));
+export const TASK_STATUSES = ['open', 'doing', 'blocked', 'done'] as const;
+export const PollSpecSchema = obj({
+  q: shortText(300),
+  options: v.pipe(listOf(shortText(100)), v.minLength(2), v.maxLength(10)),
+  multi: lenient(v.literal(true)),
+  closes: lenient(int),
+});
+export const MeetSpecSchema = obj({ title: shortText(200), at: int, dur: lenient(v.pipe(int, v.minValue(1), v.maxValue(24 * 60))) });
+/** Largest doc op accepted (base64url chars): a big paste, well under the 64 KiB relay padding steps. */
+export const MAX_DOC_OP = 256 * 1024;
+
 const flags = <K extends string>(...keys: K[]) => obj(Object.fromEntries(keys.map((k) => [k, v.boolean()])) as Record<K, v.BooleanSchema<undefined>>);
 
 /** Each event type's body. Authority and context (who may write what, where) are the reducer's job. */
@@ -101,6 +144,8 @@ export const BODY_SCHEMAS = {
     trace: v.optional(listOf(TraceStepSchema)),
     approval: lenient(ApprovalReqSchema),
     alsoInChannel: lenient(v.literal(true)),
+    poll: lenient(PollSpecSchema),
+    meet: lenient(MeetSpecSchema),
   }),
   edit: obj({ target: v.string(), text: v.string() }),
   del: obj({ target: v.string() }),
@@ -130,6 +175,30 @@ export const BODY_SCHEMAS = {
     ),
     history: v.string(),
   }),
+  task: obj({ id: nonEmpty, title: shortText(300), ch: nonEmpty, src: lenient(v.string()), assignee: lenient(ActorSchema), due: lenient(int) }),
+  'task.set': obj({
+    id: nonEmpty,
+    title: lenient(shortText(300)),
+    assignee: lenient(v.nullable(ActorSchema)),
+    due: lenient(v.nullable(int)),
+    status: lenient(v.picklist(TASK_STATUSES)),
+    note: lenient(v.pipe(v.string(), v.maxLength(4000))),
+  }),
+  vote: obj({ target: nonEmpty, choices: listOf(v.pipe(int, v.minValue(0))) }),
+  rsvp: obj({ target: nonEmpty, going: v.picklist(['yes', 'no', 'maybe']) }),
+  decide: obj({ target: nonEmpty, text: v.pipe(v.string(), v.maxLength(2000)), on: v.boolean() }),
+  doc: obj({ id: nonEmpty, title: shortText(200), ch: nonEmpty, kind: v.fallback(v.picklist(['text', 'board']), 'text') }),
+  'doc.set': obj({ id: nonEmpty, title: lenient(shortText(200)), archived: lenient(v.boolean()) }),
+  'doc.op': obj({ doc: nonEmpty, u: v.pipe(v.string(), v.nonEmpty(), v.maxLength(MAX_DOC_OP), v.regex(/^[A-Za-z0-9_-]+$/)) }),
+  suggest: obj({
+    doc: nonEmpty,
+    find: v.pipe(v.string(), v.maxLength(20_000)),
+    replace: v.pipe(v.string(), v.maxLength(20_000)),
+    note: lenient(v.pipe(v.string(), v.maxLength(2000))),
+  }),
+  'suggest.res': obj({ target: nonEmpty, accept: v.boolean() }),
+  save: obj({ target: nonEmpty, on: v.boolean() }),
+  read: obj({ ch: nonEmpty, ts: int }),
 } as const;
 
 export type EventType = (typeof EV_TYPES)[number];
@@ -148,7 +217,14 @@ export const PresenceSchema = obj({
   pub: v.string(),
   st: v.fallback(v.picklist(['online', 'away']), 'online'),
   typing: nullableText, // channel id
-  agents: lenient(v.record(v.string(), obj({ working: nullableText }))), // agentId → channel it's working in
+  // agentId → channel it's working in, and what on (`task:<id>`, `doc:<id>`) when it's more than a reply
+  agents: lenient(v.record(v.string(), obj({ working: nullableText, on: nullableText }))),
+  /** What the member is looking at: a channel id, `thread:<msgId>`, `doc:<id>` or `task:<id>`. */
+  view: nullableText,
+  /** Focus mode: don't expect a quick answer. */
+  focus: lenient(v.boolean()),
+  /** In a text doc: the line the caret is on. */
+  cur: lenient(obj({ doc: v.string(), line: v.pipe(int, v.minValue(0)) })),
   bridge: lenient(v.boolean()),
   /** This member is in a huddle and needs the WebRTC room, so opted-in members should join it. */
   rtc: lenient(v.boolean()),
