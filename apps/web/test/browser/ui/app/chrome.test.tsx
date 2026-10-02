@@ -46,24 +46,26 @@ describe('the app chrome', () => {
     await until(() => useApp.getState().route.code === code);
   });
 
-  it('bolds unread channels with mention badges, and mutes channels', async () => {
+  it('bolds unread channels with mention badges, and sets how much a conversation alerts', async () => {
     await createChannel('random', 'Off topic');
     useApp.getState().go({ code, ch: 'general' });
     await bo.say({ t: 'msg', ch: 'random', b: { text: 'in random' } });
     await bo.say({ t: 'msg', ch: 'random', b: { text: 'hey @ada' } });
     const random = convs().getByRole('button', { name: /random/ });
     await expectText(random, /random1/);
-    // Mute it from its settings: no bold or badge.
+    // Set it to alert nothing from its settings: no bold or badge.
     useApp.getState().go({ code, ch: 'random' });
     await page.getByTestId('channel-settings').click();
     const dlg = page.getByRole('dialog', { name: '#random' });
-    await dlg.getByRole('switch', { name: 'Mute channel' }).click();
+    await expect.element(dlg.getByTestId('alert-level-mentions')).toBeChecked(); // a channel's default
+    await dlg.getByTestId('alert-level-none').click();
     await dlg.getByRole('textbox', { name: 'Name' }).fill('Random Talk');
     await expect.element(dlg.getByRole('textbox', { name: 'Name' })).toHaveValue('random-talk');
     await dlg.getByRole('textbox', { name: 'Topic' }).fill('Anything goes');
     await dlg.getByRole('button', { name: 'Save' }).click();
     await until(() => state()?.channels.get('random')?.name === 'random-talk');
-    await expect.element(page.getByRole('img', { name: 'Muted' })).toBeVisible();
+    await expect.element(page.getByTestId('quiet-mark')).toBeVisible();
+    await expect.element(page.getByRole('button', { name: 'Notifications: Nothing' })).toBeVisible();
     await expect.element(page.getByText('Anything goes')).toBeVisible();
     useApp.getState().go({ code, ch: 'general' });
     await bo.say({ t: 'msg', ch: 'random', b: { text: 'muted ping @ada' } });
@@ -86,6 +88,26 @@ describe('the app chrome', () => {
     // In a DM there's no channel to set up: the dialog doesn't open.
     useApp.getState().go({ code, ch: 'dm:' + [me().pub, bo.who.pub].sort().join(':') });
     useApp.getState().setDialog('channelSettings');
+    await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+    useApp.getState().setDialog(null);
+    // A DM alerts on every message by default; from its header's bell it can alert on mentions only: still bold, no badge.
+    const dm = 'dm:' + [me().pub, bo.who.pub].sort().join(':');
+    await page.getByTestId('alerts-button').click();
+    const alerts = page.getByRole('dialog', { name: 'Notifications' });
+    await expect.element(alerts.getByText('Bo', { exact: true })).toBeVisible();
+    await expect.element(alerts.getByTestId('alert-level-all')).toBeChecked();
+    await alerts.getByTestId('alert-level-mentions').click();
+    await until(() => state()?.levels.get(me().pub)?.get(dm) === 'mentions');
+    await alerts.getByTestId('alerts-done').click();
+    await expect.element(alerts).not.toBeInTheDocument();
+    useApp.getState().go({ code, ch: 'general' });
+    await bo.say({ t: 'msg', ch: dm, to: me().pub, b: { text: 'no rush' } });
+    const dmRow = convs().getByRole('button', { name: /^Bo/ });
+    await expect.poll(() => getComputedStyle(dmRow.getByText('Bo', { exact: true }).element()).fontWeight).toBe('700');
+    expect(dmRow.element().textContent).not.toMatch(/\d/); // bold, but no badge
+    // The dialog has nothing to show outside a conversation.
+    useApp.setState({ route: { code } });
+    useApp.getState().setDialog('alerts');
     await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
     useApp.getState().setDialog(null);
     useApp.getState().go({ code, ch: 'general' });

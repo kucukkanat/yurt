@@ -75,7 +75,12 @@ export const EV_TYPES = [
   'suggest.res',
   'save',
   'read',
+  'notify',
 ] as const;
+
+/** How much a conversation alerts me: every message, only @mentions and approvals, or nothing. */
+export const NOTIFY_LEVELS = ['all', 'mentions', 'none'] as const;
+export type NotifyLevel = (typeof NOTIFY_LEVELS)[number];
 
 /** The signed envelope. The body is checked per type (BODY_SCHEMAS); the signature by verifyEvent. */
 export const EventSchema = obj({
@@ -199,6 +204,7 @@ export const BODY_SCHEMAS = {
   'suggest.res': obj({ target: nonEmpty, accept: v.boolean() }),
   save: obj({ target: nonEmpty, on: v.boolean() }),
   read: obj({ ch: nonEmpty, ts: int }),
+  notify: obj({ ch: nonEmpty, level: v.picklist(NOTIFY_LEVELS) }),
 } as const;
 
 export type EventType = (typeof EV_TYPES)[number];

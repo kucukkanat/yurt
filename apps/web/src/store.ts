@@ -26,6 +26,7 @@ import {
   type Note,
   type PollSpec,
   type TaskSetBody,
+  type NotifyLevel,
   identityBackup,
   applySuggestion,
   docText,
@@ -46,7 +47,18 @@ import { chime } from './lib/chime';
 import { report } from './lib/diagnostics';
 import { buildHash, parseHash, type Route } from './lib/route';
 import { attentive, onAttentionChange, presenceNow } from './lib/visibility';
-import { DEFAULT_SETTINGS, loadIdentity, loadSettings, loadWorkspaces, uploadServers, type Identity, type NetSettings, type Settings, type WsRecord } from './lib/stored';
+import {
+  DEFAULT_SETTINGS,
+  legacyMutes,
+  loadIdentity,
+  loadSettings,
+  loadWorkspaces,
+  uploadServers,
+  type Identity,
+  type NetSettings,
+  type Settings,
+  type WsRecord,
+} from './lib/stored';
 import type { NewWorkspaceNet } from './lib/newNet';
 import { backupConfig, docOf, ledgerFromText, ledgerOf, merge, missing, record, sameLedger, type Ledger } from './lib/backup';
 import { viewOf } from './lib/collab';
@@ -60,7 +72,7 @@ interface Panel {
   type: PanelType;
   id?: string | undefined;
 }
-type DialogType = null | 'workspace' | 'channel' | 'invite' | 'settings' | 'channelSettings' | 'jump' | 'collab';
+type DialogType = null | 'workspace' | 'channel' | 'invite' | 'settings' | 'channelSettings' | 'alerts' | 'jump' | 'collab';
 /** The hub's tabs (the `work` panel): its `id` is one of these. */
 export type WorkTab = 'tasks' | 'docs' | 'decisions' | 'saved';
 /** What the create dialog makes, in which channel, and from which message (a task made from a message). */
@@ -146,7 +158,8 @@ export interface AppState extends AppData {
   joinWorkspace(input: string): Promise<boolean>;
   leaveWorkspace(code: string): Promise<void>;
   markRead(code: string, ch: string): void;
-  toggleMute(code: string, ch: string): void;
+  /** How much `ch` alerts me (see levelOf in @yurt/protocol), for all my devices: published to myself. */
+  setLevel(code: string, ch: string, level: NotifyLevel): void;
   publish<B>(code: string, f: Omit<EventFields<B>, 'ws'>): Ev<B> | undefined;
   /** False when nothing was sent (e.g. an upload failed), so the composer keeps the draft. */
   send(text: string, files: File[], parent?: string): Promise<boolean>;
@@ -196,16 +209,15 @@ function changedTransport(t: WsTransport, change: NewWorkspaceNet): { transport:
   return { transport: { ...t, relays: change.relays }, blossom: change.blossom.length ? change.blossom : undefined };
 }
 
-/** A desktop notification for a fresh message, if it's for me (a mention or any direct message) and I'm not looking at it. */
 /**
  * A fresh message worth a notification here: what notifies is decided by noticeFor (@yurt/protocol); this device adds that it's new (not a backfill) and not the conversation already on screen.
  */
-function notificationFor(e: Ev, s: WsState, ctx: { me: Identity; route: Route; code: string; muted: readonly string[] }): Notice | null {
+function notificationFor(e: Ev, s: WsState, ctx: { me: Identity; route: Route; code: string }): Notice | null {
   // The reduced message, not the raw body: only what the reducer accepted is announced.
   const m = e.t === 'msg' && e.ch ? s.msgs.get(e.id) : undefined;
   if (!m || Date.now() - m.ts > 60_000) return null;
   if (attentive(document) && ctx.route.code === ctx.code && ctx.route.ch === m.ch) return null;
-  const n = noticeFor(m, s, ctx.me.pub, ctx.muted);
+  const n = noticeFor(m, s, ctx.me.pub);
   return n && { ...n, code: ctx.code, tag: ctx.code + ':' + m.id };
 }
 
@@ -316,10 +328,9 @@ export const useApp = create<AppState>((set, get) => {
   const profilePublished = new Set<string>();
 
   const onFresh = (code: string, s: WsState, fresh: Ev[], me: Identity) => {
-    const { route, settings, workspaces } = get();
-    const muted = workspaces.flatMap((w) => (w.code === code ? w.muted : []));
+    const { route, settings } = get();
     for (const e of fresh) {
-      const n = notificationFor(e, s, { me, route, code, muted });
+      const n = notificationFor(e, s, { me, route, code });
       if (!n) continue;
       // In my hand and looking elsewhere in the app: a buzz says something arrived for me.
       if (!document.hidden) haptic('notice');
@@ -465,12 +476,13 @@ export const useApp = create<AppState>((set, get) => {
     ...initialState(),
 
     async init({ clockMs = 30_000 } = {}) {
-      const [identity, workspaces, settings, savedLedger] = await Promise.all([
+      const [identity, rawWorkspaces, settings, savedLedger] = await Promise.all([
         kv.get('identity').then(loadIdentity),
-        kv.get('workspaces').then(loadWorkspaces),
+        kv.get('workspaces'),
         kv.get('settings').then(loadSettings),
         kv.get('backup'),
       ]);
+      const workspaces = loadWorkspaces(rawWorkspaces);
       // Before the backup existed nothing was recorded: everything this device has counts as joined now.
       if (savedLedger === undefined) saveLedger(record({}, [], workspaces, Date.now()));
       else ledger = ledgerOf(savedLedger);
@@ -513,6 +525,10 @@ export const useApp = create<AppState>((set, get) => {
       });
       if (identity) {
         get().workspaces.forEach(connectWs);
+        // Mutes from before alert levels were kept on this device only: they become the synced level "none", once.
+        const mutes = legacyMutes(rawWorkspaces);
+        for (const [code, chs] of mutes) for (const ch of chs) get().setLevel(code, ch, 'none');
+        if (mutes.size) void persist('workspaces', get().workspaces);
         startBridge(identity);
         void syncBackup();
       }
@@ -618,7 +634,6 @@ export const useApp = create<AppState>((set, get) => {
         transport,
         creator: me.pub,
         lastRead: {},
-        muted: [],
         ...(net.blossom.length ? { blossom: net.blossom } : {}),
       };
       saveWs([...get().workspaces, rec]);
@@ -639,7 +654,7 @@ export const useApp = create<AppState>((set, get) => {
       const { code, transport } = inv;
       if (!get().workspaces.some((w) => w.code === code)) {
         // The link names the creator, so moderation trusts them from the start instead of whoever claims it first.
-        const rec: WsRecord = { code, name: formatCode(code), transport, creator: inv.creator ?? null, lastRead: {}, muted: [] };
+        const rec: WsRecord = { code, name: formatCode(code), transport, creator: inv.creator ?? null, lastRead: {} };
         saveWs([...get().workspaces, rec]);
         connectWs(rec);
       }
@@ -682,10 +697,9 @@ export const useApp = create<AppState>((set, get) => {
       }
     },
 
-    toggleMute(code, ch) {
-      const rec = get().workspaces.find((w) => w.code === code);
-      if (!rec) return;
-      patchWs(code, { muted: rec.muted.includes(ch) ? rec.muted.filter((c) => c !== ch) : [...rec.muted, ch] });
+    setLevel(code, ch, level) {
+      const me = get().identity?.pub;
+      if (me) get().publish(code, { t: 'notify', to: me, b: { ch, level } });
     },
 
     publish(code, f) {

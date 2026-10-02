@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
-import { keyFromPhrase, newInviteCode, newNostrTransport, newRecoveryPhrase, newWorkspaceKey } from '@yurt/protocol';
+import { keyFromPhrase, levelOf, newInviteCode, newNostrTransport, newRecoveryPhrase, newWorkspaceKey } from '@yurt/protocol';
 import { kv } from '../../../src/lib/db';
 import { getPeer } from '../../../src/lib/net';
 import { useApp } from '../../../src/store';
@@ -13,7 +13,7 @@ const relayWs = {
   transport: { key: newWorkspaceKey(), relays: [inject('relayUrl')] },
   creator: null,
   lastRead: {},
-  muted: [],
+  muted: ['general'], // an older app's mute, kept on this device only
 };
 const damaged = {
   code: newInviteCode(),
@@ -44,7 +44,7 @@ describe('starting up', () => {
     expect(s.ready).toBe(true);
     expect(s.identity).toMatchObject({ ...keyFromPhrase(phrase), name: 'Ada', handle: 'ada' });
     expect(s.workspaces.map((w) => w.code)).toEqual([relayWs.code, damaged.code]);
-    expect(s.workspaces[1]).toMatchObject({ creator: null, lastRead: {}, muted: [] });
+    expect(s.workspaces[1]).toMatchObject({ creator: null, lastRead: {} });
     expect(s.settings).toMatchObject({ theme: 'light', webrtc: false, turn: 'off', lastNet: { relays: ['wss://old.example'] } });
     expect(document.documentElement.dataset.theme).toBe('light');
   });
@@ -54,6 +54,18 @@ describe('starting up', () => {
     await until(() => !!peer?.connected, 'the relay');
     await until(() => peer?.state.profiles.get(keyFromPhrase(phrase).pub)?.name === 'Ada', 'my profile in the workspace');
     expect(getPeer(damaged.code)).toBeDefined();
+  });
+
+  it('turns mutes from before alert levels into the synced level "nothing", once', async () => {
+    const me = keyFromPhrase(phrase).pub;
+    await until(() => {
+      const s = useApp.getState().states[relayWs.code];
+      return !!s && levelOf(s, me, 'general') === 'none';
+    }, 'the level');
+    const sent = [...(getPeer(relayWs.code)?.events.values() ?? [])].filter((e) => e.t === 'notify');
+    expect(sent).toMatchObject([{ to: me, b: { ch: 'general', level: 'none' } }]);
+    // Saved without the old list, so the next start doesn't publish it again.
+    expect(JSON.stringify(await kv.get('workspaces'))).not.toContain('muted');
   });
 
   it('explains a link it can’t join, then goes home', async () => {

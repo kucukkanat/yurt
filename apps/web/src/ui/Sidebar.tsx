@@ -1,7 +1,7 @@
 import type React from 'react';
 import { useId, useMemo, useState } from 'react';
 import { Icon, IconButton, Tooltip, Kbd, Badge, Avatar, DaemonStatus } from '@yurt/ui';
-import { liveAgents, fingerprint, formatCode, agentDmChannel, agentKey, parseGuestDm, type WsState } from '@yurt/protocol';
+import { liveAgents, fingerprint, formatCode, agentDmChannel, agentKey, levelOf, parseGuestDm, type WsState } from '@yurt/protocol';
 import { useApp, type WsRecord } from '../store';
 import { useCurrent, unread, personFor, channelTitle, othersOnline } from '../model';
 import { HuddleDock } from './Huddle';
@@ -17,12 +17,11 @@ const initialsOf = (s: string) =>
     .join('')
     .toUpperCase() || 'Y';
 
-/** Unread messages and mentions across a workspace's unmuted conversations. */
+/** Unread and alerting messages across a workspace's conversations (those set to alert nothing count neither). */
 function workspaceUnread(s: WsState, w: WsRecord, me: { pub: string; handle: string }) {
   let m = 0;
   let n = 0;
   for (const ch of s.channelMsgs.keys()) {
-    if (w.muted.includes(ch)) continue;
     const u = unread(s, w, ch, me.pub, me.handle);
     m += u.m;
     n += u.n;
@@ -114,11 +113,12 @@ export function Rail() {
 function ChannelRow({ ch, label, icon, inCall }: { ch: string; label: React.ReactNode; icon: React.ReactNode; inCall: number }) {
   const { route, state, rec, identity } = useCurrent();
   const active = route.ch === ch;
-  const muted = rec?.muted.includes(ch);
+  // Set to alert nothing: dimmed, and `unread` counts nothing in it.
+  const quiet = !!state && levelOf(state, identity.pub, ch) === 'none';
   const u = state && !active ? unread(state, rec, ch, identity.pub, identity.handle) : { n: 0, m: 0 };
-  const bold = u.n > 0 && !muted;
+  const bold = u.n > 0;
   return (
-    <Row active={active} dim={muted} onClick={() => useApp.getState().go({ code: route.code, ch })}>
+    <Row active={active} dim={quiet} onClick={() => useApp.getState().go({ code: route.code, ch })}>
       {icon}
       <span
         style={{
@@ -144,7 +144,7 @@ function ChannelRow({ ch, label, icon, inCall }: { ch: string; label: React.Reac
           {inCall}
         </span>
       )}
-      {u.m > 0 && !muted && (
+      {u.m > 0 && (
         <Badge tone="human" variant="solid" size="sm">
           {u.m}
         </Badge>

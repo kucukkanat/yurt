@@ -84,6 +84,9 @@ Pages once the build and tests pass. Shared setup (Bun, Node, cached Chromium) i
 - Collaboration features are plain events (and presence fields): they must work without the bridge. Agents reach them only
   through the bridge's MCP tools, which publish the same events as the UI.
 - A poll or meeting `msg` repeats its question or title in `text` for older apps; keep it.
+- What alerts me is one rule for notifications, badges and unread bold: `levelOf` + `alerts` (`@yurt/protocol`
+  `notify.ts`), from my synced `notify` events. Don't add a per-device mute list; old saved `muted` lists are moved to
+  level `none` once at start (`legacyMutes`).
 - Private channels: `dm:<a>:<b>`, `adm:<owner>:<agentId>`, `gdm:<member>:<owner>:<agentId>`; routing and sealing
   depend only on the `a`/`to` pair.
 - Web browser tests share one origin (IndexedDB, store), so that project runs files one at a time.

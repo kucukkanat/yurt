@@ -1,7 +1,19 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { renderHook } from 'vitest-browser-react';
-import { agentDmChannel, agentKey, dmChannel, fingerprint, guestDmChannel, keyFromPhrase, newNostrTransport, newRecoveryPhrase, type WsState } from '@yurt/protocol';
+import {
+  agentDmChannel,
+  agentKey,
+  dmChannel,
+  fingerprint,
+  guestDmChannel,
+  keyFromPhrase,
+  levelOf,
+  newNostrTransport,
+  newRecoveryPhrase,
+  type NotifyLevel,
+  type WsState,
+} from '@yurt/protocol';
 import { CALM } from '../../../src/lib/favicon';
 import { getPeer } from '../../../src/lib/net';
 import { authorKey, channelTitle, faviconStateOf, needIdentity, othersOnline, personFor, roster, unread, useCurrent, useMedia } from '../../../src/model';
@@ -22,6 +34,11 @@ const state = (): WsState => {
   const s = app().states[code];
   if (!s) throw new Error('no state');
   return s;
+};
+/** Sets a conversation's alert level the way the app does, and waits for it to apply. */
+const setLevel = async (ch: string, level: NotifyLevel) => {
+  app().setLevel(code, ch, level);
+  await until(() => levelOf(state(), me.pub, ch) === level, 'level ' + level);
 };
 
 beforeAll(async () => {
@@ -143,8 +160,20 @@ describe('conversations', () => {
     const rec = app().workspaces.find((w) => w.code === code);
     expect(unread(state(), undefined, 'general', me.pub, 'ada')).toEqual({ n: 2, m: 1 });
     expect(unread(state(), rec, dm, me.pub, 'ada')).toEqual({ n: 1, m: 1 });
-    expect(unread(state(), rec, agentDmChannel(me.pub, 'scout'), me.pub, 'ada')).toEqual({ n: 2, m: 1 });
+    expect(unread(state(), rec, agentDmChannel(me.pub, 'scout'), me.pub, 'ada')).toEqual({ n: 2, m: 2 });
     expect(unread(state(), rec, 'nothing-here', me.pub, 'ada')).toEqual({ n: 0, m: 0 });
+    // Each conversation's alert level decides which unread messages alert me; at "nothing" none even count as unread.
+    await setLevel('general', 'all');
+    expect(unread(state(), undefined, 'general', me.pub, 'ada')).toEqual({ n: 2, m: 2 });
+    await setLevel('general', 'none');
+    expect(unread(state(), undefined, 'general', me.pub, 'ada')).toEqual({ n: 0, m: 0 });
+    await setLevel('general', 'mentions');
+    await setLevel(dm, 'mentions');
+    expect(unread(state(), rec, dm, me.pub, 'ada')).toEqual({ n: 1, m: 0 });
+    await setLevel(agentDmChannel(me.pub, 'scout'), 'mentions');
+    expect(unread(state(), rec, agentDmChannel(me.pub, 'scout'), me.pub, 'ada')).toEqual({ n: 2, m: 1 }); // the approval
+    await setLevel(dm, 'all');
+    await setLevel(agentDmChannel(me.pub, 'scout'), 'all');
     app().markRead(code, 'general');
     const read = app().workspaces.find((w) => w.code === code);
     expect(unread(state(), read, 'general', me.pub, 'ada')).toEqual({ n: 0, m: 0 });
@@ -190,7 +219,7 @@ describe('the tab icon’s state', () => {
     expect(faviconStateOf({ ...s, workspaces: [...s.workspaces, unsynced] }, getPeer, false).mentions).toBe(faviconStateOf(s, getPeer, false).mentions);
   });
 
-  it('counts unread mentions across workspaces, skipping muted and on-screen conversations', () => {
+  it('counts alerting messages across workspaces, skipping on-screen conversations and those set to alert nothing', async () => {
     const dm = dmChannel(olu.kp.pub, me.pub);
     const s = app();
     const all = faviconStateOf(s, getPeer, false);
@@ -198,9 +227,9 @@ describe('the tab icon’s state', () => {
     expect(all.unread).toBe(true);
     useApp.setState({ route: { code, ch: dm } });
     expect(faviconStateOf(app(), getPeer, true).mentions).toBe(all.mentions - 1); // the DM is on screen
-    app().toggleMute(code, agentDmChannel(me.pub, 'scout'));
-    expect(faviconStateOf(app(), getPeer, false).mentions).toBe(all.mentions - 1);
-    app().toggleMute(code, agentDmChannel(me.pub, 'scout'));
+    await setLevel(agentDmChannel(me.pub, 'scout'), 'none');
+    expect(faviconStateOf(app(), getPeer, false).mentions).toBe(all.mentions - 2);
+    await setLevel(agentDmChannel(me.pub, 'scout'), 'all');
     useApp.setState({ route: {} });
   });
 

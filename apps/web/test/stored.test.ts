@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_BLOSSOM, DEFAULT_RELAYS, formatCode, keyFromPhrase, makeEvent, newInviteCode, newRecoveryPhrase, newWorkspaceKey, normalizeCode } from '@yurt/protocol';
-import { DEFAULT_SETTINGS, loadBlob, loadEvents, loadIdentity, loadMark, loadSettings, loadToken, loadWorkspaces, uploadServers } from '../src/lib/stored';
+import { DEFAULT_SETTINGS, legacyMutes, loadBlob, loadEvents, loadIdentity, loadMark, loadSettings, loadToken, loadWorkspaces, uploadServers } from '../src/lib/stored';
 import { anything, fc } from './fuzz';
 
 const code = newInviteCode();
 const key = newWorkspaceKey();
 const creator = 'ab'.repeat(32);
-const base = { code, name: 'Team', creator, lastRead: { general: 5 }, muted: ['random'], transport: { key, relays: ['wss://r.example'] } };
+const base = { code, name: 'Team', creator, lastRead: { general: 5 }, transport: { key, relays: ['wss://r.example'] } };
 
 describe('stored workspaces', () => {
   it('load what the app writes, and skip records without a usable transport', () => {
@@ -28,15 +28,24 @@ describe('stored workspaces', () => {
         blossom: 'https://b.example',
       },
     ]);
-    expect(w).toEqual({ code, name: formatCode(code), transport: { key, relays: [...DEFAULT_RELAYS] }, creator: null, lastRead: { ok: 3, ['__proto__']: 9 }, muted: ['a'] });
+    expect(w).toEqual({ code, name: formatCode(code), transport: { key, relays: [...DEFAULT_RELAYS] }, creator: null, lastRead: { ok: 3, ['__proto__']: 9 } });
     expect(Object.getPrototypeOf(w?.lastRead)).toBeNull();
-    expect(loadWorkspaces([{ ...base, lastRead: 'x', muted: 'y' }])[0]).toMatchObject({ lastRead: {}, muted: [] });
+    expect(loadWorkspaces([{ ...base, lastRead: 'x' }])[0]).toMatchObject({ lastRead: {} });
     // A minimal record (only what can't be defaulted) still loads.
     expect(loadWorkspaces([{ code, transport: { key } }])).toEqual([
-      { code, name: formatCode(code), transport: { key, relays: [...DEFAULT_RELAYS] }, creator: null, lastRead: {}, muted: [] },
+      { code, name: formatCode(code), transport: { key, relays: [...DEFAULT_RELAYS] }, creator: null, lastRead: {} },
     ]);
     // A relay workspace that lost its relays gets the built-ins back, so it can sync again.
     expect(loadWorkspaces([{ ...base, transport: { key, relays: [] } }])[0]?.transport).toEqual({ key, relays: [...DEFAULT_RELAYS] });
+  });
+
+  it('give the conversations an older app muted on this device, to move to the synced alert level once', () => {
+    const other = newInviteCode();
+    const raw = [{ ...base, muted: ['random', 7, 'dm:x'] }, { ...base, code: other, muted: [] }, { code: 5, muted: ['a'] }, { muted: ['b'] }, null, 'x'];
+    expect([...legacyMutes(raw)]).toEqual([[code, ['random', 'dm:x']]]);
+    expect(loadWorkspaces(raw)[0]).not.toHaveProperty('muted');
+    expect(legacyMutes(undefined).size).toBe(0);
+    fc.assert(fc.property(anything, (x) => void legacyMutes(x)));
   });
 
   it('skip records that can’t connect, and keep the first of a code', () => {
