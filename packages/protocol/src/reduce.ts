@@ -1,4 +1,4 @@
-import type { Ev, EvType, AgentBody, AgentTriggers, AgentPlacement, FileRef, TraceStep, ApprovalReq } from './types';
+import type { Ev, EvType, AgentBody, AgentTriggers, AgentPlacement, FileRef, TraceStep, ApprovalReq, PollSpec, MeetSpec, Actor, TaskStatus, DocKind } from './types';
 import { EDIT_WINDOW_MS, sortEvents, isEventShape } from './events';
 import { parseBody, type ParsedBody } from './schemas';
 import { isPrivateChannel, dmChannel, parseGuestDm } from './codes';
@@ -18,6 +18,8 @@ export interface Msg {
   trace?: TraceStep[] | undefined;
   meta?: string | undefined;
   approval?: ApprovalReq | undefined;
+  poll?: PollSpec | undefined;
+  meet?: MeetSpec | undefined;
   edited: boolean;
   deleted: boolean;
   reactions: Record<string, string[]>; // icon → reactor keys ("pub" or "pub/agentId"); null-prototype, so any icon is a safe key
@@ -49,6 +51,68 @@ export interface Profile {
   ts: number;
 }
 
+/** One change to a task, in order: who made it and what it set. */
+export interface TaskChange {
+  a: string;
+  ag?: string | undefined;
+  ts: number;
+  status?: TaskStatus | undefined;
+  assignee?: Actor | null | undefined;
+  note?: string | undefined;
+}
+export interface Task {
+  id: string;
+  title: string;
+  ch: string;
+  src?: string | undefined;
+  a: string;
+  ag?: string | undefined;
+  ts: number;
+  assignee?: Actor | undefined;
+  due?: number | undefined;
+  status: TaskStatus;
+  /** When it last changed. */
+  updated: number;
+  log: TaskChange[];
+}
+export interface Decision {
+  target: string;
+  ch: string;
+  text: string;
+  a: string;
+  ag?: string | undefined;
+  ts: number;
+}
+export interface Suggestion {
+  id: string;
+  doc: string;
+  find: string;
+  replace: string;
+  note?: string | undefined;
+  a: string;
+  ag?: string | undefined;
+  ts: number;
+  status: 'open' | 'accepted' | 'rejected';
+  /** Who accepted or rejected it. */
+  by?: string | undefined;
+}
+export interface Doc {
+  id: string;
+  title: string;
+  ch: string;
+  kind: DocKind;
+  a: string;
+  ag?: string | undefined;
+  ts: number;
+  updated: number;
+  archived: boolean;
+  /** Yjs updates (base64url), in log order. Order doesn't matter to Yjs; it keeps replays identical. */
+  ops: string[];
+  /** Everyone (actor keys) who changed it. */
+  editors: string[];
+  suggestions: Suggestion[];
+}
+
 export interface WsState {
   ws: string;
   name: string;
@@ -63,6 +127,15 @@ export interface WsState {
   pins: Map<string, Set<string>>;
   approvals: Map<string, string>; // req → optionId
   rekeys: ValidRekey[]; // chronological
+  tasks: Map<string, Task>;
+  votes: Map<string, Map<Actor, number[]>>; // poll message → voter → choices
+  rsvps: Map<string, Map<Actor, 'yes' | 'no' | 'maybe'>>; // meeting message → answer
+  decisions: Map<string, Decision>; // by the message it settles
+  docs: Map<string, Doc>;
+  /** Private to each member's devices, so in practice only my own: pub → saved message ids, oldest first. */
+  saved: Map<string, string[]>;
+  /** Private to each member's devices: pub → channel → read up to (ms). */
+  reads: Map<string, Map<string, number>>;
 }
 
 export const agentKey = (owner: string, id: string) => owner + '/' + id;
@@ -83,6 +156,13 @@ export function emptyState(ws: string): WsState {
     pins: new Map(),
     approvals: new Map(),
     rekeys: [],
+    tasks: new Map(),
+    votes: new Map(),
+    rsvps: new Map(),
+    decisions: new Map(),
+    docs: new Map(),
+    saved: new Map(),
+    reads: new Map(),
   };
 }
 
@@ -126,10 +206,13 @@ export function reduce(ws: string, events: Ev[], opts: { creator?: string | null
   // voiding it would put everyone back on an older key a banned member still holds.
   const everAdmins = everAdminsOf(s.creator, evs);
   const approves: Ev[] = [];
+  const later: { e: Ev; t: Deferred }[] = [];
   for (const e of evs) {
     if (s.bans.has(e.a) || e.t === 'role' || e.t === 'ban') continue;
     // Approvals are checked against the request message, which may sort after the answer when clocks disagree.
     if (e.t === 'approve') approves.push(e);
+    // Changes to things that may sort after them (the author's clock was behind) wait until everything exists.
+    else if (isDeferred(e.t)) later.push({ e, t: e.t });
     else if (e.t === 'rekey')
       guarded(() => {
         const r = parseRekey(e);
@@ -140,6 +223,7 @@ export function reduce(ws: string, events: Ev[], opts: { creator?: string | null
       guarded(() => applyAs(s, e, t));
     }
   }
+  for (const { e, t } of later) guarded(() => applyAs(s, e, t));
   settleApprovals(s, approves);
   return s;
 }
@@ -197,6 +281,10 @@ function authority(s: WsState, e: Ev) {
     s.admins.delete(b.target);
   } else s.bans.delete(b.target);
 }
+
+const DEFERRED = ['task.set', 'vote', 'rsvp', 'decide', 'doc.set', 'doc.op', 'suggest', 'suggest.res'] as const satisfies readonly EvType[];
+type Deferred = (typeof DEFERRED)[number];
+const isDeferred = (t: EvType): t is Deferred => (DEFERRED as readonly EvType[]).includes(t);
 
 // One handler per event type that changes state directly, given its body checked against the type's schema.
 type Applied = Exclude<EvType, 'role' | 'ban' | 'approve' | 'rekey'>;
@@ -266,7 +354,119 @@ const APPLY: Handlers = {
       ...(b.discoverable ? { discoverable: true } : {}),
     });
   },
+  task: (s, e, b) => {
+    if (s.tasks.has(b.id) || !s.channels.has(b.ch)) return;
+    s.tasks.set(b.id, {
+      id: b.id,
+      title: b.title,
+      ch: b.ch,
+      src: b.src,
+      a: e.a,
+      ag: e.ag,
+      ts: e.ts,
+      assignee: b.assignee,
+      due: b.due,
+      status: 'open',
+      updated: e.ts,
+      log: [{ a: e.a, ag: e.ag, ts: e.ts, status: 'open', ...(b.assignee ? { assignee: b.assignee } : {}) }],
+    });
+  },
+  'task.set': (s, e, b) => {
+    const t = s.tasks.get(b.id);
+    if (!t) return;
+    if (b.title) t.title = b.title;
+    if (b.assignee !== undefined) t.assignee = b.assignee ?? undefined;
+    if (b.due !== undefined) t.due = b.due ?? undefined;
+    if (b.status) t.status = b.status;
+    t.updated = e.ts;
+    t.log.push({
+      a: e.a,
+      ag: e.ag,
+      ts: e.ts,
+      ...(b.status ? { status: b.status } : {}),
+      ...(b.assignee !== undefined ? { assignee: b.assignee } : {}),
+      ...(b.note ? { note: b.note } : {}),
+    });
+  },
+  vote: (s, e, b) => {
+    const m = answerable(s, e, b.target);
+    const p = m?.poll;
+    if (!m || !p || (p.closes !== undefined && e.ts >= p.closes)) return;
+    const picked = [...new Set(b.choices.filter((c) => c < p.options.length))].sort((x, y) => x - y);
+    const votes = s.votes.get(m.id) ?? new Map<Actor, number[]>();
+    if (picked.length) votes.set(reactorKey(e), p.multi ? picked : picked.slice(0, 1));
+    else votes.delete(reactorKey(e));
+    s.votes.set(m.id, votes);
+  },
+  rsvp: (s, e, b) => {
+    const m = answerable(s, e, b.target);
+    if (!m?.meet) return;
+    s.rsvps.set(m.id, (s.rsvps.get(m.id) ?? new Map()).set(reactorKey(e), b.going));
+  },
+  decide: (s, e, b) => {
+    const m = answerable(s, e, b.target);
+    if (!m) return;
+    if (b.on) s.decisions.set(m.id, { target: m.id, ch: m.ch, text: b.text || m.text, a: e.a, ag: e.ag, ts: e.ts });
+    else s.decisions.delete(m.id);
+  },
+  doc: (s, e, b) => {
+    if (s.docs.has(b.id) || !s.channels.has(b.ch)) return;
+    s.docs.set(b.id, { id: b.id, title: b.title, ch: b.ch, kind: b.kind, a: e.a, ag: e.ag, ts: e.ts, updated: e.ts, archived: false, ops: [], editors: [], suggestions: [] });
+  },
+  'doc.set': (s, e, b) => {
+    const d = s.docs.get(b.id);
+    if (!d) return;
+    if (b.title) d.title = b.title;
+    if (b.archived !== undefined) d.archived = b.archived;
+    d.updated = e.ts;
+  },
+  'doc.op': (s, e, b) => {
+    const d = s.docs.get(b.doc);
+    if (!d || d.archived) return;
+    d.ops.push(b.u);
+    d.updated = e.ts;
+    const who = reactorKey(e);
+    if (!d.editors.includes(who)) d.editors.push(who);
+  },
+  suggest: (s, e, b) => {
+    const d = s.docs.get(b.doc);
+    if (d?.kind !== 'text' || d.archived) return;
+    d.suggestions.push({ id: e.id, doc: d.id, find: b.find, replace: b.replace, note: b.note, a: e.a, ag: e.ag, ts: e.ts, status: 'open' });
+  },
+  'suggest.res': (s, e, b) => {
+    // People decide; an agent can't accept its own (or another agent's) suggestion.
+    if (e.ag) return;
+    for (const d of s.docs.values()) {
+      const x = d.suggestions.find((y) => y.id === b.target);
+      if (x?.status !== 'open') continue;
+      x.status = b.accept ? 'accepted' : 'rejected';
+      x.by = e.a;
+    }
+  },
+  save: (s, e, b) => {
+    if (e.to !== e.a || e.ch) return;
+    const l = (s.saved.get(e.a) ?? []).filter((id) => id !== b.target);
+    s.saved.set(e.a, b.on ? [...l, b.target] : l);
+  },
+  read: (s, e, b) => {
+    if (e.to !== e.a) return;
+    const r = s.reads.get(e.a) ?? new Map<string, number>();
+    r.set(b.ch, Math.max(r.get(b.ch) ?? 0, b.ts));
+    s.reads.set(e.a, r);
+  },
 };
+
+/**
+ * The message `target`, when `e` may answer it (vote, RSVP, mark as decided): it exists, isn't deleted, and the
+ * answer is as private as the message, so a DM poll's votes never travel to the whole workspace.
+ */
+function answerable(s: WsState, e: Ev, target: string): Msg | undefined {
+  const m = s.msgs.get(target);
+  if (!m || m.deleted) return undefined;
+  if (!m.to) return e.to ? undefined : m;
+  const pair = [m.a, m.to].sort().join(':');
+  return e.to !== undefined && [e.a, e.to].sort().join(':') === pair ? m : undefined;
+}
 
 function onMsg(s: WsState, e: Ev, b: ParsedBody<'msg'>) {
   const ch = e.ch;
@@ -286,6 +486,8 @@ function onMsg(s: WsState, e: Ev, b: ParsedBody<'msg'>) {
     files: b.files,
     trace: b.trace,
     meta: b.meta,
+    poll: b.poll,
+    meet: b.meet,
     // Approval prompts come only from agents to their owner, in the owner's private agent channel.
     approval: ch.startsWith('adm:') ? b.approval : undefined,
     edited: false,

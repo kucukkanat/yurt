@@ -21,9 +21,12 @@ import { useApp, type WsRecord } from '../store';
 import { useCurrent, roster } from '../model';
 import { defaultNewNet, netFromForm, type LastNet, type NetForm, type NewWorkspaceNet } from '../lib/newNet';
 import { Settings, SignalFields, InviteBody, listError, rejected } from './Settings';
+import { CollabDialog } from './Collab';
 
 export function Dialogs() {
   const dialog = useApp((s) => s.dialog);
+  const collab = useApp((s) => s.collab);
+  const state = useApp((s) => (s.route.code ? s.states[s.route.code] : undefined));
   const close = () => useApp.getState().setDialog(null);
   return (
     <>
@@ -33,6 +36,7 @@ export function Dialogs() {
       {dialog === 'settings' && <Settings onClose={close} />}
       {dialog === 'channelSettings' && <ChannelSettings onClose={close} />}
       {dialog === 'jump' && <JumpDialog onClose={close} />}
+      {dialog === 'collab' && collab && state && <CollabDialog form={collab} state={state} onClose={close} />}
     </>
   );
 }

@@ -165,6 +165,10 @@ export class BridgeServer {
       res.writeHead(403).end();
       return;
     }
+    if (req.url === '/mcp') {
+      this.mcp(req, res);
+      return;
+    }
     // Server-side requests always carry a url; String() only satisfies the client-side typing.
     const url = new URL(String(req.url), this.origin);
     let rel: string;
@@ -195,6 +199,40 @@ export class BridgeServer {
       res.writeHead(200, headers);
       fs.createReadStream(file).pipe(res);
     }
+  }
+
+  /**
+   * Agents' Yurt tools (see mcp.ts): JSON-RPC from the stdio proxy, authorized by the session's token. Browsers
+   * always send an Origin on a POST, so refusing any request that has one keeps web pages out even if they guessed
+   * a token.
+   */
+  private mcp(req: http.IncomingMessage, res: http.ServerResponse) {
+    const token = /^Bearer (\w+)$/.exec(req.headers.authorization ?? '')?.[1];
+    if (req.method !== 'POST' || req.headers.origin !== undefined || !token) {
+      res.writeHead(403).end();
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > 1 << 20) req.destroy();
+      else chunks.push(c);
+    });
+    req.on('end', () => {
+      let body: unknown;
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch {
+        body = undefined;
+      }
+      const answer = this.host.mcpCall(token, body);
+      if (!answer) {
+        res.writeHead(401).end();
+        return;
+      }
+      void answer.then((r) => (r ? res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(r)) : res.writeHead(202).end()));
+    });
   }
 
   private accept(sock: WebSocket) {

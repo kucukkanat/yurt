@@ -11,6 +11,7 @@ import { fmtTime, fmtBytes } from '../lib/format';
 import { haptic } from '../lib/haptics';
 import { both, useLongPress, useSwipe } from './touch';
 import { copy } from './Settings';
+import { PollCard, MeetCard, DecisionNote, collabActions } from './Collab';
 
 const pendingDeletes = new Set<string>();
 
@@ -301,6 +302,7 @@ function messageTone(m: Msg, author: Person, mine: boolean, ctx: MsgCtx): 'menti
 
 /** A message's actions on a touch screen, as the hover bar would offer them. */
 function sheetActions(o: {
+  more: SheetAction[];
   text: string;
   pinned: boolean;
   pin: (() => void) | undefined;
@@ -322,6 +324,7 @@ function sheetActions(o: {
     ...(o.reply ? [{ id: 'reply', label: 'Reply in thread', icon: 'reply' as const, onSelect: o.reply }] : []),
     ...(o.text ? [{ id: 'copy', label: 'Copy text', icon: 'copy' as const, onSelect: () => copy(o.text, 'Message') }] : []),
     ...(o.pin ? [{ id: 'pin', label: o.pinned ? 'Unpin' : 'Pin', icon: 'pin' as const, onSelect: o.pin }] : []),
+    ...o.more,
     ...(o.mine ? mineActions : []),
   ];
 }
@@ -390,6 +393,28 @@ function TouchMessage({
   );
 }
 
+/** A poll or meeting carries its question or title as text too (for older apps); the card shows it once. */
+const shownText = (m: Msg) => !!m.text && m.text !== (m.poll?.q ?? m.meet?.title);
+
+/** What a message carries beyond its text: attachments, a poll, a meeting, a decision. */
+function MessageExtras({ m, ctx }: { m: Msg; ctx: MsgCtx }) {
+  const { state, peer, me, code } = ctx;
+  return (
+    <>
+      {m.files.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: shownText(m) ? 6 : 0 }}>
+          {m.files.map((f) => (
+            <Attachment key={f.id} f={f} code={code} />
+          ))}
+        </div>
+      )}
+      {m.poll && <PollCard m={{ ...m, poll: m.poll }} state={state} peer={peer} me={me} />}
+      {m.meet && <MeetCard m={{ ...m, meet: m.meet }} state={state} peer={peer} me={me} />}
+      <DecisionNote m={m} state={state} peer={peer} me={me} />
+    </>
+  );
+}
+
 export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean; ctx: MsgCtx }) {
   const editing = useApp((s) => s.editing);
   // Re-render my own messages as their edit window counts down (and once just after it closes); others never change.
@@ -429,7 +454,9 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
   const pin = m.ch.includes(':') ? undefined : () => app.publish(code, { t: 'pin', b: { target: m.id, on: !pinned } });
   const edit = () => useApp.setState({ editing: m.id });
   const del = () => deleteWithUndo(m, ctx);
+  const more = collabActions(m, state, me);
   const actions = sheetActions({
+    more,
     text,
     pinned,
     pin,
@@ -458,6 +485,7 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
         reactions={reactions}
         onReact={react}
         onPin={pin}
+        more={more}
         actions={!touch}
         replies={threadSummary(m, ctx)}
         onReplies={openThread}
@@ -473,14 +501,8 @@ export function MessageItem({ m, continued, ctx }: { m: Msg; continued: boolean;
         highlighted={highlight === m.id}
         editor={editing === m.id ? <InlineEditor initial={text} left={left} onSave={saveEdit} onCancel={() => useApp.setState({ editing: null })} /> : undefined}
       >
-        {text && <MentionText text={text} members={members} meId={me} onMention={(mm) => app.setPanel({ type: 'profile', id: mm.id })} />}
-        {m.files.length > 0 && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: text ? 6 : 0 }}>
-            {m.files.map((f) => (
-              <Attachment key={f.id} f={f} code={code} />
-            ))}
-          </div>
-        )}
+        {shownText(m) && <MentionText text={m.text} members={members} meId={me} onMention={(mm) => app.setPanel({ type: 'profile', id: mm.id })} />}
+        <MessageExtras m={m} ctx={ctx} />
       </ChatMessage>
       {m.approval && <Approval approval={m.approval} state={state} author={author} />}
     </TouchMessage>

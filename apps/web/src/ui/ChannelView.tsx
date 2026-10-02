@@ -6,10 +6,12 @@ import { useApp } from '../store';
 import { useCurrent, roster, personFor, authorKey, channelTitle, othersOnline, type Person } from '../model';
 import { privateTarget } from '../lib/private';
 import { fmtDay } from '../lib/format';
+import { readUpTo } from '../lib/collab';
 import { MessageItem, type MsgCtx } from './Message';
 import { Composer, editLastMessage } from './Composer';
 import { HuddleStrip, HuddleButton, HuddleDock } from './Huddle';
 import { must } from './must';
+import { Viewers, FollowBar } from './Collab';
 
 const GROUP_MS = 5 * 60 * 1000;
 
@@ -313,12 +315,20 @@ function ConversationTitle({ c, title, narrow, muted }: { c: Conversation; title
   }
 }
 
-/** Pins, invite and "Add agent": only channels have them. */
+/** Pins, invite and "Add agent": only channels have them. With a side panel open there's less room: icons only. */
 function ChannelActions({ ch, narrow, panelType, togglePanel }: { ch: string; narrow: boolean; panelType: string | null; togglePanel: (t: 'pinned') => void }) {
   const state = useCurrent().state;
   const app = useApp.getState();
   const pinnedN = state?.pins.get(ch)?.size || 0;
-  if (narrow) return <IconButton icon="sparkles" label="Add agent" variant="agent" size="sm" onClick={() => app.openSettings('ws-agents')} />;
+  const addAgent = <IconButton icon="sparkles" label="Add agent" variant="agent" size="sm" onClick={() => app.openSettings('ws-agents')} />;
+  if (narrow) return addAgent;
+  if (panelType)
+    return (
+      <>
+        <IconButton icon="pin" label={'Pinned, ' + pinnedN} size="sm" active={panelType === 'pinned'} onClick={() => togglePanel('pinned')} />
+        {addAgent}
+      </>
+    );
   return (
     <>
       <Tooltip content={'Pinned · ' + pinnedN} placement="bottom">
@@ -409,7 +419,8 @@ function GuestNotice({ c }: { c: Extract<Conversation, { kind: 'guest' }> }) {
 
 /** Freezes "last read" on entering a conversation, so the New divider stays put while you read; marks it read as messages arrive. */
 function useReadMarks(code: string, ch: string, count: number): number {
-  const lastRead = useCurrent().rec?.lastRead[ch] || 0;
+  const { rec, state, identity } = useCurrent();
+  const lastRead = readUpTo(rec?.lastRead[ch], state, identity.pub, ch);
   const [entryRead, setEntryRead] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: captured once per conversation on purpose; later reads must not move the divider
   useEffect(() => {
@@ -546,7 +557,7 @@ function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: stri
   const people = roster(state, peer, me);
   const ctx: MsgCtx = { state, peer, me, handle: identity.handle.toLowerCase(), roster: people, code, forceRender: force };
   const title = channelTitle(state, ch, me);
-  const togglePanel = (type: 'members' | 'pinned' | 'search') => app.setPanel(panel.type === type ? { type: null } : { type });
+  const togglePanel = (type: 'members' | 'pinned' | 'search' | 'work') => app.setPanel(panel.type === type ? { type: null } : { type });
   const note = composerNote(c, { online, relayed, connected: !!peer?.connected, nobody: !relayed && othersOnline(peer, me) === 0 });
   const huddles = c.kind === 'channel' || c.kind === 'dm';
   return (
@@ -568,13 +579,25 @@ function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: stri
       >
         {narrow && <IconButton icon="menu" label="Open sidebar" size="sm" onClick={() => useApp.setState({ drawer: true })} />}
         <ConversationTitle c={c} title={title} narrow={narrow} muted={!!rec?.muted.includes(ch)} />
+        <Viewers view={ch} />
         {huddles && <HuddleButton ch={ch} />}
+        <Tooltip content="Hub: tasks, docs, decisions, saved" placement="bottom">
+          <IconButton
+            icon="list-checks"
+            label="Hub"
+            size="sm"
+            data-testid="hub-button"
+            active={panel.type === 'work' || panel.type === 'doc'}
+            onClick={() => togglePanel('work')}
+          />
+        </Tooltip>
         <Tooltip content="Search" kbd="mod+f" placement="bottom">
           <IconButton icon="search" label="Search" size="sm" active={panel.type === 'search'} onClick={() => togglePanel('search')} />
         </Tooltip>
         {c.kind === 'channel' && <ChannelActions ch={ch} narrow={narrow} panelType={panel.type} togglePanel={togglePanel} />}
-        {huddles && <MembersButton people={people} narrow={narrow} active={panel.type === 'members'} onClick={() => togglePanel('members')} />}
+        {huddles && <MembersButton people={people} narrow={narrow || panel.type === 'doc'} active={panel.type === 'members'} onClick={() => togglePanel('members')} />}
       </header>
+      <FollowBar />
       <Banners c={c} online={online} />
       <HuddleStrip ch={ch} />
       <MessageList key={code + ch} ids={ids} ctx={ctx} lastRead={entryRead} emptyState={ids.length ? null : <EmptyState c={c} relayed={relayed} />} highlight={highlight} />

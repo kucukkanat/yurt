@@ -192,7 +192,14 @@ export class Workspaces {
     p.setPresence({
       st: 'online',
       bridge: true,
-      agents: Object.fromEntries(w.agents.filter((id) => this.cfg.agents.some((a) => a.id === id && a.online)).map((id) => [id, { working: this.host.workingIn(id, code) }])),
+      agents: Object.fromEntries(
+        w.agents
+          .filter((id) => this.cfg.agents.some((a) => a.id === id && a.online))
+          .map((id) => {
+            const on = this.host.workingOn(id, code);
+            return [id, { working: this.host.workingIn(id, code), ...(on ? { on } : {}) }];
+          }),
+      ),
     });
   }
 

@@ -6,6 +6,7 @@ import { useApp, type WsRecord, type AppState } from './store';
 import { CALM, type FaviconState } from './lib/favicon';
 import { getPeer } from './lib/net';
 import { presenceNow } from './lib/visibility';
+import { readUpTo } from './lib/collab';
 
 export interface Person {
   id: string;
@@ -24,6 +25,10 @@ export interface Person {
   banned?: boolean | undefined;
   /** Agents only: when it answers, where it posts, and whether other members can DM it. */
   prefs?: AgentPrefs | undefined;
+  /** People: in focus mode. */
+  focus?: boolean | undefined;
+  /** Agents: the task or doc it's working on, by name. */
+  workingOn?: string | undefined;
 }
 
 /** Workspace views only render after onboarding; reaching one without an identity is a bug, so it fails loudly. */
@@ -64,6 +69,13 @@ function presenceOf(peer: WorkspacePeer | undefined, pub: string, me: string): '
   return best;
 }
 
+/** Someone (or I) turned on focus mode. */
+function inFocus(peer: WorkspacePeer | undefined, pub: string, me: string): boolean {
+  if (!peer) return false;
+  if (pub === me) return !!peer.myPresence.focus;
+  return [...peer.presence.values()].some((p) => p.pub === pub && !p.bridge && p.focus);
+}
+
 /** Other members online: distinct people, not sessions, so my own tabs and my bridge don't count. */
 export function othersOnline(peer: WorkspacePeer | undefined, me: string): number {
   const pubs = new Set<string>();
@@ -71,12 +83,19 @@ export function othersOnline(peer: WorkspacePeer | undefined, me: string): numbe
   return pubs.size;
 }
 
-function agentPresence(peer: WorkspacePeer | undefined, owner: string, id: string): { online: boolean; working: string | null } {
+function agentPresence(peer: WorkspacePeer | undefined, owner: string, id: string): { online: boolean; working: string | null; on: string | null } {
   if (peer)
     for (const pr of peer.presence.values()) {
-      if (pr.pub === owner && pr.bridge && pr.agents && id in pr.agents) return { online: true, working: pr.agents[id]?.working || null };
+      if (pr.pub === owner && pr.bridge && pr.agents && id in pr.agents) return { online: true, working: pr.agents[id]?.working || null, on: pr.agents[id]?.on || null };
     }
-  return { online: false, working: null };
+  return { online: false, working: null, on: null };
+}
+
+/** "the task “Ship it”" / "the doc “Spec”" for an agent's presence `on`, if the workspace has it. */
+function onLabel(state: WsState | undefined, on: string | null): string | undefined {
+  const task = on?.startsWith('task:') ? state?.tasks.get(on.slice(5)) : undefined;
+  const doc = on?.startsWith('doc:') ? state?.docs.get(on.slice(4)) : undefined;
+  return task ? 'task “' + task.title + '”' : doc ? '“' + doc.title + '”' : undefined;
 }
 
 /** "a/b/c" split at the first `sep`: ["a", "b/c"]; without one, ["a", ""]. */
@@ -106,6 +125,7 @@ export function personFor(state: WsState | undefined, peer: WorkspacePeer | unde
       owner: { name: pub === me ? 'You' : owner?.name || 'Someone', self: pub === me },
       presence: pr.online ? 'online' : 'offline',
       working: !!pr.working,
+      workingOn: onLabel(state, pr.on),
     };
   }
   const p = state?.profiles.get(pub);
@@ -120,6 +140,7 @@ export function personFor(state: WsState | undefined, peer: WorkspacePeer | unde
     admin: state?.admins.has(pub),
     creator: state?.creator === pub,
     banned: state?.bans.has(pub),
+    focus: inFocus(peer, pub, me),
   };
 }
 
@@ -139,7 +160,8 @@ export function roster(state: WsState | undefined, peer: WorkspacePeer | undefin
 }
 
 export function unread(state: WsState, rec: WsRecord | undefined, ch: string, me: string, handle: string) {
-  const last = rec?.lastRead[ch] || 0;
+  // Read here, or on another of my devices (read marks sync privately).
+  const last = readUpTo(rec?.lastRead[ch], state, me, ch);
   // Newest first, stopping at the first message already read.
   const newest = (state.channelMsgs.get(ch) ?? [])
     .map((id) => state.msgs.get(id))

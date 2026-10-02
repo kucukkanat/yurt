@@ -144,6 +144,20 @@ describe('trystero transport', () => {
     expect(a.peerIdsFor([B.pub])).toHaveLength(1);
   }, 60_000);
 
+  it('carries collaboration to everyone and what I keep for myself only to my own devices', async () => {
+    const { p: a } = await device(A);
+    const { p: a2 } = await device(A);
+    const { p: b } = await device(B);
+    await until(() => a.peers.size === 2 && a2.peers.size === 2 && b.peers.size === 2);
+    a.publish({ t: 'ch.create', b: { id: 'general', name: 'general' } });
+    const task = a.publish({ t: 'task', b: { id: 't1', title: 'Ship', ch: 'general', assignee: B.pub } });
+    const save = a.publish({ t: 'save', to: A.pub, b: { target: 'm1', on: true } });
+    await until(() => b.state.tasks.has('t1') && a2.state.saved.get(A.pub)?.[0] === 'm1', 20_000, 'collab sync');
+    expect(b.events.has(save.id)).toBe(false);
+    b.publish({ t: 'task.set', b: { id: task.b.id, status: 'done' } });
+    await until(() => a2.state.tasks.get('t1')?.status === 'done', 20_000, 'task change');
+  }, 60_000);
+
   it('carries huddle state and verified file transfers', async () => {
     const buf = new TextEncoder().encode('file body').buffer as ArrayBuffer;
     const id = await sha256Buf(buf);

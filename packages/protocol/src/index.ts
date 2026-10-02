@@ -14,3 +14,4 @@ export * from './rekey';
 export * from './schemas';
 export * from './notify';
 export * from './backup';
+export * from './collab';

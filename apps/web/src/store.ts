@@ -20,7 +20,21 @@ import {
   type FileRef,
   type EventFields,
   type BridgeState,
+  type Doc,
+  type DocKind,
+  type MeetSpec,
+  type Msg,
+  type Suggestion,
+  type Note,
+  type PollSpec,
+  type TaskSetBody,
   identityBackup,
+  applySuggestion,
+  docText,
+  newId,
+  notePutOp,
+  noteRemoveOp,
+  textOp,
 } from '@yurt/protocol';
 import { kv, eventsDb, blobsDb } from './lib/db';
 import { connect, getPeer, allPeers, disconnect } from './lib/net';
@@ -35,18 +49,28 @@ import { presenceNow } from './lib/visibility';
 import { DEFAULT_SETTINGS, loadIdentity, loadSettings, loadWorkspaces, uploadServers, type Identity, type NetSettings, type Settings, type WsRecord } from './lib/stored';
 import { rememberNet, type NewWorkspaceNet } from './lib/newNet';
 import { backupConfig, docOf, ledgerFromText, ledgerOf, merge, missing, record, sameLedger, type Ledger } from './lib/backup';
+import { viewOf } from './lib/collab';
 
 export type { Settings, WsRecord } from './lib/stored';
 
 type ConnectionChange = { kind: 'nostr'; relays: string[]; blossom: string[] } | { kind: 'trystero'; signal: Signaling };
 /** Sections of the single Settings window: "you" (account and this device) and the current workspace. */
 export type SettingsSection = 'profile' | 'identity' | 'preferences' | 'app' | 'connection' | 'agents' | 'ws-general' | 'ws-network' | 'ws-agents';
-type PanelType = 'members' | 'profile' | 'thread' | 'pinned' | 'search' | null;
+type PanelType = 'members' | 'profile' | 'thread' | 'pinned' | 'search' | 'work' | 'doc' | null;
 interface Panel {
   type: PanelType;
   id?: string | undefined;
 }
-type DialogType = null | 'workspace' | 'channel' | 'invite' | 'settings' | 'channelSettings' | 'jump';
+type DialogType = null | 'workspace' | 'channel' | 'invite' | 'settings' | 'channelSettings' | 'jump' | 'collab';
+/** The hub's tabs (the `work` panel): its `id` is one of these. */
+export type WorkTab = 'tasks' | 'docs' | 'decisions' | 'saved';
+/** What the create dialog makes, in which channel, and from which message (a task made from a message). */
+export interface CollabForm {
+  kind: 'task' | 'poll' | 'meet' | 'doc' | 'board';
+  ch: string;
+  src?: string | undefined;
+  title?: string | undefined;
+}
 /** `onDismiss` runs once however the toast goes away: expired, closed, acted on, or pushed out by newer toasts. */
 interface ToastT {
   id: number;
@@ -92,6 +116,12 @@ export interface AppData {
   installable: boolean;
   /** Running as the installed app, not in a browser tab (set at start, lib/pwa.ts isStandalone). */
   standalone: boolean;
+  /** The create dialog's form (dialog `collab`). */
+  collab: CollabForm | null;
+  /** Following this member: the app goes where they look (lib/collab.ts followTarget). */
+  following: string | null;
+  /** Focus mode: others see it, and this device stays quiet (no notifications). */
+  focus: boolean;
 }
 
 export interface AppState extends AppData {
@@ -126,6 +156,33 @@ export interface AppState extends AppData {
   setAgents(code: string, agentIds: string[]): void;
   /** A workspace's own network settings: relays and file servers, or signaling. Saves and reconnects it. */
   updateConnection(code: string, change: ConnectionChange): Promise<void>;
+
+  /* Collaboration, in the current workspace. Everything is an ordinary event, so agents and peers see it alike. */
+  openCollab(f: CollabForm): void;
+  createTask(ch: string, title: string, o: { assignee?: string | undefined; due?: number | undefined; src?: string | undefined }): string | undefined;
+  updateTask(id: string, patch: Omit<TaskSetBody, 'id'>): void;
+  postPoll(ch: string, poll: PollSpec): void;
+  vote(m: Msg, choices: number[]): void;
+  postMeeting(ch: string, meet: MeetSpec): void;
+  rsvp(m: Msg, going: 'yes' | 'no' | 'maybe'): void;
+  decide(m: Msg, on: boolean): void;
+  /** Makes a doc or board in `ch` and opens it. */
+  createDoc(ch: string, title: string, kind: DocKind): string | undefined;
+  renameDoc(id: string, title: string): void;
+  /** Archives the doc on screen and goes back to the list. */
+  archiveDoc(id: string): void;
+  /** Saves a text doc's new content as one CRDT op (only what changed). */
+  editDoc(d: Doc, text: string): void;
+  /** Accepting applies the change to the doc too (if its text is still there). */
+  resolveSuggestion(d: Doc, x: Suggestion, accept: boolean): void;
+  putNote(d: Doc, note: Note): void;
+  removeNote(d: Doc, noteId: string): void;
+  /** Saves a message for later, or stops, privately (only my devices get it). */
+  save(msgId: string, on: boolean): void;
+  setFocus(on: boolean): void;
+  /** The caret's line in a text doc, for others' cursors (none when I leave it). */
+  setCursor(cur?: { doc: string; line: number }): void;
+  follow(pub: string | null): void;
 }
 
 /** The side panel after navigating: a thread route opens its thread; leaving one closes the thread panel. */
@@ -184,9 +241,18 @@ const initialState = (): AppData => ({
   highlight: null,
   installable: false,
   standalone: false,
+  collab: null,
+  following: null,
+  focus: false,
 });
 
 let typingTimer: ReturnType<typeof setTimeout> | null = null;
+/** `here`'s address for events only my own devices get. */
+const SELF = Symbol('self');
+/** When each conversation's read mark last went to my other devices (code/ch → ms). */
+const readSynced = new Map<string, number>();
+/** Read marks reach my other devices at most this often per conversation. */
+const READ_SYNC_MS = 30_000;
 let readTimer: ReturnType<typeof setTimeout> | null = null;
 let toastId = 0;
 
@@ -263,7 +329,7 @@ export const useApp = create<AppState>((set, get) => {
       if (!n) continue;
       // In my hand and looking elsewhere in the app: a buzz says something arrived for me.
       if (!document.hidden) haptic('notice');
-      if (settings.notifications) void announce(n, () => get().go({ code, ch: n.ch }));
+      if (settings.notifications && !get().focus) void announce(n, () => get().go({ code, ch: n.ch }));
     }
   };
 
@@ -341,6 +407,24 @@ export const useApp = create<AppState>((set, get) => {
     }
     set((st) => ({ tick: st.tick + 1 }));
   };
+  /** Tells the current workspace what I'm looking at (presence `view`), for "who's here" and following. */
+  const syncView = () => {
+    const { route, panel } = get();
+    const p = getPeer(route.code);
+    const view = viewOf(route, panel);
+    if (p && p.myPresence.view !== view) p.setPresence({ view, ...(panel.type === 'doc' ? {} : { cur: undefined }) });
+  };
+  /**
+   * Publishes in the current workspace, if any. `to` addresses it: within a private conversation (its channel id:
+   * to the other side), or to myself (my other devices only).
+   */
+  const here = <B>(f: Omit<EventFields<B>, 'ws'>, to?: string | typeof SELF) => {
+    const { route, identity } = get();
+    if (!route.code || !identity) return undefined;
+    const aim = to === SELF ? { to: identity.pub } : to ? addressed(to, identity.pub) : {};
+    return get().publish(route.code, { ...f, ...aim });
+  };
+
   const startBridge = (id: Identity) => bridge.autoStart({ phrase: id.phrase, name: id.name, handle: id.handle });
 
   const applyTheme = (t: Settings['theme']) => {
@@ -361,6 +445,7 @@ export const useApp = create<AppState>((set, get) => {
     }
     if (pendingInvite && pendingInvite.code !== r.code) pendingInvite = null;
     set({ route: r, drawer: false, highlight: null, panel: panelFor(r, get().panel) });
+    syncView();
     if (!get().identity) return; // onboarding: keep the invite for createIdentity
     const invite = pendingInvite;
     const fromOutside = entry;
@@ -499,6 +584,7 @@ export const useApp = create<AppState>((set, get) => {
     },
     setPanel(panel) {
       set({ panel });
+      syncView();
     },
     setDialog(dialog) {
       set({ dialog });
@@ -582,10 +668,18 @@ export const useApp = create<AppState>((set, get) => {
       const rec = get().workspaces.find((w) => w.code === code);
       if (!rec) return;
       closeNotifications(code, ch);
-      const lastRead = { ...rec.lastRead, [ch]: Date.now() };
+      const at = Date.now();
+      const lastRead = { ...rec.lastRead, [ch]: at };
       set({ workspaces: get().workspaces.map((w) => (w.code === code ? { ...w, lastRead } : w)) });
       if (readTimer) clearTimeout(readTimer);
       readTimer = setTimeout(() => void persist('workspaces', get().workspaces), 500);
+      // My other devices learn it too (privately: addressed to myself), at most every READ_SYNC_MS per conversation.
+      const me = get().identity?.pub;
+      const key = code + '/' + ch;
+      if (me && at - (readSynced.get(key) ?? 0) >= READ_SYNC_MS) {
+        readSynced.set(key, at);
+        get().publish(code, { t: 'read', to: me, b: { ch, ts: at } });
+      }
     },
 
     toggleMute(code, ch) {
@@ -655,6 +749,85 @@ export const useApp = create<AppState>((set, get) => {
       if (!rec) return;
       // The record's name follows the workspace's own (see onState).
       bridge.send({ t: 'ws.join', code, name: rec.name, transport: rec.transport, creator: rec.creator, agents: agentIds });
+    },
+
+    openCollab(collab) {
+      set({ collab, dialog: 'collab' });
+    },
+
+    createTask(ch, title, o) {
+      const id = newId();
+      const e = here({
+        t: 'task',
+        b: { id, title: title.trim(), ch, ...(o.src ? { src: o.src } : {}), ...(o.assignee ? { assignee: o.assignee } : {}), ...(o.due ? { due: o.due } : {}) },
+      });
+      return e && id;
+    },
+    updateTask(id, patch) {
+      here({ t: 'task.set', b: { id, ...patch } });
+    },
+    postPoll(ch, poll) {
+      here({ t: 'msg', ch, b: { text: poll.q, poll } }, ch);
+    },
+    vote(m, choices) {
+      here({ t: 'vote', b: { target: m.id, choices } }, m.ch);
+    },
+    postMeeting(ch, meet) {
+      here({ t: 'msg', ch, b: { text: meet.title, meet } }, ch);
+    },
+    rsvp(m, going) {
+      here({ t: 'rsvp', b: { target: m.id, going } }, m.ch);
+    },
+    decide(m, on) {
+      here({ t: 'decide', b: { target: m.id, text: '', on } }, m.ch);
+    },
+    createDoc(ch, title, kind) {
+      const id = newId();
+      if (!here({ t: 'doc', b: { id, title: title.trim(), ch, kind } })) return undefined;
+      get().setPanel({ type: 'doc', id });
+      return id;
+    },
+    renameDoc(id, title) {
+      here({ t: 'doc.set', b: { id, title: title.trim() } });
+    },
+    archiveDoc(id) {
+      here({ t: 'doc.set', b: { id, archived: true } });
+      get().setPanel({ type: 'work', id: 'docs' });
+    },
+    editDoc(d, text) {
+      const u = textOp(d.ops, text);
+      if (u) here({ t: 'doc.op', b: { doc: d.id, u } });
+    },
+    resolveSuggestion(d, x, accept) {
+      const next = accept ? applySuggestion(docText(d.ops), x.find, x.replace) : null;
+      if (accept && next === null) {
+        get().toast({ tone: 'danger', title: 'That text has changed since', description: 'Edit the doc by hand, or reject the suggestion.' });
+        return;
+      }
+      here({ t: 'suggest.res', b: { target: x.id, accept } });
+      if (next !== null) get().editDoc(d, next);
+    },
+    putNote(d, note) {
+      here({ t: 'doc.op', b: { doc: d.id, u: notePutOp(d.ops, note) } });
+    },
+    removeNote(d, noteId) {
+      const u = noteRemoveOp(d.ops, noteId);
+      if (u) here({ t: 'doc.op', b: { doc: d.id, u } });
+    },
+    save(msgId, on) {
+      here({ t: 'save', b: { target: msgId, on } }, SELF);
+      get().toast(on ? { title: 'Saved for later', description: 'Find it under Saved in the hub, on all your devices.' } : { title: 'Removed from saved' });
+    },
+    setFocus(focus) {
+      set({ focus });
+      for (const p of allPeers()) p.setPresence({ focus: focus || undefined });
+    },
+    setCursor(cur) {
+      const p = getPeer(get().route.code);
+      if (p && JSON.stringify(p.myPresence.cur) !== JSON.stringify(cur)) p.setPresence({ cur });
+    },
+    follow(following) {
+      set({ following });
     },
 
     async updateConnection(code, change) {

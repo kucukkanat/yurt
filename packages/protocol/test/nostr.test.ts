@@ -75,6 +75,19 @@ afterEach(async () => {
 });
 
 describe('nostr transport', () => {
+  it('keeps collaboration for everyone, and what I keep for myself sealed for my own devices', async () => {
+    const a = await join(A);
+    a.publish({ t: 'ch.create', b: { id: 'general', name: 'general' } });
+    a.publish({ t: 'doc', b: { id: 'd1', title: 'Spec', ch: 'general', kind: 'text' } });
+    const save = a.publish({ t: 'save', to: A.pub, b: { target: 'm1', on: true } });
+    await until(() => a.queued.size === 0);
+    a.leave();
+    const a2 = await join(A);
+    const b = await join(B);
+    await until(() => a2.state.saved.get(A.pub)?.[0] === 'm1' && b.state.docs.has('d1'), 10_000, 'backfill');
+    expect(b.events.has(save.id)).toBe(false);
+  });
+
   it('keeps history on the relay for members who join after the author left', async () => {
     const a = await join(A);
     a.publish({ t: 'ws.create', b: { name: 'Northwind' } });
