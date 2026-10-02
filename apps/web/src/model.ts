@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { agentKey, agentPrefs, fingerprint, liveAgents, members, mentions, type WsState, type WorkspacePeer, type Msg } from '@yurt/protocol';
+import { agentKey, agentPrefs, fingerprint, liveAgents, members, mentions, inMyThread, type WsState, type WorkspacePeer, type Msg } from '@yurt/protocol';
 import { isDirect, guestDmTitle, type AgentPrefs } from './lib/private';
 export { prefsLine } from './lib/private';
 import { useApp, type WsRecord, type AppState } from './store';
@@ -7,6 +7,7 @@ import { CALM, type FaviconState } from './lib/favicon';
 import { getPeer } from './lib/net';
 import { presenceNow } from './lib/visibility';
 import { readUpTo } from './lib/collab';
+import { must } from './ui/must';
 
 export interface Person {
   id: string;
@@ -162,15 +163,22 @@ export function roster(state: WsState | undefined, peer: WorkspacePeer | undefin
 export function unread(state: WsState, rec: WsRecord | undefined, ch: string, me: string, handle: string) {
   // Read here, or on another of my devices (read marks sync privately).
   const last = readUpTo(rec?.lastRead[ch], state, me, ch);
+  const top = (state.channelMsgs.get(ch) ?? []).map((id) => state.msgs.get(id)).filter((x): x is Msg => !!x);
   // Newest first, stopping at the first message already read.
-  const newest = (state.channelMsgs.get(ch) ?? [])
-    .map((id) => state.msgs.get(id))
-    .filter((x): x is Msg => !!x)
-    .reverse();
+  const fresh: Msg[] = [];
+  for (const x of [...top].reverse()) {
+    if (x.ts <= last) break;
+    fresh.push(x);
+  }
+  // Plus newer replies in threads I'm in, however old the thread (one also sent to the channel is already listed).
+  for (const x of top)
+    for (const id of x.replies) {
+      const r = must(state.msgs.get(id), 'a reply is in the state');
+      if (r.ts > last && !r.alsoInChannel && inMyThread(r, state, me)) fresh.push(r);
+    }
   let n = 0;
   let m = 0;
-  for (const x of newest) {
-    if (x.ts <= last) break;
+  for (const x of fresh) {
     if ((x.a === me && !x.ag) || x.deleted) continue;
     n++;
     if (mentions(x.text).includes(handle) || isDirect(ch) || (ch.startsWith('adm:') && x.approval)) m++;

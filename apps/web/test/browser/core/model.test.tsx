@@ -149,6 +149,34 @@ describe('conversations', () => {
     const read = app().workspaces.find((w) => w.code === code);
     expect(unread(state(), read, 'general', me.pub, 'ada')).toEqual({ n: 0, m: 0 });
   });
+
+  it('counts replies in threads I started or replied to, however old the thread, until the conversation is read', async () => {
+    const mine = app().publish(code, { t: 'msg', ch: 'general', b: { text: 'my plan' } });
+    const theirs = olu.peer.publish({ t: 'msg', ch: 'general', b: { text: 'their plan' } });
+    const joined = olu.peer.publish({ t: 'msg', ch: 'general', b: { text: 'another' } });
+    if (!mine) throw new Error('not published');
+    app().publish(code, { t: 'msg', ch: 'general', b: { text: 'count me in', parent: joined.id } });
+    await until(() => state().msgs.get(joined.id)?.replies.length === 1, 'my reply');
+    app().markRead(code, 'general');
+    // Replies from a later millisecond than the read mark: one in the same millisecond counts as read.
+    const readAt = app().workspaces.find((w) => w.code === code)?.lastRead.general ?? 0;
+    await until(() => Date.now() > readAt, 'the clock to move on');
+    const reply = (parent: string, text: string, alsoInChannel?: boolean) =>
+      bea.peer.publish({ t: 'msg', ch: 'general', b: { text, parent, ...(alsoInChannel ? { alsoInChannel } : {}) } });
+    reply(mine.id, 'looks good');
+    reply(joined.id, 'hey @ada');
+    reply(mine.id, 'and here', true);
+    reply(theirs.id, 'not my thread');
+    await until(
+      () => state().msgs.get(theirs.id)?.replies.length === 1 && state().msgs.get(mine.id)?.replies.length === 2 && state().msgs.get(joined.id)?.replies.length === 2,
+      'the replies',
+    );
+    const rec = () => app().workspaces.find((w) => w.code === code);
+    // The reply also sent to the channel counts once.
+    expect(unread(state(), rec(), 'general', me.pub, 'ada')).toEqual({ n: 3, m: 1 });
+    app().markRead(code, 'general');
+    expect(unread(state(), rec(), 'general', me.pub, 'ada')).toEqual({ n: 0, m: 0 });
+  });
 });
 
 describe('the tab icon’s state', () => {

@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { Icon, IconButton, Button, Tooltip, Kbd, Avatar, DayDivider, UnreadDivider, TypingIndicator, ConnectionBanner } from '@yurt/ui';
 import { agentKey, parseGuestDm, type Channel, type Msg, type WorkspacePeer, type WsState } from '@yurt/protocol';
 import { useApp } from '../store';
@@ -29,9 +29,45 @@ export function useTyping(ch: string) {
   return out;
 }
 
-function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: string[]; ctx: MsgCtx; lastRead: number; emptyState?: React.ReactNode; highlight?: string | null }) {
+/** Whether the reader is taking in this window right now. For now: the page is visible. */
+function useAttentive(): boolean {
+  return useSyncExternalStore(onAttentionChange, () => attentive(document));
+}
+
+/**
+ * Messages from others that arrived while the reader wasn't following live (scrolled up, or not `attentive`), oldest first, and where
+ * the New divider goes: before the first of them, staying there once they're seen until the next batch arrives. Before any batch it's
+ * the first message newer than `lastRead`, the read mark on entering.
+ */
+function useFresh(ids: string[], ctx: MsgCtx, live: boolean, lastRead: number) {
+  // What the reader has seen live; the list is keyed per conversation, so it starts as what was there on entering.
+  const [seen, setSeen] = useState(() => new Set(ids));
+  const [settled, setSettled] = useState<string | undefined>();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `ids` only grows; its length says when
+  useEffect(() => {
+    if (live) setSeen(new Set(ids));
+  }, [live, ids.length]);
+  const others = (m: Msg) => !(m.a === ctx.me && !m.ag) && !m.deleted;
+  const fresh = live ? [] : ids.filter((id) => !seen.has(id) && others(must(ctx.state.msgs.get(id), 'a listed message is in the state')));
+  const first = fresh[0];
+  useEffect(() => {
+    if (first) setSettled(first);
+  }, [first]);
+  const divider =
+    first ??
+    settled ??
+    ids.find((id) => {
+      const m = must(ctx.state.msgs.get(id), 'a listed message is in the state');
+      return lastRead > 0 && m.ts > lastRead && !(m.a === ctx.me && !m.ag);
+    });
+  return { count: fresh.length, divider };
+}
+
+function MessageList(p: { ids: string[]; ctx: MsgCtx; lastRead: number; attentive: boolean; emptyState?: React.ReactNode; highlight?: string | null }) {
+  const { ids, ctx, highlight } = p;
   const scroller = useRef<HTMLDivElement>(null);
   const [away, setAway] = useState(false);
+  const { count, divider } = useFresh(ids, ctx, p.attentive && !away, p.lastRead);
   // The list is mounted whenever these run (effects, its own button).
   const toBottom = (smooth?: boolean) => {
     const el = must(scroller.current, 'the message list is mounted');
@@ -58,7 +94,6 @@ function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: strin
   const rows: React.ReactNode[] = [];
   let prev: Msg | null = null;
   let day = '';
-  let unreadShown = false;
   // Every id the reducer lists for a conversation is one of its messages.
   for (const m of ids.map((id) => ctx.state.msgs.get(id)).filter((x): x is Msg => !!x)) {
     const id = m.id;
@@ -68,8 +103,7 @@ function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: strin
       prev = null;
       rows.push(<DayDivider key={'d' + id} label={d} />);
     }
-    if (!unreadShown && lastRead && m.ts > lastRead && !(m.a === ctx.me && !m.ag)) {
-      unreadShown = true;
+    if (id === divider) {
       prev = null;
       rows.push(<UnreadDivider key={'u' + id} />);
     }
@@ -80,12 +114,13 @@ function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: strin
   return (
     <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
       <div ref={scroller} onScroll={onScroll} role="log" aria-live="polite" style={{ position: 'absolute', inset: 0, overflow: 'auto', padding: '12px 8px 16px' }}>
-        {emptyState}
+        {p.emptyState}
         {rows}
       </div>
       {away && (
         <button
           type="button"
+          data-testid="jump-latest"
           onClick={() => toBottom(true)}
           style={{
             position: 'absolute',
@@ -108,7 +143,7 @@ function MessageList({ ids, ctx, lastRead, emptyState, highlight }: { ids: strin
           }}
         >
           <Icon name="arrow-down" size={14} />
-          Jump to latest
+          {count ? count + (count === 1 ? ' new message' : ' new messages') : 'Jump to latest'}
         </button>
       )}
     </div>
@@ -413,7 +448,7 @@ function GuestNotice({ c }: { c: Extract<Conversation, { kind: 'guest' }> }) {
   );
 }
 
-/** Freezes "last read" on entering a conversation, so the New divider stays put while you read; marks it read as messages arrive while I'm looking (and when I look again). */
+/** Freezes "last read" on entering a conversation, where the New divider starts (MessageList moves it on); marks it read as messages arrive while I'm looking (and when I look again). */
 function useReadMarks(code: string, ch: string, count: number): number {
   const { rec, state, identity } = useCurrent();
   const lastRead = readUpTo(rec?.lastRead[ch], state, identity.pub, ch);
@@ -534,6 +569,7 @@ function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: stri
   const me = identity.pub;
   const ids = state.channelMsgs.get(ch) || [];
   const entryRead = useReadMarks(code, ch, ids.length);
+  const attentive = useAttentive();
 
   const c = conversationOf(state, peer, ch, me);
   if (!c) return <Centered title="Channel not synced yet" body="It shows up once it arrives from the workspace’s relays." />;
@@ -585,7 +621,7 @@ function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: stri
       <FollowBar />
       <Banners c={c} online={online} />
       <HuddleStrip ch={ch} />
-      <MessageList key={code + ch} ids={ids} ctx={ctx} lastRead={entryRead} emptyState={ids.length ? null : <EmptyState c={c} />} highlight={highlight} />
+      <MessageList key={code + ch} ids={ids} ctx={ctx} lastRead={entryRead} attentive={attentive} emptyState={ids.length ? null : <EmptyState c={c} />} highlight={highlight} />
       <ComposerArea c={c} code={code} ch={ch} draftKey={draftKey} narrow={narrow} people={people} dropFiles={drop.files} placeholder={composerPlaceholder(c, title)} note={note} />
       {drop.dragging && (
         <div

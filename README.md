@@ -101,6 +101,7 @@ Everything here works without the bridge and stays as private as the workspace (
 - **Polls** count votes live and can close at a set time; **meetings** collect RSVPs and show when they're on.
 - **Docs** are written by everyone at once and merge (CRDT); you see who's in a doc and on which line. **Boards** hold sticky notes anyone adds, moves and recolors.
 - **Who's here**: avatars show who's in a conversation or doc. **Follow** someone from their profile to go where they look. **Focus mode** (☾ by your name) silences notifications, toasts and sounds and tells others you may answer later.
+- **Catching up**: scrolled up while messages arrive, the jump button counts them ("3 new messages") and a **New** line marks the first one, also for what arrived while the tab was in the background. Replies in threads you started or replied to count as unread in their conversation and notify you; an @mention in them counts like any mention.
 - What you've read syncs privately between your devices.
 
 ## Things to know

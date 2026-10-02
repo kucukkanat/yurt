@@ -92,11 +92,36 @@ describe('conditions a conversation can be in', () => {
     const log = page.getByRole('log').element();
     log.scrollTop = 0;
     log.dispatchEvent(new Event('scroll'));
-    // Scrolled away, a new message doesn't yank the view down; the button offers the way back.
+    const jump = page.getByTestId('jump-latest');
+    await expect.element(jump).toHaveTextContent('Jump to latest');
+    // Scrolled away, a new message doesn't yank the view down; the button counts what came in and offers the way back,
+    // and the New divider moves to the first of them.
     await bo.say({ t: 'msg', ch: 'general', b: { text: 'arrived while reading history' } });
     expect(log.scrollTop).toBe(0);
-    await page.getByRole('button', { name: 'Jump to latest' }).click();
+    await expect.element(jump).toHaveTextContent('1 new message');
+    await bo.say({ t: 'msg', ch: 'general', b: { text: 'and another' } });
+    await expect.element(jump).toHaveTextContent('2 new messages');
+    const divider = () => main().getByText('New', { exact: true }).element();
+    const above = (row: string) => !!(divider().compareDocumentPosition(main().getByText(row).element()) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(above('arrived while reading history') && !above('filler 29')).toBe(true);
+    await jump.click();
     await expect.poll(() => log.scrollHeight - log.scrollTop - log.clientHeight).toBeLessThan(160);
+    // Back at the bottom: the count resets, and the divider settles where it was.
+    log.scrollTop = 0;
+    log.dispatchEvent(new Event('scroll'));
+    await expect.element(jump).toHaveTextContent('Jump to latest');
+    expect(above('arrived while reading history') && !above('filler 29')).toBe(true);
+    await jump.click();
+    await expect.poll(() => log.scrollHeight - log.scrollTop - log.clientHeight).toBeLessThan(160);
+    // At the bottom of a hidden page, new messages still get the divider.
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await bo.say({ t: 'msg', ch: 'general', b: { text: 'while you looked away' } });
+    await expect.poll(() => above('while you looked away') && !above('and another')).toBe(true);
+    // Dropping the own property brings back the real getter.
+    delete (document as { hidden?: boolean }).hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+    await expect.poll(() => above('while you looked away') && !above('and another')).toBe(true);
     // Read up to now, leave, and come back to new messages: a "New" divider above the first one that isn't mine
     // (my agent's message counts as new; one from my other device doesn't).
     go('random');
