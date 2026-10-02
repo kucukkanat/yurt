@@ -15,7 +15,8 @@ Yurt is a serverless, end-to-end encrypted team chat with optional AI agents. A 
 | `e2e` | | Playwright specs |
 | `.claude/skills/native-web-app` | | Generic agent skill: making any web app/PWA feel native (references + starter templates). Not built or linted here (excluded in `biome.json`, `knip.json`, `.jscpd.json`) |
 
-Protocol details: `docs/PROTOCOL.md`. Product overview: `README.md`.
+Protocol details: `docs/PROTOCOL.md`. Product overview: `README.md`. Web Push options (design note, not built):
+`docs/PUSH.md`.
 
 Every workspace is a Nostr relay workspace: events and presence go over its relays, files over Blossom. WebRTC
 (Trystero, signaled over the workspace's relays) is only for calls: voice, video and screen sharing. The bridge never
