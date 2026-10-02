@@ -12,6 +12,7 @@ import { Composer, editLastMessage } from './Composer';
 import { HuddleStrip, HuddleButton, HuddleDock } from './Huddle';
 import { must } from './must';
 import { Viewers, FollowBar } from './Collab';
+import { MenuButton } from './MenuButton';
 
 const GROUP_MS = 5 * 60 * 1000;
 
@@ -561,7 +562,7 @@ function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: stri
           flexShrink: 0,
         }}
       >
-        {narrow && <IconButton icon="menu" label="Open sidebar" size="sm" onClick={() => useApp.setState({ drawer: true })} />}
+        {narrow && <MenuButton />}
         <ConversationTitle c={c} title={title} narrow={narrow} muted={!!rec?.muted.includes(ch)} />
         <Viewers view={ch} />
         {huddles && <HuddleButton ch={ch} />}

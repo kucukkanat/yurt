@@ -3,6 +3,8 @@ import { commands, page, userEvent } from 'vitest/browser';
 import { newRecoveryPhrase } from '@yurt/protocol';
 import { useApp } from '../../../src/store';
 import { haptic } from '../../../src/lib/haptics';
+import { CHIME_GAP_MS } from '../../../src/lib/alerts';
+import { chime } from '../../../src/lib/chime';
 import { install, isIos, isStandalone, offerInstall, setBadge, watchInstall } from '../../../src/lib/pwa';
 import { trackViewport } from '../../../src/lib/viewport';
 import { resetDb } from './harness';
@@ -28,6 +30,15 @@ describe('haptics', () => {
     expect(haptic('notice')).toBe(false);
     await commands.reduceMotion(false);
     expect(haptic('notice')).toBe(true);
+  });
+});
+
+describe('the new-message chime', () => {
+  it('plays through Web Audio, at most once per gap', () => {
+    const t = Date.now();
+    expect(chime(t)).toBe(true);
+    expect(chime(t + CHIME_GAP_MS - 1)).toBe(false); // a burst is one sound
+    expect(chime(t + CHIME_GAP_MS)).toBe(true);
   });
 });
 

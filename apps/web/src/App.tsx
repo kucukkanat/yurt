@@ -161,9 +161,10 @@ function Toasts() {
       }}
     >
       {toasts.map((t) => (
-        <div key={t.id} style={{ pointerEvents: 'auto', maxWidth: '100%' }}>
+        <div key={t.id} data-testid={t.testId} style={{ pointerEvents: 'auto', maxWidth: '100%' }}>
           <Toast
             tone={t.tone}
+            icon={t.icon}
             title={t.title}
             description={t.description}
             actionLabel={t.actionLabel}

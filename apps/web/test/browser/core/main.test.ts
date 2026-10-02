@@ -1,7 +1,7 @@
 // Static, so Vite's dependency scan sees react-dom/client before main.tsx is imported dynamically; discovering it
 // mid-run would re-optimise and reload the page with a second copy of React.
 import 'react-dom/client';
-import { afterAll, beforeAll, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 import { newRecoveryPhrase } from '@yurt/protocol';
 import { kv } from '../../../src/lib/db';
 import { getPeer } from '../../../src/lib/net';
@@ -36,4 +36,5 @@ it('starts the app, renders it, and updates the tab icon on changes', async () =
   useApp.setState({ online: true });
   document.dispatchEvent(new Event('visibilitychange')); // and so does the tab's visibility changing
   await until(() => document.querySelector<HTMLLinkElement>('link[rel~="icon"]')?.href.startsWith('data:image/svg') === true, 'the plain icon');
+  expect(document.title).not.toMatch(/^\(\d+\) /); // nothing alerting unread: the title has no count
 });

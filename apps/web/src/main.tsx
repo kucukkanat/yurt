@@ -10,6 +10,7 @@ import { getPeer } from './lib/net';
 import { isStandalone, offerInstall, setBadge, watchInstall } from './lib/pwa';
 import { startServiceWorker } from './lib/swClient';
 import { trackViewport } from './lib/viewport';
+import { titleWith } from './lib/alerts';
 
 watchInstall();
 trackViewport();
@@ -19,9 +20,13 @@ useApp.subscribe(offerInstall); // it waits for an identity, and offers only onc
 void startServiceWorker();
 const iconState = () => faviconStateOf(useApp.getState(), getPeer, !document.hidden);
 const favicon = installFavicon(iconState);
+const baseTitle = document.title;
 const refresh = () => {
   favicon.update();
-  setBadge(iconState().mentions); // the home-screen icon counts what the tab icon badges
+  // The home-screen icon and the tab title count every alerting unread message, like the tab icon's badge.
+  const alerting = iconState().mentions;
+  setBadge(alerting);
+  document.title = titleWith(baseTitle, alerting);
 };
 useApp.subscribe(refresh);
 document.addEventListener('visibilitychange', refresh);

@@ -98,3 +98,7 @@ Pages once the build and tests pass. Shared setup (Bun, Node, cached Chromium) i
 - The iOS keyboard pans the page instead of resizing it. `lib/viewport.ts` (`viewportVars`, unit tested) sizes and
   moves the app to the visible area only while a keyboard is up (`--app-height`, `--app-top`, `--safe-bottom: 0`);
   otherwise CSS `100%` stands, because an installed iOS app's visual viewport can be short by the status bar.
+- New-message signals share two sources: the store's `onFresh` Notice (OS notification, toast, chime; what each gets is
+  `lib/alerts.ts` `inAppAlerts`, unit tested) and `model.ts` `unreadEverywhere` (favicon, app badge, tab title, the
+  narrow menu button). Add a signal there rather than another counter. The chime is generated with Web Audio
+  (`lib/chime.ts`), no sound file.
