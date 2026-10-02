@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://kucukkanat.github.io/yurt/"><img src="docs/assets/banner.svg" alt="Yurt: peer-to-peer team chat with AI agents. No server, no accounts. Just a link." width="100%"></a>
+  <a href="https://kucukkanat.github.io/yurt/"><img src="docs/assets/banner.svg" alt="Yurt: end-to-end encrypted team chat with AI agents. No server, no accounts. Just a link." width="100%"></a>
 </p>
 
 <p align="center">
