@@ -1,7 +1,8 @@
+<!-- verified 2026-10-02: 3 corrections -->
 # Service worker, offline, push, storage and lifecycle
 
-How an installed web app starts from disk, updates without pulling the UI out from under the user, notifies while closed, keeps its data, and survives being suspended, killed and relaunched. Support is as of Oct 2026 (MDN browser-compat-data: Chrome 154, Safari 27, Firefox 157, plus vendor notes).
-TS snippets compile under `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. Worker snippets (`// sw.ts`) assume their own tsconfig with lib `["ES2022", "WebWorker"]` and `declare const self: ServiceWorkerGlobalScope`. Names like `saveDrafts()`, `toast()` or `router` stand for your own code. Working code: [sw.ts](../templates/sw.ts), [sw-client.ts](../templates/sw-client.ts), [sw-logic.ts](../templates/sw-logic.ts), [lifecycle.ts](../templates/lifecycle.ts).
+How an installed web app starts from disk, updates without yanking the UI, notifies while closed, keeps its data, and survives suspension and relaunch. Support as of Oct 2026 (MDN BCD 8.1: Chrome 154, Safari 27, Firefox 157).
+Worker snippets (`// sw.ts`) assume their own tsconfig with lib `["ES2022", "WebWorker"]` and `declare const self: ServiceWorkerGlobalScope`. Names like `saveDrafts()`, `toast()`, `router` are your code. Working code: [sw.ts](../templates/sw.ts), [sw-client.ts](../templates/sw-client.ts), [sw-logic.ts](../templates/sw-logic.ts), [lifecycle.ts](../templates/lifecycle.ts).
 
 ## Checklist
 
@@ -48,7 +49,7 @@ TS snippets compile under `strict`, `noUncheckedIndexedAccess` and `exactOptiona
 
 ## Precache the app shell with Workbox (injectManifest vs generateSW)
 
-At install time, precache the hashed build output and `index.html` so every launch is served from disk, online or offline. That removes the blank screen, the browser's offline dinosaur and the cold start that waits on the network. `generateSW` writes the worker for you. `injectManifest` injects the file list (`self.__WB_MANIFEST`) into your own `sw.ts`, and you need it as soon as you have push, `notificationclick` or message handling.
+Precache the hashed build and `index.html` at install so every launch comes from disk: no blank screen, no offline dinosaur. `generateSW` writes the worker; `injectManifest` injects `self.__WB_MANIFEST` into your own `sw.ts`, which you need once you have push, `notificationclick` or messages.
 
 ```ts
 // sw.ts
@@ -62,23 +63,23 @@ precacheAndRoute(self.__WB_MANIFEST);
 registerRoute(new NavigationRoute(createHandlerBoundToURL('index.html'), { denylist: [/^\/api\//] }));
 ```
 
-With Vite: `VitePWA({ strategies: 'injectManifest', srcDir: 'src', filename: 'sw.ts', injectRegister: false, registerType: 'prompt', injectManifest: { globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'] } })`. With `injectRegister: false` the page registers the worker itself, which the update prompt needs.
+With Vite: `VitePWA({ strategies: 'injectManifest', srcDir: 'src', filename: 'sw.ts', injectRegister: false, registerType: 'prompt', injectManifest: { globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'] } })`. `injectRegister: false` lets the page register the worker itself, as the update prompt needs.
 
-**Support:** Service workers: Chrome 40+, Firefox 44+, Safari 11.1+, iOS 11.3+ (tabs and Home Screen apps). Workbox 7.4.1 and vite-plugin-pwa 1.3.0 are current.
+**Support:** Service workers: Chrome 40+, Firefox 44+, Safari 11.1+, iOS 11.3+ (tabs and Home Screen apps). Workbox 7, vite-plugin-pwa 1.x.
 
 **Gotchas:**
-- Precache only the shell. Large media or locale bundles slow the first install and are downloaded again on every revision. Workbox skips files over `maximumFileSizeToCacheInBytes` (2 MiB) with only a warning. vite-plugin-pwa 0.20.2+ turns that warning into a build error.
-- The DOM and WebWorker TS libs conflict in one program, so give `sw.ts` its own tsconfig.
-- Hash routes are served by `precacheAndRoute`'s `directoryIndex` alone. History routes need the `NavigationRoute`, with a denylist so API and file URLs don't receive `index.html`.
-- vite-plugin-pwa `generateSW` defaults to `cleanupOutdatedCaches: true` and `navigateFallback: 'index.html'`. `registerType: 'autoUpdate'` also turns on skipWaiting and clientsClaim. Avoid it; see [Update flow](#update-flow-waiting-worker-prompt-skip_waiting-message-reload-once).
-- Dev servers have no worker, so test offline start against the production build.
-- The cached shell is the first frame, so it should already look like the app: see [motion-performance.md](motion-performance.md#app-shell-instant-start-the-first-frame-comes-from-html-and-the-cache-not-from-js).
+- Precache only the shell. Workbox skips files over `maximumFileSizeToCacheInBytes` (2 MiB) with a warning; vite-plugin-pwa 0.20.2+ makes it a build error.
+- The DOM and WebWorker TS libs conflict, so give `sw.ts` its own tsconfig.
+- History routes need the `NavigationRoute` with a denylist so API and file URLs don't get `index.html`.
+- vite-plugin-pwa `registerType: 'autoUpdate'` turns on skipWaiting and clientsClaim; avoid it ([Update flow](#update-flow-waiting-worker-prompt-skip_waiting-message-reload-once)).
+- Dev servers have no worker; test offline start against the production build.
+- The cached shell is the first frame: [motion-performance.md](motion-performance.md#app-shell-instant-start-the-first-frame-comes-from-html-and-the-cache-not-from-js).
 
-**Sources:** https://developer.chrome.com/docs/workbox/modules/workbox-precaching · https://vite-pwa-org.netlify.app/guide/inject-manifest · https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API
+**Sources:** https://developer.chrome.com/docs/workbox/modules/workbox-precaching · https://vite-pwa-org.netlify.app/guide/inject-manifest
 
 ## Offline fallback page for network-first navigations
 
-In a server-rendered or multi-page app, navigations go to the network. When that fetch fails, serve a precached, self-contained offline page instead of the browser's error page. A branded "You're offline · Try again" screen looks like an app that can't reach its server. The browser's error page looks like a website.
+Multi-page or SSR apps navigate over the network. When that fails, serve a precached, self-contained "You're offline · Try again" page instead of the browser's error page.
 
 ```ts
 // sw.ts (multi-page / SSR apps)
@@ -99,24 +100,18 @@ offlineFallback({ pageFallback: '/offline.html' }); // precaches it at install; 
 </script>
 ```
 
-**Support:** Only Service Worker and Cache API features, so it works wherever service workers do. `workbox-recipes` ships with Workbox 7.
+**Support:** Everywhere service workers work. `workbox-recipes` ships with Workbox 7.
 
 **Gotchas:**
-- `offlineFallback` installs the single global `setCatchHandler`, which replaces any catch handler you set earlier.
-- An SPA with a precached shell doesn't need this, because the shell is its offline page. Show offline state inside the app instead ([navigation-ui-patterns.md](navigation-ui-patterns.md#designed-empty-loading-error-and-offline-states-on-every-screen)).
-- The page can use only what is cached. Inline its styles, and keep it within your CSP (an inline script needs a nonce or hash).
+- `offlineFallback` installs the global `setCatchHandler`, replacing any earlier one.
+- An SPA with a precached shell doesn't need it; show offline state in the app ([navigation-ui-patterns.md](navigation-ui-patterns.md#designed-empty-loading-error-and-offline-states-on-every-screen)).
+- Inline the page's styles; an inline script needs a CSP nonce or hash.
 
 **Sources:** https://developer.chrome.com/docs/workbox/modules/workbox-recipes · https://web.dev/articles/offline-fallback-page
 
 ## Pick a runtime caching strategy for each resource type, with expiry
 
-Route requests by kind:
-- Immutable or content-addressed files: CacheFirst with expiry.
-- Avatars and other non-critical data: StaleWhileRevalidate.
-- Fresh API data: NetworkFirst with a short timeout.
-- Personal or streaming traffic: network only.
-
-Images and fonts then appear instantly on revisits and offline, with no grey boxes or reflow, and a hung network can't freeze the UI past the timeout.
+Route by kind: immutable or content-addressed files → CacheFirst with expiry; avatars → StaleWhileRevalidate; fresh API data → NetworkFirst with a short timeout; personal or streaming traffic → network only. Media then appears instantly offline, and a hung network can't freeze the UI past the timeout.
 
 ```ts
 // sw.ts
@@ -134,20 +129,19 @@ registerRoute(({ url }) => url.pathname.startsWith('/api/feed'), new NetworkFirs
 registerRoute(({ url }) => url.pathname.startsWith('/avatars/'), new StaleWhileRevalidate({ cacheName: 'avatars-v1' }));
 ```
 
-**Support:** Cache API and Workbox strategies work in every engine that has service workers.
+**Support:** Every engine with service workers.
 
 **Gotchas:**
-- Opaque (no-cors) cross-origin responses hide their status, and Workbox's docs say Chrome counts each one as about 7 MB of quota. Request with `crossorigin="anonymous"` and CORS headers, and cache only status 200.
-- Never cache per-user API responses under a shared cache name unless you delete them on logout.
-- Content-addressed URLs (a hash in the path) suit CacheFirst with a long expiry. Don't runtime-cache what the precache already serves.
-- Put a version in runtime cache names, because Workbox never deletes them for you ([cleanup](#cleanupoutdatedcaches-plus-your-own-runtime-cache-cleanup)).
-- Cached audio or video needs `RangeRequestsPlugin`. Media elements (Safari especially) send Range requests, which a full cached 200 doesn't satisfy.
+- Opaque cross-origin responses hide their status, and Workbox says Chrome counts each as about 7 MB of quota. Use CORS (`crossorigin="anonymous"`) and cache only 200s.
+- Never cache per-user API responses in a shared cache unless you delete them on logout.
+- Version runtime cache names; Workbox never deletes them ([cleanup](#cleanupoutdatedcaches-plus-your-own-runtime-cache-cleanup)). Don't runtime-cache what the precache serves.
+- Cached audio/video needs `RangeRequestsPlugin`: media elements (Safari especially) send Range requests.
 
 **Sources:** https://developer.chrome.com/docs/workbox/caching-strategies-overview · https://developer.chrome.com/docs/workbox/serving-cached-audio-and-video
 
 ## Navigation preload (network-first navigations only)
 
-Navigation preload starts the navigation request while the worker boots, then hands the response to the fetch handler as `event.preloadResponse`. That removes the worker's startup delay (tens to hundreds of ms on phones) from every network-bound page load, so a site with a worker isn't slower than one without.
+Starts the navigation request while the worker boots and hands it over as `event.preloadResponse`, removing worker startup (tens to hundreds of ms on phones) from network-bound page loads.
 
 ```ts
 // sw.ts (with Workbox: navigationPreload.enable() from 'workbox-navigation-preload'; NetworkFirst then uses it)
@@ -163,18 +157,18 @@ self.addEventListener('fetch', (e) => {
 });
 ```
 
-**Support:** Chrome 59+, Firefox 99+, Safari 15.4+ / iOS 15.4+.
+**Support:** Chrome 59+, Firefox 99+, Safari/iOS 15.4+.
 
 **Gotchas:**
-- If navigations are served from a precached shell (a cache-first SPA), leave preload off, because it only wastes a request.
-- The server receives `Service-Worker-Navigation-Preload: true`. `navigationPreload.setHeaderValue()` can send a state hint so the server returns a smaller payload.
-- Once preload is enabled, always consume `preloadResponse`, or Chrome logs a cancelled-preload warning.
+- Leave it off when navigations come from a precached shell; it only wastes a request.
+- The server sees `Service-Worker-Navigation-Preload: true`; `setHeaderValue()` can send a hint.
+- Once enabled, always consume `preloadResponse`, or Chrome warns about a cancelled preload.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/NavigationPreloadManager · https://developer.chrome.com/docs/workbox/modules/workbox-navigation-preload
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/NavigationPreloadManager
 
 ## Service Worker Static Routing API (bypass the worker for some requests)
 
-During install, declare rules such as "these URLs go straight to the network" or "these come from cache". The browser then applies them without starting the worker. API calls, uploads and media streams skip worker startup and JS overhead, which matters most on cold launches on slow phones.
+Declare rules at install ("these URLs go to the network", "these from cache"); the browser applies them without starting the worker, so API calls and media skip worker startup on cold launches.
 
 ```ts
 // sw.ts
@@ -193,19 +187,19 @@ self.addEventListener('install', (e) => {
 });
 ```
 
-**Support:** Chrome/Edge 123+ (desktop and Android). Safari 27 on macOS and iOS (shipped Sept 2026). Not in Firefox. Engines without it ignore the rules, so always feature-detect.
+**Support:** Chrome/Edge 123+ (desktop, Android). Safari 27 (macOS and iOS). Not Firefox. Feature-detect.
 
 **Gotchas:**
 - Rules can be added only during install and are fixed for that worker version.
-- Workbox precache entries for unhashed files carry a `__WB_REVISION__` query, so a `{ cacheName }` source won't match them. Use `network` rules for traffic the worker never handles.
-- `urlPattern` must not contain regexp groups. Safari 27 enforces the spec's limits on rule count and nesting.
+- Workbox entries for unhashed files carry a `__WB_REVISION__` query, so a `{ cacheName }` source won't match them; use `network` rules.
+- `urlPattern` must not contain regexp groups; rule count and nesting are limited.
 - TS libs don't type `addRoutes` yet, hence the guard.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/InstallEvent/addRoutes · https://developer.chrome.com/blog/service-worker-static-routing · https://webkit.org/blog/18325/webkit-features-for-safari-27-0/
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/InstallEvent/addRoutes · https://webkit.org/blog/18325/webkit-features-for-safari-27-0/
 
 ## Update flow: waiting worker, prompt, SKIP_WAITING message, reload once
 
-Register with a prompt flow. When a new worker is waiting, show a persistent, non-modal "A new version is ready · Reload" toast. When the user accepts, save drafts, post `SKIP_WAITING` to the waiting worker, and reload once it takes control. Native apps update between launches and never pull the UI out from under you. Auto-update (skipWaiting plus clientsClaim) swaps code under a running page and can break it while someone is typing.
+When a new worker is waiting, show a persistent, non-modal "A new version is ready · Reload" toast. On accept: save drafts, post `SKIP_WAITING`, reload once it controls the page. Auto-update (skipWaiting plus clientsClaim) swaps code under a running page, possibly mid-typing.
 
 ```ts
 // page
@@ -231,24 +225,19 @@ const isSkipWaiting = (m: unknown): boolean => typeof m === 'object' && m !== nu
 self.addEventListener('message', (e) => { if (isSkipWaiting(e.data)) void self.skipWaiting(); });
 ```
 
-**Support:** Lifecycle events and `skipWaiting` work in every engine with service workers. `workbox-window` 7 provides `waiting`, `controlling` and `messageSkipWaiting()`. With Vite/React, vite-plugin-pwa's `registerSW({ onNeedRefresh })` or `useRegisterSW()` gives the same flow.
+**Support:** Every engine. `workbox-window` 7 provides `waiting`, `controlling`, `messageSkipWaiting()`. Vite/React: vite-plugin-pwa's `registerSW({ onNeedRefresh })` / `useRegisterSW()`.
 
 **Gotchas:**
-- A waiting worker activates only once every client of the scope has closed. Installed apps sit in the app switcher for days, so without a prompt an update may not apply until the OS kills the app.
-- Make the toast `role=status`, not a dialog, so it doesn't steal focus from a composer ([navigation-ui-patterns.md](navigation-ui-patterns.md#toasts-and-snackbars-top-layer-safe-areas-live-region-bounded-queue)). Reload only on an explicit click.
-- `waiting` also fires on load when a worker was already waiting from an earlier tab (`event.wasWaitingBeforeRegister`).
-- Guard the reload so DevTools "Update on reload" can't loop it.
-- Other open tabs also get `controlling`. Have them show the prompt instead of reloading.
+- A waiting worker activates only when every client closes; installed apps sit in the app switcher for days.
+- Make the toast `role=status`, not a dialog ([navigation-ui-patterns.md](navigation-ui-patterns.md#toasts-and-snackbars-top-layer-safe-areas-live-region-bounded-queue)). Reload only on a click.
+- `waiting` also fires on load for a worker already waiting (`event.wasWaitingBeforeRegister`).
+- Guard the reload so DevTools "Update on reload" can't loop it. Other tabs also get `controlling`: have them prompt, not reload.
 
-**Sources:** https://developer.chrome.com/docs/workbox/modules/workbox-window · https://vite-pwa-org.netlify.app/guide/prompt-for-update · https://web.dev/articles/service-worker-lifecycle
+**Sources:** https://developer.chrome.com/docs/workbox/modules/workbox-window · https://web.dev/articles/service-worker-lifecycle
 
 ## Apply waiting updates silently when nobody can notice
 
-Besides the prompt, apply the update at moments when nothing visible is lost:
-- At boot, before first paint: a waiting worker means the user hasn't seen this page yet, so activate it and reload behind the splash.
-- While the app is hidden and has no unsaved input.
-
-This matches native "updated on next launch" behaviour. Most users never see a prompt and still stay current.
+Also apply updates when nothing visible is lost: at boot before first paint (reload behind the splash), or while hidden with no unsaved input. Like native "updated on next launch", most users never see a prompt.
 
 ```ts
 // main.ts, before the first render
@@ -272,18 +261,18 @@ document.addEventListener('visibilitychange', () => {
 });
 ```
 
-**Support:** Standard Service Worker API, so every engine. Access to `sessionStorage` can throw when storage is blocked, hence the `try`.
+**Support:** Every engine. `sessionStorage` can throw when storage is blocked.
 
 **Gotchas:**
-- `skipWaiting` affects every tab of the scope. Other tabs must handle `controllerchange` by prompting, not by reloading.
-- Reloading a hidden page is invisible only if route, scroll and drafts are restored exactly.
-- iOS may suspend the page before the reload runs. That's harmless, because the new worker is active on the next launch.
+- `skipWaiting` affects every tab of the scope; other tabs must prompt on `controllerchange`.
+- A hidden reload is invisible only if route, scroll and drafts restore exactly.
+- iOS may suspend before the reload runs; harmless, the new worker is active next launch.
 
-**Sources:** https://web.dev/articles/service-worker-lifecycle · https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerContainer/controllerchange_event
+**Sources:** https://web.dev/articles/service-worker-lifecycle
 
 ## Check for updates during long-lived sessions
 
-Call `registration.update()` when the app becomes visible (throttled) and on an interval. Otherwise browsers check `sw.js` only on navigations and on functional events such as push or sync (at most once per 24 h). An installed SPA may never navigate again, so users keep running a weeks-old build while the team believes a fix has shipped.
+Browsers check `sw.js` only on navigations and functional events (at most once per 24 h). An installed SPA may never navigate, so call `registration.update()` when the app becomes visible (throttled) and hourly.
 
 ```ts
 const reg = await navigator.serviceWorker.ready;
@@ -297,17 +286,17 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 setInterval(check, 60 * 60_000);
 ```
 
-**Support:** `registration.update()`: Chrome 45+, Firefox 44+, Safari 11.1+. It returns a promise in all current engines.
+**Support:** Chrome 45+, Firefox 44+, Safari 11.1+.
 
 **Gotchas:**
-- `update()` rejects when offline or when the script fails to load, so always catch. vite-plugin-pwa's guide first fetches the worker URL with `cache: 'no-store'` and skips the update while the server is down.
-- An update found here flows into the `waiting` prompt above, so don't reload from here.
+- `update()` rejects offline or on a failed script load; always catch.
+- A found update flows into the `waiting` prompt; don't reload from here.
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerRegistration/update · https://vite-pwa-org.netlify.app/guide/periodic-sw-updates
 
 ## sw.js caching headers, a stable URL, scope, and a kill switch
 
-Serve `sw.js` and `index.html` with `Cache-Control: no-cache` and hashed assets as immutable. Never rename or move the worker. Keep the manifest's `scope` and `start_url` inside the worker's scope. Keep a self-destroying worker ready for emergencies. A stuck old worker is the worst web failure, because users run broken code indefinitely. A correct scope means the installed app always launches controlled, which is what makes offline work.
+Serve `sw.js` and `index.html` with `no-cache`, hashed assets as immutable. Never rename the worker. Keep manifest `scope` and `start_url` inside the worker scope so the installed app always launches controlled. Keep a self-destroying worker for emergencies: a stuck old worker runs broken code indefinitely.
 
 ```text
 /sw.js        Cache-Control: no-cache
@@ -330,19 +319,19 @@ self.addEventListener('activate', (e) => e.waitUntil((async () => {
 })()));
 ```
 
-**Support:** `updateViaCache`: Chrome 68+, Firefox 57+, Safari 11.1+. Its default, `imports`, already bypasses the HTTP cache for the main script, and browsers cap `sw.js` HTTP caching at 24 h anyway. `WindowClient.navigate` works in Safari only since 16 (before that it threw `NotSupportedError`).
+**Support:** `updateViaCache`: Chrome 68+, Firefox 57+, Safari 11.1+; its default (`imports`) already bypasses the HTTP cache for the main script. `WindowClient.navigate`: Safari 16+.
 
 **Gotchas:**
-- Renaming `sw.js` strands users, because pages served from the old precache keep registering the old URL.
-- Scope defaults to the script's directory. A wider scope needs the `Service-Worker-Allowed` response header.
-- Static hosts that can't set headers (GitHub Pages sends `max-age=600` for everything) are fine for `sw.js` thanks to `updateViaCache`, and Workbox revisions cover `index.html`.
-- If `start_url` or `scope` falls outside the worker scope, the installed app launches uncontrolled, with no offline support and no notification routing ([install-and-identity.md](install-and-identity.md#start_url-and-scope)).
+- Renaming `sw.js` strands users: the old precache keeps registering the old URL.
+- Scope defaults to the script's directory; wider needs `Service-Worker-Allowed`.
+- Hosts that can't set headers are fine for `sw.js` thanks to `updateViaCache`; Workbox revisions cover `index.html`.
+- `start_url` outside scope = uncontrolled launch, no offline ([install-and-identity.md](install-and-identity.md#start_url-and-scope)).
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerContainer/register · https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerRegistration/updateViaCache · https://web.dev/articles/service-worker-lifecycle
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerContainer/register · https://web.dev/articles/service-worker-lifecycle
 
 ## cleanupOutdatedCaches plus your own runtime-cache cleanup
 
-Call `cleanupOutdatedCaches()` to delete precaches left in older Workbox formats. Put a version in every runtime cache name and delete unknown caches in `activate`. Otherwise storage grows until the origin hits its quota and the browser evicts everything, which the user experiences as a fresh install with lost drafts.
+Call `cleanupOutdatedCaches()`, version every runtime cache name, and delete unknown caches on activate. Otherwise storage grows to quota and the browser evicts everything, drafts included.
 
 ```ts
 // sw.ts
@@ -355,17 +344,17 @@ self.addEventListener('activate', (e) => e.waitUntil((async () => {
 })()));
 ```
 
-**Support:** Cache API: every engine with service workers.
+**Support:** Every engine with service workers.
 
 **Gotchas:**
-- `cleanupOutdatedCaches` removes only precaches in older Workbox formats (after a Workbox upgrade). Within one format, `precacheAndRoute`'s own activate step deletes entries that left the manifest. Neither touches runtime caches.
-- Old chunks are deleted when the new worker activates. A tab still running the old build then can't lazy-load them offline, so reload it ([chunk errors](#recover-from-chunk-load-errors-after-a-deploy)).
+- `cleanupOutdatedCaches` removes only precaches in older Workbox formats; `precacheAndRoute` prunes entries that left the manifest. Neither touches runtime caches.
+- Old chunks vanish on activate, so a tab on the old build must reload ([chunk errors](#recover-from-chunk-load-errors-after-a-deploy)).
 
 **Sources:** https://developer.chrome.com/docs/workbox/modules/workbox-precaching
 
 ## Recover from chunk-load errors after a deploy
 
-A lazily imported chunk from the previous build may already be deleted by the host or the new worker. Catch that failure, save state and reload once, instead of showing a broken route. A blank panel or a "Failed to fetch dynamically imported module" crash after every release is a classic web tell. Native apps never half-update.
+A lazy chunk from the previous build may be gone. Catch the failure, save, reload once, instead of a blank panel or "Failed to fetch dynamically imported module".
 
 ```ts
 const isChunkLoadError = (r: unknown): boolean => r instanceof Error && (r.name === 'ChunkLoadError' || // webpack
@@ -380,18 +369,18 @@ window.addEventListener('vite:preloadError', recover); // Vite's own event
 window.addEventListener('unhandledrejection', (e) => { if (isChunkLoadError(e.reason)) recover(e); });
 ```
 
-**Support:** The import-failure messages are Chrome's, Firefox's and Safari's respectively. `vite:preloadError` is documented in Vite's build guide, and webpack throws `ChunkLoadError`. In React, the route's error boundary can offer "Reload" as the last resort.
+**Support:** The messages are Chrome's, Firefox's and Safari's. `vite:preloadError` is Vite's; webpack throws `ChunkLoadError`. In React, the route error boundary offers "Reload" as a last resort.
 
 **Gotchas:**
-- Vite's docs say to serve the HTML with `Cache-Control: no-cache`, or the old asset references come back.
-- Precache every lazy chunk (`globPatterns` includes `js`) so the running version stays self-consistent offline.
-- Hosts that replace the whole site on deploy (GitHub Pages, many CDNs) remove old chunks at once.
+- Serve the HTML with `no-cache`, or old asset references come back.
+- Precache every lazy chunk so the running version stays consistent offline.
+- Hosts that replace the whole site on deploy remove old chunks at once.
 
 **Sources:** https://vite.dev/guide/build#load-error-handling
 
 ## Take control on first install and announce 'Ready to work offline'
 
-Call `clientsClaim()` so the very first visit is controlled without a reload, then tell the user once that the app works offline. Without it, the first session is uncontrolled: runtime caching misses everything, and "open once, then go offline" fails.
+`clientsClaim()` makes the first visit controlled without a reload; otherwise "open once, then go offline" fails. Then say once that the app works offline.
 
 ```ts
 // sw.ts
@@ -407,15 +396,15 @@ wb.addEventListener('activated', (e) => { if (!e.isUpdate) toast({ title: 'Ready
 **Support:** `clients.claim()`: Chrome 42+, Firefox 44+, Safari 11.1+.
 
 **Gotchas:**
-- Claiming on first install is safe because the whole precache is already in place. With the prompt flow, a new version activates only after the user agrees, and the page reloads then anyway.
-- Show the offline notice at most once per device.
+- Safe on first install (the precache is complete); with the prompt flow, updates still wait for consent.
+- Show the notice at most once per device.
 - Field-tested: without `clientsClaim`, E2E tests must reload once before going offline.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Clients/claim · https://vite-pwa-org.netlify.app/guide/prompt-for-update
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Clients/claim
 
 ## Web Push subscription (VAPID, user gesture, userVisibleOnly)
 
-From a click, request notification permission, then call `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` and store the subscription (endpoint and keys) with your push sender. Messages then reach the user while the app is closed. Without push, a web app can notify only while it's open, which is the biggest functional gap against native.
+From a click, request permission, then `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` and store the subscription with your sender. Push is the only way to notify while the app is closed.
 
 ```ts
 const canPush = (): boolean => 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined';
@@ -433,21 +422,21 @@ export async function enablePush(vapidKey: Uint8Array<ArrayBuffer>): Promise<'un
 // Sender (e.g. npm web-push): sendNotification(sub, payload, { TTL: 3600, urgency: 'high', topic: 'chat-42' })
 ```
 
-**Support:** Chrome/Edge 42+ (desktop and Android), Firefox 44+ (desktop and Android), Safari 16+ on macOS 13+. On iOS/iPadOS 16.4+, push works only inside a Home Screen web app whose manifest `display` isn't `browser`, never in a Safari tab. iOS 26 opens every Home Screen site as a web app by default, but keep `display: standalone`.
+**Support:** Chrome/Edge 42+, Firefox 44+ (desktop and Android), Safari 16+ on macOS 13+. iOS/iPadOS 16.4+: only in a Home Screen web app, never a Safari tab. iOS 26 opens Home Screen sites as web apps by default; keep `display: standalone`.
 
 **Gotchas:**
-- Call `requestPermission` and `subscribe` from the same click. Firefox 72+ (Android 79+) requires a gesture for `subscribe`, and Safari and Firefox require one for the permission.
+- Call `requestPermission` and `subscribe` in the same click; Safari and Firefox require a gesture.
 - Encrypted payloads are limited to about 4 KB.
-- The `Topic` header (up to 32 URL-safe characters) collapses pending pushes for one thread. `Urgency: high` suits chat.
-- Push needs a sending server. Serverless and E2EE apps can get by with a tiny relay that holds the VAPID private key. RFC 8291 payload encryption needs only the subscription's `p256dh` and `auth`, so the sending client can encrypt and the relay adds only the VAPID `Authorization` header, never seeing plaintext.
-- Allow `*.push.apple.com` outbound. Apple rejects a VAPID JWT whose `sub` isn't a valid `mailto:` or `https:` URL.
-- Android 13+ also needs the OS-level notification permission for the browser.
+- `Topic` (≤32 URL-safe chars) collapses pending pushes per thread; `Urgency: high` suits chat.
+- E2EE/serverless: RFC 8291 encryption needs only `p256dh` and `auth`, so the client can encrypt and a tiny relay adds just the VAPID `Authorization`, never seeing plaintext.
+- Allow `*.push.apple.com`. Apple rejects a VAPID `sub` that isn't a valid `mailto:` or `https:` URL.
+- Android 13+ also needs the OS notification permission for the browser.
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/PushManager/subscribe · https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/ · https://www.rfc-editor.org/rfc/rfc8291
 
 ## Every push must show a notification (and set the badge)
 
-In the `push` handler, validate the payload, then always await `showNotification` inside `event.waitUntil`, and update the app badge in the same step. Safari revokes subscriptions whose pushes don't show anything, and Chrome shows a generic "This site has been updated in the background" instead. Either way the illusion breaks and delivery silently stops.
+In `push`, validate the payload and always await `showNotification` inside `waitUntil`, updating the badge in the same step. Safari revokes subscriptions whose pushes show nothing; Chrome shows a generic "updated in the background" notice.
 
 ```ts
 // sw.ts
@@ -461,20 +450,20 @@ self.addEventListener('push', (e) => {
 });
 ```
 
-**Support:** Push event: Chrome 40+, Firefox 44+, Safari 16 (macOS), iOS 16.4+ in Home Screen apps. Badging (in the worker too): Chrome desktop 81+ (ChromeOS 91), Safari 17 installed macOS apps, iOS 16.4+ Home Screen apps; not Chrome Android or Firefox. Full Badging API: [install-and-identity.md](install-and-identity.md#app-icon-badge-badging-api).
+**Support:** Push event: Chrome 40+, Firefox 44+, Safari 16 (macOS), iOS 16.4+ Home Screen apps. Badging: Chrome desktop 81+ (ChromeOS 91), Safari 17 installed macOS apps, iOS 16.4+ Home Screen apps; not Chrome Android or Firefox ([install-and-identity.md](install-and-identity.md#app-icon-badge-badging-api)).
 
 **Gotchas:**
-- Without `waitUntil` the worker can stop before the notification shows, and that counts as a silent push.
-- Chrome reportedly tolerates a missing notification while a tab of the origin is visible. Safari doesn't, so always show one.
-- Silent "mark as read" pushes for cross-device sync don't work on Safari. Clear stale notifications on the next open instead ([close when read](#close-notifications-once-the-content-is-read-and-keep-the-badge-in-sync)).
-- Firefox gives pushes that show no notification a quota, which resets when the user visits.
-- Notification text appears on the lock screen. In E2EE apps, keep secrets out of it, or decrypt in the worker and show only what the user has opted into.
+- Without `waitUntil` the worker can stop first, which counts as a silent push.
+- Chrome tolerates a missing notification while a tab is visible; Safari doesn't.
+- Silent "mark read" pushes don't work on Safari; clear stale notifications on the next open ([close when read](#close-notifications-once-the-content-is-read-and-keep-the-badge-in-sync)).
+- Firefox gives notification-less pushes a quota that resets on visit.
+- Notification text shows on the lock screen; in E2EE apps decrypt in the worker and show only what the user opted into.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Push_API · https://webkit.org/blog/12945/meet-web-push/ · https://developer.mozilla.org/en-US/docs/Web/API/Navigator/setAppBadge
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Push_API · https://webkit.org/blog/12945/meet-web-push/
 
 ## Declarative Web Push (Safari 18.4+): notifications without waking a worker
 
-The push payload is JSON the browser understands: `{ web_push: 8030, notification: { title, navigate, … } }`. The browser shows it and opens `navigate` on tap with no worker code. With `mutable: true`, the worker's `push` event receives `event.notification` and may replace it, for example after decrypting. On iOS this delivers more reliably (no worker to fail, no revocation penalty), uses less battery, and deep-links from a killed app.
+The payload is JSON the browser understands (`{ web_push: 8030, notification: { title, navigate, … } }`); it shows it and opens `navigate` on tap with no worker code. With `mutable: true` the worker's `push` gets `event.notification` and may replace it (e.g. after decrypting). More reliable on iOS: no worker to fail, no revocation penalty, deep links from a killed app.
 
 ```json
 {
@@ -506,20 +495,20 @@ self.addEventListener('push', (e) => {
 });
 ```
 
-**Support:** Safari iOS/iPadOS 18.4+ (Home Screen apps) and macOS Safari (18.4 per MDN BCD; WebKit's notes announce it for macOS in 18.5). It is in the W3C Push API editor's draft. `window.pushManager` (subscribe without a worker) and `PushEvent.notification`: Safari 18.4+ only. `Notification.navigate`: Safari 18.4+ and Firefox Nightly. Chrome hasn't implemented it.
+**Support:** Safari 18.4+ on iOS/iPadOS (Home Screen apps) and macOS. In the W3C Push API editor's draft. `window.pushManager` and `PushEvent.notification`: Safari 18.4+ only. `Notification.navigate`: Safari 18.4+, Firefox Nightly. Not Chrome.
 
 **Gotchas:**
-- `navigate` is required, and every action needs one too. Without `mutable`, Safari never fires `push`.
-- `app_badge` sits at the top level in WebKit's implementation but isn't in the current spec draft (a spec PR to add it is open). Verify it on a device.
-- Browsers without declarative push deliver the JSON to your worker, so keep the fallback branch.
-- Reported in the field (unverified): when the iOS app is already running, tapping a declarative notification only foregrounds it, with no `notificationclick` and no navigation. Re-check notifications and route on `visibilitychange`.
-- A subscription made through `window.pushManager` has no worker, so `mutable` can't take effect.
+- `navigate` is required, for every action too. Without `mutable`, Safari never fires `push`.
+- Top-level `app_badge` is WebKit's, not yet in the spec draft; verify on a device.
+- Other browsers deliver the JSON to your worker, so keep the fallback branch.
+- Field reports (unverified): if the iOS app is already running, a tap only foregrounds it, with no `notificationclick`. Re-check and route on `visibilitychange`.
+- A `window.pushManager` subscription has no worker, so `mutable` can't take effect.
 
-**Sources:** https://webkit.org/blog/16535/meet-declarative-web-push/ · https://w3c.github.io/push-api/ · https://developer.mozilla.org/en-US/docs/Web/API/Notification/navigate
+**Sources:** https://webkit.org/blog/16535/meet-declarative-web-push/ · https://w3c.github.io/push-api/
 
 ## Show notifications through the worker registration, with a page fallback
 
-Use `registration.showNotification()` whenever the registration supports it. Fall back to `new Notification()` only in desktop tabs before the worker is ready. Worker notifications are the only kind phones show, they outlive the page, and they route through `notificationclick`.
+Use `registration.showNotification()` when supported; `new Notification()` only in desktop tabs before the worker is ready. Worker notifications are the only kind phones show, outlive the page, and route through `notificationclick`.
 
 ```ts
 const workerCanNotify = (r: { showNotification?: unknown; getNotifications?: unknown }): boolean =>
@@ -536,19 +525,19 @@ export async function notify(title: string, opts: NotificationOptions, open: () 
 }
 ```
 
-**Support:** The `Notification` constructor throws a TypeError on Chrome Android and Samsung Internet. On iOS 16.4+ the `Notification` interface exists only in Home Screen apps (a `ReferenceError` in tabs), and only worker notifications show there. Safari in an iOS tab registers a worker whose registration lacks `showNotification` and `getNotifications`.
+**Support:** The constructor throws a TypeError on Chrome Android and Samsung Internet. On iOS 16.4+ `Notification` exists only in Home Screen apps. An iOS Safari tab's registration lacks `showNotification` and `getNotifications`.
 
 **Gotchas:**
-- Field-tested: calling `getNotifications()` in an iOS Safari tab crashed the "mark as read" path. Detect both methods, not just one.
+- Field-tested: `getNotifications()` in an iOS Safari tab crashed a "mark read" path. Detect both methods.
 - Check `typeof Notification` before reading `.permission`.
-- Keep page notifications in a per-conversation map so you can close them. Hand off to the worker as soon as it registers.
-- Don't notify for the conversation the user is looking at (visible and focused).
+- Keep page notifications in a per-conversation map so you can close them.
+- Don't notify for the conversation that is visible and focused.
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerRegistration/showNotification · https://developer.mozilla.org/en-US/docs/Web/API/Notification/Notification
 
 ## Notification options: what each browser honours
 
-Use `tag` and `data` everywhere, and add `icon`, `badge`, `image`, `actions`, `renotify`, `timestamp`, `requireInteraction` and `silent` progressively. One notification per thread, updated in place, with the right small icon reads as native. A stack of duplicates with a white square in the Android status bar doesn't.
+Use `tag` and `data` everywhere; add the rest progressively. One notification per thread, updated in place, with a proper status-bar glyph reads as native.
 
 ```ts
 type RichOptions = NotificationOptions & {
@@ -571,25 +560,24 @@ await reg.showNotification(title, opts);
 | Option | Supported in |
 |---|---|
 | `data` | All engines |
-| `tag` | Chrome and Firefox. Safari accepts it with no effect. |
-| `icon` | Chrome and Firefox. Safari ignores it. |
+| `tag`, `icon` | Chrome and Firefox. Safari ignores them. |
 | `badge`, `image`, `renotify`, `timestamp` | Chromium only |
-| `actions` | Chromium 48+ and Firefox 152+. Not Safari. |
-| `requireInteraction` | Chromium, and Firefox on Windows only |
-| `silent` | Chrome 43+, Firefox 132+, Safari 16.6 on macOS. Not iOS. |
+| `actions` | Chromium 48+, Firefox 152+. Not Safari. |
+| `requireInteraction` | Chromium; Firefox 117+ on Windows only |
+| `silent` | Chrome 43+, Firefox 132+, Safari 16.6 macOS. Not iOS. |
 
 **Gotchas:**
 - `renotify: true` with an empty `tag` throws a TypeError.
-- Safari ignores `tag`, so its notifications stack. Close older ones yourself ([close when read](#close-notifications-once-the-content-is-read-and-keep-the-badge-in-sync)).
-- Android draws `badge` from the alpha channel only, so an opaque full-colour icon becomes a white blob. Use a dedicated monochrome glyph.
-- Actions need `notificationclick` to read `e.action`. Inline reply isn't available on the web.
+- Safari ignores `tag`, so its notifications stack; close older ones yourself.
+- Android draws `badge` from alpha only: an opaque icon becomes a white blob.
+- Actions need `notificationclick` to read `e.action`. No inline reply on the web.
 - Collapse bursts into one notification per thread ("3 new messages").
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerRegistration/showNotification · https://developer.mozilla.org/en-US/docs/Web/API/Notification/maxActions_static
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerRegistration/showNotification
 
 ## notificationclick: focus the open window and route in place, or open one
 
-Close the notification and read the route from `notification.data`. Then focus an existing window and `postMessage` the route to it. Call `clients.openWindow(url)` only when no window exists. Tapping a notification then lands on the right conversation in the already-open app, with drafts and scroll intact, instead of a second tab or a reload at the home screen.
+Close the notification, read the route from `data`, focus an existing window and `postMessage` the route; `openWindow(url)` only when none exists. The tap lands on the right conversation with drafts and scroll intact.
 
 ```ts
 // sw.ts
@@ -614,19 +602,19 @@ navigator.serviceWorker.addEventListener('message', (e: MessageEvent<unknown>) =
 });
 ```
 
-**Support:** `clients.openWindow` and `WindowClient.focus`: Chrome 40/42+, Firefox 44+, Safari 11.1+. `notificationclick`: Chrome, Firefox, Safari 16+ (macOS). MDN BCD lists it as unsupported on iOS. In practice it fires in Home Screen apps, but reports (WebKit bug 268797) say it's unreliable when the tap cold-launches the app.
+**Support:** `openWindow`, `focus`: Chrome 40/42+, Firefox 44+, Safari 11.1+. `notificationclick`: Chrome, Firefox, Safari 16+ (macOS); MDN BCD lists it unsupported on iOS, though it fires in Home Screen apps in practice and is reported unreliable on cold launch (WebKit bug 268797).
 
 **Gotchas:**
-- `focus()` and `openWindow()` are allowed only during the click's activation window, so call them before any slow awaits.
-- In Chrome, `openWindow` with an in-scope URL opens inside the installed app's window.
-- `client.navigate()` reloads the page and loses state, so prefer `postMessage`. `matchAll` returns windows in most-recently-focused order.
-- iOS fallback: use the declarative `navigate`. On `visibilitychange`, compare `getNotifications()` with what you showed before hiding; a notification that vanished was probably tapped. That last check is a heuristic.
+- `focus()`/`openWindow()` work only during the click's activation window; call them before slow awaits.
+- In Chrome, an in-scope `openWindow` opens inside the installed app's window.
+- `client.navigate()` reloads and loses state; prefer `postMessage`.
+- iOS fallback: declarative `navigate`, plus a heuristic: on `visibilitychange`, a notification missing from `getNotifications()` was probably tapped.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerGlobalScope/notificationclick_event · https://developer.mozilla.org/en-US/docs/Web/API/Clients/openWindow · https://bugs.webkit.org/show_bug.cgi?id=268797
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerGlobalScope/notificationclick_event · https://bugs.webkit.org/show_bug.cgi?id=268797
 
 ## Close notifications once the content is read, and keep the badge in sync
 
-When a conversation is opened or marked read, close its notifications by matching `notification.data` (not `tag`), then update or clear the app badge. Native apps clear notifications for things you've already read. Stale notifications plus a wrong count are a constant reminder that the app is a website.
+When a conversation is read, close its notifications by matching `data` (not `tag`), then update or clear the badge. Stale notifications and a wrong count are a constant web tell.
 
 ```ts
 export async function closeFor(url: string, unread: number): Promise<void> {
@@ -637,19 +625,19 @@ export async function closeFor(url: string, unread: number): Promise<void> {
 }
 ```
 
-**Support:** `getNotifications`: Chrome 40+, Firefox 44+, Safari 16 (macOS 13+), and iOS 16.4+ in Home Screen apps only (absent in iOS tabs). `setAppBadge`/`clearAppBadge`: Chrome desktop 81+, Safari 17 (installed macOS apps), iOS 16.4+ (Home Screen apps). Not Chrome Android (it shows notification dots) or Firefox.
+**Support:** `getNotifications`: Chrome 40+, Firefox 44+, Safari 16 (macOS 13+), iOS 16.4+ Home Screen apps only. Badge: see [Every push](#every-push-must-show-a-notification-and-set-the-badge); Chrome Android shows notification dots instead.
 
 **Gotchas:**
-- `getNotifications({ tag })` filters only where `tag` works, so match on `data`.
-- On iOS the badge needs notification permission. A badge call from a non-installed page rejects; that's expected, not an error.
-- Mark read only while the document is visible (and focused on desktop), never in a hidden tab.
-- Fallback when not installed: badges in the title and favicon ([navigation-ui-patterns.md](navigation-ui-patterns.md#favicon-and-app-icon-badges-reflect-live-state)).
+- `getNotifications({ tag })` filters only where `tag` works.
+- On iOS the badge needs notification permission; a rejection when not installed is expected.
+- Mark read only while visible (and focused on desktop).
+- Not installed: badge the title and favicon ([navigation-ui-patterns.md](navigation-ui-patterns.md#favicon-and-app-icon-badges-reflect-live-state)).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerRegistration/getNotifications · https://developer.mozilla.org/en-US/docs/Web/API/Navigator/setAppBadge
 
 ## Notification permission UX: ask at the right moment, cover every state
 
-Never prompt on load. Show an in-app explainer with an "Enable notifications" button that triggers the browser prompt. Render each state: unsupported (on iOS, "Add to Home Screen first"), default, denied (with how to unblock) and granted (with an in-app mute). Watch for changes. Native apps ask in context. A prompt on page load gets quieted by Chrome or denied for good.
+Never prompt on load. An in-app "Enable notifications" button triggers the prompt. Render unsupported (iOS: "Add to Home Screen first"), default, denied (how to unblock) and granted (with an in-app mute), and watch for changes.
 
 ```ts
 const label = (s: NotificationPermission | PermissionState | 'unsupported', ios: boolean): string =>
@@ -662,24 +650,19 @@ const status = await navigator.permissions?.query({ name: 'notifications' }).cat
 status?.addEventListener('change', () => showPushState(status.state)); // revoked in OS or site settings
 ```
 
-**Support:** `permissions.query`: Chrome 43+, Firefox 46+, Safari 16+. Safari and Firefox 72+ require a gesture for the prompt. Chrome shows a quieter prompt on sites users tend to block. Since late 2025, Chrome's Safety Check (desktop and Android) auto-revokes notification permission from sites with low engagement and high notification volume. Installed web apps are exempt.
+**Support:** `permissions.query`: Chrome 43+, Firefox 46+, Safari 16+. Safari and Firefox 72+ need a gesture for the prompt; Chrome quiets prompts on often-blocked sites. Since late 2025 Chrome's Safety Check auto-revokes notification permission from low-engagement, high-volume sites; installed web apps are exempt.
 
 **Gotchas:**
 - Code can't re-prompt after `denied`.
-- Keep an app-level mute separate from the browser permission, so a user who wants quiet doesn't have to revoke it.
-- The `push` permission name isn't supported everywhere, so wrap queries in try/catch.
-- On iOS, show the button only in standalone mode ([install-and-identity.md](install-and-identity.md#detect-the-installed-app)). General permission rules: [device-apis.md](device-apis.md#permission-ux-ask-in-context-after-explaining-never-on-load-plus-the-new-capability-elements).
+- Keep an app-level mute separate from the browser permission.
+- The `push` permission name isn't supported everywhere; catch query errors.
+- On iOS show the button only in standalone mode ([install-and-identity.md](install-and-identity.md#detect-the-installed-app)). General rules: [device-apis.md](device-apis.md#permission-ux-ask-in-context-after-explaining-never-on-load-plus-the-new-capability-elements).
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Notification/requestPermission_static · https://web.dev/articles/push-notifications-permissions-ux · https://blog.google/chromium/automatic-notification-permission/
+**Sources:** https://web.dev/articles/push-notifications-permissions-ux · https://blog.google/chromium/automatic-notification-permission/
 
 ## Keep push subscriptions alive
 
-On every launch and on becoming visible, compare `pushManager.getSubscription()` with what the server holds:
-- Resubscribe when permission is granted but the subscription is gone.
-- Handle `pushsubscriptionchange` where it exists.
-- On the server, delete subscriptions the push service answers with 404 or 410.
-
-Subscriptions vanish (on iOS especially). Without this upkeep the app silently stops notifying, and users conclude it's broken.
+Subscriptions vanish (iOS especially) and the app silently stops notifying. On launch and on becoming visible, compare `getSubscription()` with the server's copy and resubscribe if permission is granted but the subscription is gone; handle `pushsubscriptionchange`; delete server-side subscriptions answered with 404/410.
 
 ```ts
 export async function ensureSubscription(vapidKey: Uint8Array<ArrayBuffer>): Promise<void> {
@@ -696,17 +679,17 @@ export async function ensureSubscription(vapidKey: Uint8Array<ArrayBuffer>): Pro
 self.addEventListener('pushsubscriptionchange', (e) => { if (e instanceof ExtendableEvent) e.waitUntil(resubscribeFromWorker()); });
 ```
 
-**Support:** `pushsubscriptionchange`: Chrome 138+, Firefox 44+ (without `oldSubscription`/`newSubscription`), Safari 16 on macOS. Not iOS. `PushSubscription.expirationTime` exists but is usually null.
+**Support:** `pushsubscriptionchange`: Chrome 138+, Firefox 44+ (no `oldSubscription`/`newSubscription`), Safari 16 macOS. Not iOS. `expirationTime` is usually null.
 
 **Gotchas:**
-- Resubscribing in the worker needs the `applicationServerKey`, from `e.oldSubscription?.options` or stored in IndexedDB.
-- On iOS the Home Screen app and Safari tabs hold separate subscriptions. Store sender-side subscriptions per device.
+- Resubscribing in the worker needs the `applicationServerKey` (from `oldSubscription?.options` or IndexedDB).
+- On iOS the Home Screen app and Safari tabs hold separate subscriptions; store them per device.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerGlobalScope/pushsubscriptionchange_event · https://developer.mozilla.org/en-US/docs/Web/API/PushManager/getSubscription
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerGlobalScope/pushsubscriptionchange_event
 
 ## Outbox plus Background Sync, with a fallback that works everywhere
 
-Write every outgoing action to an IndexedDB outbox first, and show it as pending right away. Where Background Sync exists, register a sync so the worker flushes the outbox once connectivity returns, even after the tab has closed. Everywhere else, flush on `online`, on becoming visible and at launch. Sending then works in a tunnel, the way native messaging apps do, with no error toast and no lost message. Pending-state UI: [motion-performance.md](motion-performance.md#optimistic-ui-apply-the-result-immediately-reconcile-later-and-use-undo-instead-of-confirmation).
+Write every outgoing action to an IndexedDB outbox first and show it as pending. With Background Sync, the worker flushes when connectivity returns, even after the tab closed; elsewhere flush on `online`, on visible and at launch. Sending works in a tunnel, like native messaging. Pending UI: [motion-performance.md](motion-performance.md#optimistic-ui-apply-the-result-immediately-reconcile-later-and-use-undo-instead-of-confirmation).
 
 ```ts
 type SyncReg = ServiceWorkerRegistration & { sync: { register(tag: string): Promise<void> } };
@@ -729,20 +712,19 @@ self.addEventListener('sync', (e) => {
 });
 ```
 
-**Support:** Background Sync: Chromium only (Chrome/Edge 49+, Samsung Internet). Not Firefox or Safari. Where sync is missing, Workbox's `Queue`/`BackgroundSyncPlugin` replays at worker startup.
+**Support:** Background Sync: Chromium only (Chrome/Edge 49+). Without it, Workbox's `Queue`/`BackgroundSyncPlugin` replays at worker startup.
 
 **Gotchas:**
-- Chrome retries a failed sync (a rejected `waitUntil`) only a few times with backoff, so the outbox must outlive the sync giving up.
-- Use idempotent IDs so retries don't duplicate.
-- Take a Web Lock so the page and the worker don't flush at the same time.
-- Socket protocols (WebSocket and similar): the worker can open a socket inside `waitUntil`, but events are capped at about 5 minutes. Flushing on reconnect is usually simpler.
-- Show the queued count in the UI ("Offline · 2 messages queued").
+- Chrome retries a failed sync only a few times; the outbox must outlive it.
+- Use idempotent IDs; take a Web Lock so page and worker don't flush at once.
+- Sockets: the worker can open one inside `waitUntil`, but events are capped (~5 min); flushing on reconnect is simpler.
+- Show the queued count ("Offline · 2 messages queued").
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Background_Synchronization_API · https://developer.chrome.com/docs/workbox/modules/workbox-background-sync
 
 ## Periodic Background Sync (Chromium, installed apps only)
 
-Ask the browser to wake the worker roughly every N hours on a good network to prefetch content. The app then opens to fresh content (a feed or digest) with no spinner, like a native app's background refresh.
+The browser wakes the worker every N hours on a good network to prefetch, so the app opens to fresh content like a native background refresh.
 
 ```ts
 type PeriodicReg = ServiceWorkerRegistration & { periodicSync: { register(tag: string, o: { minInterval: number }): Promise<void> } };
@@ -761,17 +743,17 @@ self.addEventListener('periodicsync', (e) => {
 });
 ```
 
-**Support:** Chrome/Edge 80+ (desktop and Android) only. Chrome grants it only to an installed app launched as an app. How often it fires depends on site engagement, with a minimum of about 12 h. Not in Firefox or Safari.
+**Support:** Chrome/Edge 80+ only, granted only to an installed app; frequency follows engagement (minimum about 12 h). Not Firefox or Safari.
 
 **Gotchas:**
-- It isn't for real-time messaging, and timing isn't guaranteed. Events don't fire at zero engagement.
-- Test it with DevTools > Application > Periodic background sync.
+- Not for real-time messaging; timing isn't guaranteed and it never fires at zero engagement.
+- Test with DevTools > Application > Periodic background sync.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Web_Periodic_Background_Synchronization_API · https://developer.chrome.com/docs/capabilities/periodic-background-sync
+**Sources:** https://developer.chrome.com/docs/capabilities/periodic-background-sync
 
 ## Background Fetch for large downloads and uploads (Chromium)
 
-Hand big transfers to the browser so they continue after the page or app closes, with system download UI and a worker event on completion. That matches native "download for offline": closing the app doesn't kill the transfer.
+Hand big transfers to the browser so they survive closing the app, with system download UI and a worker event on completion: native "download for offline".
 
 ```ts
 type BgFetchReg = ServiceWorkerRegistration & {
@@ -800,18 +782,18 @@ self.addEventListener('backgroundfetchsuccess', (e) => {
 });
 ```
 
-**Support:** Chrome/Edge 74+ (desktop and Android) only. Not in Firefox or Safari.
+**Support:** Chrome/Edge 74+ only. Not Firefox or Safari.
 
 **Gotchas:**
-- If `downloadTotal` is set and the download exceeds it, the fetch fails.
-- The user can cancel from the browser UI (`backgroundfetchabort`).
+- Exceeding a set `downloadTotal` fails the fetch.
+- Users can cancel from browser UI (`backgroundfetchabort`).
 - Every other browser needs the fallback path.
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Background_Fetch_API
 
 ## Request persistent storage and show usage
 
-Call `navigator.storage.persist()` once the user has data worth keeping, and read `navigator.storage.estimate()` to show usage in Settings. Native apps don't lose your data when the disk fills up. Persistent origins are exempt from storage-pressure eviction, and WebKit says they are exempt from eviction in Safari 17+ too.
+Call `navigator.storage.persist()` once the user has data worth keeping, and show `estimate()` in Settings. Persistent origins are exempt from storage-pressure eviction (and, per WebKit, from eviction in Safari 17+).
 
 ```ts
 export async function protectData(): Promise<'persisted' | 'best-effort' | 'unsupported'> {
@@ -823,28 +805,27 @@ const { usage = 0, quota = 0 } = (await navigator.storage?.estimate?.()) ?? {};
 const storageLine = `${(usage / 1e6).toFixed(1)} MB used of ${(quota / 1e9).toFixed(0)} GB`;
 ```
 
-**Support:** `persist`/`persisted`: Chrome 55+, Firefox 57+, Safari 15.2+. `estimate`: Chrome 61+, Firefox 57+, Safari 17+. Firefox shows a prompt. Chrome, Edge and Safari decide silently from engagement (Safari, for example, when the site is opened as a Home Screen web app).
+**Support:** `persist`: Chrome 55+, Firefox 57+, Safari 15.2+. `estimate`: Chrome 61+, Firefox 57+, Safari 17+. Firefox prompts; Chrome, Edge and Safari decide silently from engagement (Safari, e.g., for a Home Screen web app).
 
 **Gotchas:**
-- Firefox prompts, so call `persist()` from a click (Settings > "Keep data on this device") or right after a meaningful action, never on load.
+- Firefox prompts, so call it from a click or after a meaningful action, never on load.
 - Per-origin quotas (MDN):
 
   | Browser | Quota |
   |---|---|
   | Chromium | 60% of disk |
-  | Firefox, best-effort | The smaller of 10% of disk and a 10 GiB group limit |
+  | Firefox, best-effort | Smaller of 10% of disk and 10 GiB (group limit) |
   | Firefox, persistent | 50% of disk, up to 8 TiB |
-  | Safari 17+ | About 60% for browser apps and Home Screen/Dock web apps, about 15% for other WKWebView apps |
+  | Safari 17+ | About 60% for browsers and Home Screen/Dock web apps, about 15% for other WKWebView apps |
 
   The old "50 MB on Safari" advice is obsolete.
-- `estimate()` values are approximate and padded.
-- Users can still clear data, so keep a backup or export.
+- `estimate()` is approximate and padded. Users can still clear data, so keep a backup or export.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria · https://webkit.org/blog/14403/updates-to-storage-policy/ · https://web.dev/articles/persistent-storage
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria · https://webkit.org/blog/14403/updates-to-storage-policy/
 
 ## Survive Safari's 7-day eviction of script-written storage
 
-With tracking prevention on (the default), Safari deletes all script-written data of an origin if the user hasn't interacted with it during the last 7 days of Safari use. That includes IndexedDB, localStorage, Cache API and the service worker registration. Server-set cookies are exempt. Home Screen web apps keep their own day counter, so normal use of the app doesn't trigger it. A user who returns after a holiday to a blank, logged-out app with drafts gone won't trust it again.
+With tracking prevention on (the default), Safari deletes all script-written data of an origin (IndexedDB, localStorage, Cache API, the worker registration) after 7 days of Safari use without interaction. Server-set cookies are exempt. Home Screen web apps keep their own counter, so normal use doesn't trigger it.
 
 ```ts
 if (!isStandalone() && isAppleWebKit()) offerInstall('Add to Home Screen so your data stays on this device');
@@ -853,18 +834,18 @@ await syncBackup();  // a server or relay copy, or an export file the user keeps
 // E2EE identity keys: show the recovery phrase or export during onboarding, not later
 ```
 
-**Support:** Safari on macOS and iOS/iPadOS, plus every iOS browser that uses WebKit. In the EU (iOS 17.4+), browsers with their own engine follow their own policies.
+**Support:** Safari on macOS and iOS/iPadOS, and every WebKit-based iOS browser. In the EU (iOS 17.4+), other-engine browsers follow their own policies.
 
 **Gotchas:**
-- Never treat browser storage as the only copy of irreplaceable data, especially private keys. An app whose identity lives only in IndexedDB loses the account on eviction.
-- The 7 days count days of Safari use, not calendar days, so eviction is unpredictable in practice. You can't fast-forward it in a test, so test that a restore path exists.
-- Whether persistent mode also stops the 7-day deletion (rather than only pressure eviction) is stated only loosely by WebKit. Keep the backup either way.
+- Never let browser storage be the only copy of irreplaceable data, especially private keys.
+- Days of Safari use, not calendar days: untestable directly, so test that a restore path exists.
+- WebKit is vague on whether persistent mode also stops the 7-day deletion; keep the backup.
 
-**Sources:** https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/ · https://webkit.org/blog/14403/updates-to-storage-policy/ · https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria
+**Sources:** https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/ · https://webkit.org/blog/14403/updates-to-storage-policy/
 
 ## iOS Home Screen apps have their own storage: onboard inside the app
 
-A web app on the iOS Home Screen has its own cookie jar, localStorage, IndexedDB and push subscription, separate from Safari tabs. Signing in or creating data in Safari doesn't carry over after Add to Home Screen. Users install, tap the icon and land on a logged-out landing page, which feels broken. Detect the first standalone launch and offer restore or transfer.
+An iOS Home Screen web app has its own cookies, localStorage, IndexedDB and push subscription, separate from Safari. Users sign in in Safari, install, and land logged out. Detect the first standalone launch and offer restore or transfer.
 
 ```ts
 // First launch as the installed app with no local identity: go to restore, not marketing
@@ -873,24 +854,18 @@ if (isStandalone() && !(await kv.get('identity'))) router.replace('/welcome-back
 // or a recovery phrase / invite link pasted into the app. Avoid magic links: a tapped link opens Safari, not the app.
 ```
 
-**Support:** iOS/iPadOS Home Screen web apps (every version with standalone apps). iOS 26 opens any site added to the Home Screen as a web app by default, so more users hit this. macOS Safari 17+ Dock web apps also get separate storage (Safari copies the cookies once, at creation). Chrome and Edge installed apps share the profile's storage with tabs. Firefox Taskbar Tabs share the profile.
+**Support:** iOS/iPadOS Home Screen web apps; iOS 26 opens Home Screen sites as web apps by default, so more users hit it. macOS Safari 17+ Dock apps also get separate storage (cookies copied once at creation). Chrome/Edge installed apps and Firefox Taskbar Tabs share the profile.
 
 **Gotchas:**
 - Deleting the icon deletes its data.
-- Old reports that Cache Storage or the worker registration are shared with Safari aren't reliable, so assume nothing is shared.
-- Say so before the user installs ("you'll sign in once more inside the app"). Install flow and detection: [install-and-identity.md](install-and-identity.md#install-promotion-ux).
+- Assume nothing (Cache Storage, worker registration) is shared with Safari.
+- Say so before install ("you'll sign in once more inside the app"): [install-and-identity.md](install-and-identity.md#install-promotion-ux).
 
-**Sources:** https://webkit.org/blog/17333/webkit-features-in-safari-26-0/ · https://support.apple.com/guide/iphone/open-as-web-app-iphea86e5236/ios · https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Installing
+**Sources:** https://webkit.org/blog/17333/webkit-features-in-safari-26-0/ · https://support.apple.com/guide/iphone/open-as-web-app-iphea86e5236/ios
 
 ## IndexedDB done right: validated reads, durable writes, reconnects
 
-Keep app state in IndexedDB behind a small wrapper:
-- Validate everything you read.
-- Use `durability: 'strict'` for writes you can't lose.
-- Close the connection on `versionchange`.
-- Reopen after Safari drops the connection.
-
-Corrupt or old-format data must never crash the launch, and the user should never have to clear site data. Losing the connection in the background must not break the app on resume.
+Wrap IndexedDB: validate every read, use `durability: 'strict'` for must-keep writes, close on `versionchange`, reopen after Safari drops the connection. Corrupt data must never crash the launch, and a background disconnect must not break resume.
 
 ```ts
 import { createStore, get } from 'idb-keyval';
@@ -918,19 +893,19 @@ export async function withDb<T>(run: (db: IDBDatabase) => Promise<T>): Promise<T
 }
 ```
 
-**Support:** IndexedDB: all engines. Transaction `durability`: Chrome 83+, Firefox 126+, Safari 15+. `commit()`: Chrome 76+, Firefox 74+, Safari 15+. idb-keyval 6.
+**Support:** IndexedDB: all engines. `durability`: Chrome 83+, Firefox 126+, Safari 15+. `commit()`: Chrome 76+, Firefox 74+, Safari 15+.
 
 **Gotchas:**
-- iOS 17.4+ reports `UnknownError: Connection to Indexed Database server lost` after backgrounding (WebKit bug 273827, Dexie issue 2008). Reopen; if it keeps failing, keep data in memory and reload.
+- iOS 17.4+ can throw `UnknownError: Connection to Indexed Database server lost` after backgrounding (WebKit bug 273827). Reopen; if it persists, keep data in memory and reload.
 - Default durability differs per browser.
-- `localStorage` is synchronous and about 5 MB, so keep it for tiny boot hints. Wrap every storage access in try/catch for private modes and blocked storage.
+- `localStorage` is synchronous and ~5 MB: tiny boot hints only. Wrap all storage access in try/catch.
 - An unhandled `versionchange` blocks upgrades in other tabs.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/IDBDatabase/transaction · https://bugs.webkit.org/show_bug.cgi?id=273827 · https://github.com/dexie/Dexie.js/issues/2008
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/IDBDatabase/transaction · https://bugs.webkit.org/show_bug.cgi?id=273827
 
 ## Origin Private File System (OPFS) for large or binary data and SQLite
 
-OPFS is a private, origin-scoped file system. Synchronous access handles in a dedicated worker give fast byte-level I/O, which is what SQLite-WASM and large media caches need. Local-first apps can then hold big databases or attachments and query them at native speed, without slow IndexedDB blob juggling.
+A private, origin-scoped file system. Synchronous access handles in a dedicated worker give fast byte-level I/O for SQLite-WASM and large media, without IndexedDB blob juggling.
 
 ```ts
 // page
@@ -946,18 +921,18 @@ const h = await (await dir.getFileHandle('db.sqlite3', { create: true })).create
 h.write(bytes, { at: 0 }); h.flush(); h.close();
 ```
 
-**Support:** `getDirectory`: Chrome 86+ (Android 109+), Firefox 111+, Safari 15.2+. `createSyncAccessHandle`: the same versions, dedicated workers only. `createWritable`: Chrome 86+, Firefox 111+, Safari 26+.
+**Support:** `getDirectory`: Chrome 86+ (Android 109+), Firefox 111+, Safari 15.2+. `createSyncAccessHandle` (dedicated workers): Chrome 102+ (Android 109+), Firefox 111+, Safari 15.2+. `createWritable`: Chrome 86+, Firefox 111+, Safari 26+.
 
 **Gotchas:**
-- OPFS follows the same quota and eviction rules as other site storage, including Safari's 7-day rule.
-- A sync access handle locks the file exclusively, so coordinate tabs with Web Locks.
-- Files aren't visible to the user. For a real export, use the File System Access API or a download ([device-apis.md](device-apis.md#file-system-access-showopenfilepicker--showsavefilepicker-with-fallbacks-opfs)).
+- Same quota and eviction rules as other storage, Safari's 7-day rule included.
+- A sync access handle locks the file exclusively; coordinate tabs with Web Locks.
+- Invisible to users; export via File System Access or a download ([device-apis.md](device-apis.md#file-system-access-showopenfilepicker--showsavefilepicker-with-fallbacks-opfs)).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system
 
 ## Storage Buckets: separate eviction policies per kind of data (Chromium)
 
-Open named buckets, each with its own IndexedDB, Cache Storage and OPFS and its own persistence, durability and expiry. Drafts can be persisted and strict while a media cache stays best-effort and expires. Under storage pressure the browser then evicts the media cache, not the user's unsent messages.
+Named buckets, each with its own IndexedDB, Cache Storage and OPFS, persistence, durability and expiry. Under pressure the browser evicts the media cache, not unsent drafts.
 
 ```ts
 type Bucket = { indexedDB: IDBFactory; caches: CacheStorage; getDirectory(): Promise<FileSystemDirectoryHandle> };
@@ -967,17 +942,17 @@ const draftsDb = nav.storageBuckets ? (await nav.storageBuckets.open('drafts', {
 const mediaCache = nav.storageBuckets ? (await nav.storageBuckets.open('media', { durability: 'relaxed', expires: Date.now() + 30 * 864e5 })).caches : caches;
 ```
 
-**Support:** Chrome/Edge 122+ only. Not in Firefox or Safari (MDN marks it experimental).
+**Support:** Chrome/Edge 122+ only (experimental). Not Firefox or Safari.
 
 **Gotchas:**
-- `persisted: true` can be refused, just like `persist()`.
-- Keep one code path that falls back to the default bucket elsewhere.
+- `persisted: true` can be refused, like `persist()`.
+- Keep one code path that falls back to the default bucket.
 
 **Sources:** https://developer.chrome.com/docs/web-platform/storage-buckets
 
 ## Multi-tab coordination: Web Locks plus BroadcastChannel
 
-A Web Lock makes one tab the owner of the long-lived connections and the outbox flush. A BroadcastChannel spreads state changes (logout, read marks, new version) to every tab and window. Without them you get two tabs sending the same message, duplicate notifications and sounds, and a tab still logged in after logout elsewhere. A native app has one process and none of these problems.
+A Web Lock makes one tab own connections and the outbox flush; a BroadcastChannel spreads logout, read marks and new versions to every tab. Without them: duplicate sends, notifications and sounds, and tabs still logged in after logout.
 
 ```ts
 // Leader election: the callback's promise never settles, so this tab holds the lock until it closes
@@ -990,21 +965,20 @@ bus.onmessage = (e: MessageEvent<unknown>) => { if (parseBusMessage(e.data)?.typ
 bus.postMessage({ type: 'logout', v: 1 }); // versioned: another tab may run another build
 ```
 
-**Support:** Web Locks: Chrome 69+, Firefox 96+, Safari 15.4+. BroadcastChannel: Chrome 54+, Firefox 38+, Safari 15.4+. Both also work in workers.
+**Support:** Web Locks: Chrome 69+, Firefox 96+, Safari 15.4+. BroadcastChannel: Chrome 54+, Firefox 38+, Safari 15.4+. Both work in workers.
 
 **Gotchas:**
-- On mobile a hidden leader tab is suspended. A newly visible tab can take over with `{ steal: true }` when the leader's heartbeat is stale.
-- `{ ifAvailable: true }` is a try-lock. Pass a `signal` to give up a held lock.
-- Locks are per origin and storage partition. A Chromium installed-app window and a tab of the same origin share them; an iOS Home Screen app doesn't share them with Safari.
-- Validate bus messages.
-- Release or reacquire locks around bfcache (`pagehide`/`pageshow`). Whether held locks block the bfcache varies by engine (unverified).
-- Presence from visibility plus focus, and multi-window UX: [navigation-ui-patterns.md](navigation-ui-patterns.md#multiple-windows-and-tabs-one-leader-shared-state-and-which-window-is-active).
+- On mobile a hidden leader is suspended; a visible tab can take over with `{ steal: true }` when the leader's heartbeat is stale.
+- `{ ifAvailable: true }` is a try-lock; a `signal` gives up waiting.
+- Locks are per origin and storage partition: an iOS Home Screen app doesn't share them with Safari.
+- Validate bus messages. Whether held locks block bfcache varies by engine (unverified).
+- Presence and multi-window UX: [navigation-ui-patterns.md](navigation-ui-patterns.md#multiple-windows-and-tabs-one-leader-shared-state-and-which-window-is-active).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API · https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel
 
 ## Online/offline detection beyond navigator.onLine
 
-`navigator.onLine === false` means definitely offline. `true` means only maybe online. Derive a three-state status (offline, reconnecting, online) from the browser flag plus your transport's real state, and retry with backoff and jitter. A calm banner ("Offline · 2 messages queued", "Reconnecting…") that clears itself feels native. Spinners that hang or "Network error" alerts don't.
+`onLine === false` means offline; `true` means only maybe online. Derive offline / reconnecting / online from the flag plus your transport's real state, retry with backoff and jitter, and show a calm self-clearing banner, not hanging spinners or "Network error" alerts.
 
 ```ts
 export type Net = 'online' | 'reconnecting' | 'offline';
@@ -1019,19 +993,19 @@ const probe = (): Promise<boolean> =>
   fetch('/ping', { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(4000) }).then((r) => r.ok, () => false);
 ```
 
-**Support:** `online`/`offline` events and `navigator.onLine`: all engines (MDN notes older Chrome on Linux always reported true). `AbortSignal.timeout`: Chrome 103+, Firefox 100+, Safari 16+.
+**Support:** `online`/`offline` and `navigator.onLine`: all engines. `AbortSignal.timeout`: Chrome 103+, Firefox 100+, Safari 16+.
 
 **Gotchas:**
-- `onLine` is true behind captive portals, on a LAN with no uplink, or with a dead VPN.
-- A page fetch still goes through the service worker even with `cache: 'no-store'`. Exclude the probe route from worker routes, or give it a static `network` route.
-- Debounce the banner (about 2 s) so short blips don't flash it.
-- Save-Data and connection-quality hints: [device-apis.md](device-apis.md#network-status-onlineoffline-events-network-information-chromium-battery-status-dont).
+- `onLine` is true behind captive portals, on a LAN without uplink, or with a dead VPN.
+- A `no-store` fetch still goes through the worker; exclude the probe route or give it a static `network` route.
+- Debounce the banner (~2 s).
+- Save-Data and connection hints: [device-apis.md](device-apis.md#network-status-onlineoffline-events-network-information-chromium-battery-status-dont).
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Navigator/onLine · https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Navigator/onLine
 
 ## Page Lifecycle: save on 'hidden', not on unload
 
-Persist drafts and UI state continuously (debounced on input) and flush when `visibilityState` becomes `hidden`. That's the last event you can count on before a phone OS suspends or kills a backgrounded app. Add `pagehide`, plus `freeze` and `wasDiscarded` on Chromium. Saving on hide is what makes "switched apps, came back, everything's still there" work.
+Persist drafts and UI state continuously (debounced) and flush when `visibilityState` becomes `hidden`, the last reliable event before a phone suspends or kills the app. Add `pagehide`, plus `freeze` and `wasDiscarded` on Chromium.
 
 ```ts
 const flush = (): void => { void saveDrafts(); saveUiState(); }; // start the IndexedDB writes synchronously
@@ -1042,20 +1016,20 @@ const doc: Document & { wasDiscarded?: boolean } = document;
 if (doc.wasDiscarded) restoreUiState(); // Chromium: the tab was discarded while hidden
 ```
 
-**Support:** `visibilitychange` and `pagehide`: all engines (Safari 14.1+ fires `visibilitychange` reliably on app switch). `freeze`, `resume` and `document.wasDiscarded`: Chrome 68+ only. `beforeunload` doesn't fire on iOS Safari. Chrome no longer runs `unload` handlers by default: the rollout reached 100% of page loads in Chrome 154 (Sept 2026).
+**Support:** `visibilitychange`, `pagehide`: all engines. `freeze`, `resume`, `wasDiscarded`: Chrome 68+ only. `beforeunload` doesn't fire on iOS Safari. Chrome's staged removal of `unload` handlers reached 100% of page loads in Sept 2026.
 
 **Gotchas:**
-- The hidden handler gets very little time on iOS. Start the IndexedDB writes synchronously and don't await network calls ([fetchLater](#last-chance-network-sends-fetchlater-and-sendbeacon) for server state).
-- Attach `beforeunload` only while unsaved changes exist, and remove it afterwards.
-- Timers are throttled or frozen in the background, so recompute from `Date.now()` on return.
-- A desktop window behind other windows still reports `visible`; check `document.hasFocus()` too.
-- Headless test browsers always report visible. Unit-test the decision ("should this save?") and keep the event wiring to a line or two.
+- The hidden handler gets very little time on iOS: start IndexedDB writes synchronously, don't await network ([fetchLater](#last-chance-network-sends-fetchlater-and-sendbeacon)).
+- Attach `beforeunload` only while unsaved changes exist.
+- Background timers are throttled or frozen; recompute from `Date.now()`.
+- A desktop window behind others still reports `visible`; check `document.hasFocus()`.
+- Headless browsers always report visible: unit-test the decision, keep the wiring tiny.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Page_Visibility_API · https://developer.chrome.com/docs/web-platform/page-lifecycle-api · https://developer.chrome.com/docs/web-platform/deprecating-unload
+**Sources:** https://developer.chrome.com/docs/web-platform/page-lifecycle-api · https://developer.chrome.com/docs/web-platform/deprecating-unload
 
 ## Restore route, scroll position and drafts on relaunch
 
-Store the last route, a scroll anchor (the ID of the top visible item, not pixels) and per-conversation drafts. On a cold standalone launch at `start_url`, go back to the saved route before first paint, then restore the anchor and the draft. Native apps resume where you left off, and iOS evicts background web apps often. Landing on the home screen with your half-typed message gone is a web tell.
+Store the last route, a scroll anchor (top visible item ID, not pixels) and per-conversation drafts. On a bare standalone launch, restore the route before first paint, then anchor and draft. iOS evicts background web apps often; landing on home with the draft gone is a web tell.
 
 ```ts
 // Save from the 'hidden' flush and, debounced, on navigation
@@ -1071,28 +1045,20 @@ if (bare && ui && Date.now() - ui.at < 7 * 864e5) history.replaceState(null, '',
 // Drafts: IndexedDB key `draft:<chatId>`, saved on input (300 ms debounce) and on hide, restored on mount
 ```
 
-**Support:** Standard APIs. `history.scrollRestoration` works in all engines.
+**Support:** Standard APIs; `history.scrollRestoration` in all engines.
 
 **Gotchas:**
-- An explicit deep link (notification tap, share target, invite link) beats the restore. Restore only when the app was launched bare at `start_url`.
-- `sessionStorage` dies with a killed app, so use `localStorage` or IndexedDB. Read the boot hint from `localStorage` synchronously; an async read would flash the home screen first.
-- Expire old snapshots, and validate them like any external input.
-- Don't resume into a confirm, payment or expired-auth screen.
-- Scroll into the anchor only after the content has its final height. Chat views restore the distance from the bottom instead.
-- Per-screen scroll on Back within a session: [navigation-ui-patterns.md](navigation-ui-patterns.md#preserve-state-scroll-per-screen-and-resume-the-last-screen-on-relaunch).
+- A deep link (notification, share target, invite) beats the restore.
+- `sessionStorage` dies with a killed app; read the boot hint from `localStorage` synchronously.
+- Expire and validate snapshots. Don't resume into confirm, payment or expired-auth screens.
+- Scroll to the anchor only after final layout; chat views restore distance from the bottom.
+- Per-screen scroll on Back: [navigation-ui-patterns.md](navigation-ui-patterns.md#preserve-state-scroll-per-screen-and-resume-the-last-screen-on-relaunch).
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/History/scrollRestoration · https://developer.chrome.com/docs/web-platform/page-lifecycle-api
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/History/scrollRestoration
 
 ## Resume from background: reconnect, resync, refresh
 
-When the app becomes visible, or is restored from bfcache, assume sockets died and timers were frozen:
-- Ping or reconnect.
-- Fetch everything since the last cursor.
-- Check for an update.
-- Refresh the badge.
-- Mark the visible conversation read.
-
-Content is then current the moment the app reappears, with no stale "online" dots and no messages that appear only after a manual refresh.
+On becoming visible or a bfcache restore, assume sockets died and timers froze: ping or reconnect, fetch since the last cursor, check for an update, refresh the badge, mark the visible conversation read.
 
 ```ts
 const resume = (): void => {
@@ -1109,11 +1075,11 @@ let beat = Date.now(); // a heartbeat that comes back late means the page was su
 setInterval(() => { if (Date.now() - beat > 30_000) resume(); beat = Date.now(); }, 10_000);
 ```
 
-**Support:** All engines. Chrome throttles chained timers in pages hidden for more than 5 minutes to about once a minute. iOS suspends hidden web apps within seconds and gives them no background execution except the push handler.
+**Support:** All engines. Chrome throttles chained timers in pages hidden over 5 minutes to about once a minute. iOS suspends hidden web apps within seconds; only push runs in the background.
 
 **Gotchas:**
-- A WebSocket killed during suspension may never fire `close` and may still report `OPEN`. Rely on an application-level ping with a timeout.
-- Publish presence "away" on hidden and "online" on visible. Mark read only while visible.
+- A WebSocket killed during suspension may still report `OPEN`; use an app-level ping with timeout.
+- Publish presence "away" on hidden, "online" on visible.
 - Missed-message alerts while suspended can only come from push.
 - Platform summary: [platform-quirks-testing.md](platform-quirks-testing.md#background-suspension-reconnect-and-catch-up-on-resume).
 
@@ -1121,13 +1087,7 @@ setInterval(() => { if (Date.now() - beat > 30_000) resume(); beat = Date.now();
 
 ## Back/forward cache eligibility
 
-Keep pages bfcache-eligible:
-- No `unload` listeners.
-- No `Cache-Control: no-store` on app HTML where you can avoid it.
-- Close sockets on `pagehide` and reopen them on `pageshow` when `persisted`.
-- Check `notRestoredReasons` in the field.
-
-Back and forward then restore instantly with state intact, like native navigation, instead of a full reload. That matters for tab users, for multi-page entry points, and for OAuth or payment round-trips.
+No `unload` listeners, avoid `Cache-Control: no-store` on app HTML, close sockets on `pagehide` and reopen on `pageshow` when `persisted`, and log `notRestoredReasons`. Back/forward then restore instantly; this matters for tabs, multi-page entry points and OAuth or payment round-trips.
 
 ```ts
 window.addEventListener('pagehide', (e) => { if (e.persisted) socket.close(1000, 'bfcache'); });
@@ -1136,19 +1096,19 @@ const nav = performance.getEntriesByType('navigation')[0];
 if (nav && 'notRestoredReasons' in nav && nav.notRestoredReasons) report('bfcache-miss', nav.notRestoredReasons); // Chrome 125+
 ```
 
-**Support:** All engines have a bfcache. Since a 2025 rollout, Chrome admits `no-store` pages but evicts them on cookie changes and after about 3 minutes. Chrome 149 closes open WebSockets on entry instead of refusing the page (field reports say this is still rolling out). Safari has always closed them, and Firefox still refuses pages with open sockets. `notRestoredReasons`: Chrome 125+.
+**Support:** All engines have a bfcache. Chrome admits `no-store` pages in some cases but evicts them on cookie changes and after about 3 minutes. Chrome 149 closes open WebSockets on entry instead of refusing the page (field reports say rollout is gradual). Safari closes them; Firefox refuses pages with open sockets. `notRestoredReasons`: Chrome 125+.
 
 **Gotchas:**
-- Third-party scripts often add `unload` handlers. Audit them in DevTools > Application > Back/forward cache.
-- Open WebRTC connections, IndexedDB connections that block a `versionchange`, and `window.opener` references can block or evict, depending on the engine.
-- After a restore, socket `close` events fire, so make sure your reconnect logic can't double-connect.
-- An installed SPA is one document, so this mostly matters for its entry points and external round-trips.
+- Third-party scripts often add `unload`; audit in DevTools > Application > Back/forward cache.
+- Open WebRTC, IndexedDB connections blocking a `versionchange`, and `window.opener` can block or evict.
+- After a restore, socket `close` fires; make sure reconnect can't double-connect.
+- An installed SPA is one document, so this mostly matters for entry points and round-trips.
 
-**Sources:** https://web.dev/articles/bfcache · https://developer.chrome.com/docs/web-platform/bfcache-ccns · https://developer.mozilla.org/en-US/docs/Web/API/PerformanceNavigationTiming/notRestoredReasons
+**Sources:** https://web.dev/articles/bfcache · https://developer.chrome.com/docs/web-platform/bfcache-ccns
 
 ## Last-chance network sends: fetchLater and sendBeacon
 
-For server-backed state such as analytics, read position or "last seen", queue a request that the browser delivers even if the page is killed: `fetchLater` on Chromium, or `sendBeacon` from the hidden handler. The server gets the state even when the OS kills the app, and the app isn't blocked from closing.
+For server-side state (analytics, read position, "last seen"), queue a request the browser delivers even if the page is killed: `fetchLater` on Chromium, `sendBeacon` from the hidden handler elsewhere.
 
 ```ts
 type FetchLater = (url: string, init: RequestInit & { activateAfter?: number }) => { readonly activated: boolean };
@@ -1168,18 +1128,17 @@ document.addEventListener('visibilitychange', () => {
 });
 ```
 
-**Support:** `fetchLater`: Chrome/Edge 135+ only (MDN marks it experimental). `sendBeacon`: Chrome 39+, Firefox 31+, Safari 11.1+.
+**Support:** `fetchLater`: Chrome/Edge 135+ only. `sendBeacon`: Chrome 39+, Firefox 31+, Safari 11.1+.
 
 **Gotchas:**
-- `sendBeacon` is POST only and has a small in-flight budget (about 64 KB).
-- Since Chrome 59, a cross-origin Blob must have a CORS-safelisted type (`text/plain`).
-- Local-first apps with no server should flush to IndexedDB instead ([Page Lifecycle](#page-lifecycle-save-on-hidden-not-on-unload)).
+- `sendBeacon` is POST only with a ~64 KB in-flight budget; cross-origin Blobs need a CORS-safelisted type (`text/plain`).
+- Local-first apps without a server flush to IndexedDB instead ([Page Lifecycle](#page-lifecycle-save-on-hidden-not-on-unload)).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Window/fetchLater · https://developer.mozilla.org/en-US/docs/Web/API/Navigator/sendBeacon
 
 ## Content Index API: list offline content in the OS (Chrome Android)
 
-Register pages or articles that are cached for offline use, and Chrome Android shows them in its offline content surface. Offline content becomes discoverable outside the app, the way a native app's downloads are.
+Register cached articles or pages and Chrome Android lists them in its offline content surface, like a native app's downloads.
 
 ```ts
 type IndexReg = ServiceWorkerRegistration & {
@@ -1191,17 +1150,17 @@ if (hasIndex(reg)) await reg.index.add({ id: 'post-42', url: '/posts/42', title,
 // sw.ts: on 'contentdelete' (removed in Chrome's UI), delete that entry from your cache
 ```
 
-**Support:** Chrome Android 84+ only (MDN marks it experimental).
+**Support:** Chrome Android 84+ only (experimental).
 
 **Gotchas:**
-- Register only URLs that really work offline, and remove entries when you evict their cache.
-- Treat it as a minor nicety, not core UX.
+- Register only URLs that really work offline; remove entries when you evict their cache.
+- A minor nicety, not core UX.
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Content_Index_API
 
 ## No state in service-worker globals; always waitUntil
 
-The browser stops an idle worker after about 30 s (Chrome), caps each event at about 5 minutes, and may kill it sooner on iOS. Keep every bit of state in IndexedDB or the Cache API, and pass every async job to `event.waitUntil()`. Unread counts, badges and notification grouping then stay correct across worker restarts. Otherwise badges reset and notifications silently never show.
+Browsers stop idle workers (Chrome: ~30 s), cap events (~5 min) and may kill them sooner on iOS. Keep state in IndexedDB or the Cache API and pass every async job to `waitUntil()`, or badges reset and notifications never show.
 
 ```ts
 // sw.ts. BAD: `let unread = 0;` resets whenever the browser restarts the worker
@@ -1215,18 +1174,18 @@ self.addEventListener('push', (e) => e.waitUntil((async () => {
 })()));
 ```
 
-**Support:** All engines. The timeouts are implementation details (Chrome: about 30 s idle, about 5 min per event), not guarantees.
+**Support:** All engines. The timeouts are implementation details, not guarantees.
 
 **Gotchas:**
 - No `setTimeout`-based work in the worker.
-- The worker has no DOM and no `localStorage`; it has only IndexedDB, the Cache API and `postMessage`.
-- Workbox modules are safe, because they hold no cross-event state.
+- No DOM or `localStorage` in the worker: only IndexedDB, Cache API, `postMessage`.
+- Workbox modules are safe; they hold no cross-event state.
 
-**Sources:** https://developer.chrome.com/blog/longer-esw-lifetimes · https://developer.mozilla.org/en-US/docs/Web/API/ExtendableEvent/waitUntil
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/ExtendableEvent/waitUntil
 
 ## Test the worker: pure decision module plus e2e against the production build
 
-Keep every worker decision in a pure, unit-tested module: message parsing, notification data, URL building, capability detection (see [sw-logic.ts](../templates/sw-logic.ts)). `sw.ts` and the page glue only wire events. Test that wiring end to end against the built app, where the worker actually exists. Worker bugs show up only in production builds and on phones. That's how a missing `getNotifications` became a crash on iOS. The E2E setup (build, preview, reload-for-control, offline start, notification permission) is in [platform-quirks-testing.md](platform-quirks-testing.md#e2e-against-the-production-build-manifest-icons-service-worker-offline-notifications-a11y).
+Keep worker decisions (message parsing, notification data, URLs, capability detection) in a pure, unit-tested module ([sw-logic.ts](../templates/sw-logic.ts)); `sw.ts` and page glue only wire events. Test the wiring end to end against the built app. Field-tested: a missing `getNotifications` on iOS was a production-only crash. E2E setup: [platform-quirks-testing.md](platform-quirks-testing.md#e2e-against-the-production-build-manifest-icons-service-worker-offline-notifications-a11y).
 
 ```ts
 // Playwright: simulate an iOS Safari tab, whose registration can't notify
@@ -1236,12 +1195,12 @@ await page.addInitScript(() => {
 });
 ```
 
-**Support:** Playwright with Chromium supports service workers, `setOffline` and notification permission grants. iOS-only behaviour (push, storage isolation, 7-day eviction, killed-app relaunch) needs a manual device check ([platform-quirks-testing.md](platform-quirks-testing.md#ios-simulator-safari-web-inspector-and-a-real-device-checklist)).
+**Support:** Playwright with Chromium supports service workers, `setOffline` and notification grants. iOS-only behaviour (push, storage isolation, 7-day eviction, killed-app relaunch) needs a device check ([platform-quirks-testing.md](platform-quirks-testing.md#ios-simulator-safari-web-inspector-and-a-real-device-checklist)).
 
 **Gotchas:**
 - Dev servers have no worker (vite-plugin-pwa `devOptions` behave differently).
-- DevTools "Update on reload" changes the lifecycle, so turn it off when testing the prompt flow.
-- To simulate a push, use DevTools > Application > Service workers > Push. Background services records sync, fetch, push and notification events.
-- A fresh browser context means a fresh worker, so each test starts clean.
+- Turn off DevTools "Update on reload" when testing the prompt flow.
+- Simulate a push in DevTools > Application > Service workers; Background services records sync, fetch, push and notification events.
+- A fresh browser context means a fresh worker.
 
 **Sources:** https://playwright.dev/docs/service-workers · https://developer.chrome.com/docs/devtools/application/background-services
