@@ -13,6 +13,7 @@ Yurt is a serverless, end-to-end encrypted team chat with optional AI agents. A 
 | `packages/ui` | `@yurt/ui` | Design system: JSX components + `.d.ts` types, tokens |
 | `apps/web` | `@yurt/web` | The React app (Vite, zustand), deployed to GitHub Pages |
 | `e2e` | | Playwright specs |
+| `.claude/skills/native-web-app` | | Generic agent skill: making any web app/PWA feel native (references + starter templates). Not built or linted here (excluded in `biome.json`, `knip.json`, `.jscpd.json`) |
 
 Protocol details: `docs/PROTOCOL.md`. Product overview: `README.md`.
 
