@@ -51,6 +51,9 @@ async function device(kp: KeyPair, opts: DeviceOpts = {}) {
     kp,
     transport,
     roomIdleMs: 1_500,
+    // \`connected\` is the socket, not the subscription: presence sent before the other device subscribed is lost
+    // until the next heartbeat, which by default comes after the waits below.
+    timing: { beatMs: 500 },
     store,
     calls: opts.webrtc === false ? undefined : { joinRoom: joinRoom as unknown as JoinRoom, selfId, rtc: { rtcPolyfill: RTCPeerConnection } },
     onError: (m) => errors.push(m),
