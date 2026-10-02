@@ -29,7 +29,7 @@ export function useTyping(ch: string) {
   return out;
 }
 
-/** Whether the reader is taking in this window right now. For now: the page is visible. */
+/** Whether the reader is taking in this window right now: visible and focused. */
 function useAttentive(): boolean {
   return useSyncExternalStore(onAttentionChange, () => attentive(document));
 }
