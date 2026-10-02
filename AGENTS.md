@@ -91,3 +91,6 @@ Pages once the build and tests pass. Shared setup (Bun, Node, cached Chromium) i
 - iOS zooms into focused fields under 16px. `packages/ui/tokens/base.css` forces 16px on fields for coarse pointers and
   disables double-tap zoom (`touch-action: manipulation`); don't "fix" it with `maximum-scale` in the viewport (that
   blocks pinch zoom and fails axe).
+- The iOS keyboard pans the page instead of resizing it. `lib/viewport.ts` (`viewportVars`, unit tested) sizes and
+  moves the app to the visible area only while a keyboard is up (`--app-height`, `--app-top`, `--safe-bottom: 0`);
+  otherwise CSS `100%` stands, because an installed iOS app's visual viewport can be short by the status bar.

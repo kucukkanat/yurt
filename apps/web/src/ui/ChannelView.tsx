@@ -484,7 +484,8 @@ function ComposerArea(p: {
   const typing = useTyping(p.ch);
   const app = useApp.getState();
   return (
-    <div style={{ padding: p.narrow ? '0 10px 10px' : '0 20px 16px', flexShrink: 0 }}>
+    // The app already keeps clear of the home indicator; that inset is room enough below the composer.
+    <div style={{ padding: p.narrow ? '0 10px max(0px, 10px - var(--safe-bottom))' : '0 20px 16px', flexShrink: 0 }}>
       {p.narrow && (
         <div style={{ paddingBottom: 8 }}>
           <HuddleDock />

@@ -5,7 +5,7 @@ import { useApp } from '../../../src/store';
 import { haptic } from '../../../src/lib/haptics';
 import { install, isIos, isStandalone, offerInstall, setBadge, watchInstall } from '../../../src/lib/pwa';
 import { trackViewport } from '../../../src/lib/viewport';
-import { resetDb, until } from './harness';
+import { resetDb } from './harness';
 
 // What the app does with the device it runs on, in real Chromium: vibration, the install offer, the icon badge and
 // the visible viewport. Reduced motion is Chromium's own emulation.
@@ -87,11 +87,11 @@ describe('installing', () => {
 });
 
 describe('the visible viewport', () => {
-  it('sizes the app to it, following resizes (an on-screen keyboard)', async () => {
+  it('leaves the app at the layout height while nothing covers it', async () => {
+    document.documentElement.style.setProperty('--app-height', '1px');
     trackViewport();
-    const height = () => document.documentElement.style.getPropertyValue('--app-height');
-    expect(height()).toBe(String(window.visualViewport?.height) + 'px');
+    expect(document.documentElement.style.getPropertyValue('--app-height')).toBe('');
     await page.viewport(800, 500);
-    await until(() => height() === '500px', 'the new height');
+    expect(document.body.getBoundingClientRect().height).toBe(500);
   });
 });

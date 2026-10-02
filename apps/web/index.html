@@ -13,6 +13,8 @@
     <style>
       html { height: 100%; }
       body, #root { height: var(--app-height, 100%); margin: 0; }
+      /* lib/viewport.ts: where iOS panned to with the keyboard up. A transform, so fixed overlays follow the app. */
+      body { transform: translateY(var(--app-top, 0px)); }
       body { background: var(--surface-page); overscroll-behavior: none; color: var(--text-body); font-family: var(--font-body); -webkit-font-smoothing: antialiased; overflow: hidden; }
       a { color: var(--text-link); } a:hover { color: var(--accent-hover); }
     </style>
