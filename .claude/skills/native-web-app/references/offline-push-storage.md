@@ -656,7 +656,7 @@ status?.addEventListener('change', () => showPushState(status.state)); // revoke
 - Code can't re-prompt after `denied`.
 - Keep an app-level mute separate from the browser permission.
 - The `push` permission name isn't supported everywhere; catch query errors.
-- On iOS show the button only in standalone mode ([install-and-identity.md](install-and-identity.md#detect-the-installed-app)). General rules: [device-apis.md](device-apis.md#permission-ux-ask-in-context-after-explaining-never-on-load-plus-the-new-capability-elements).
+- On iOS show the button only in standalone mode ([install-and-identity.md](install-and-identity.md#detect-the-installed-app)). General rules: [device-apis.md](device-apis.md#permission-ux-ask-in-context-never-on-load).
 
 **Sources:** https://web.dev/articles/push-notifications-permissions-ux · https://blog.google/chromium/automatic-notification-permission/
 
@@ -926,7 +926,7 @@ h.write(bytes, { at: 0 }); h.flush(); h.close();
 **Gotchas:**
 - Same quota and eviction rules as other storage, Safari's 7-day rule included.
 - A sync access handle locks the file exclusively; coordinate tabs with Web Locks.
-- Invisible to users; export via File System Access or a download ([device-apis.md](device-apis.md#file-system-access-showopenfilepicker--showsavefilepicker-with-fallbacks-opfs)).
+- Invisible to users; export via File System Access or a download ([device-apis.md](device-apis.md#file-system-access-pickers-with-fallbacks)).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system
 
@@ -972,7 +972,7 @@ bus.postMessage({ type: 'logout', v: 1 }); // versioned: another tab may run ano
 - `{ ifAvailable: true }` is a try-lock; a `signal` gives up waiting.
 - Locks are per origin and storage partition: an iOS Home Screen app doesn't share them with Safari.
 - Validate bus messages. Whether held locks block bfcache varies by engine (unverified).
-- Presence and multi-window UX: [navigation-ui-patterns.md](navigation-ui-patterns.md#multiple-windows-and-tabs-one-leader-shared-state-and-which-window-is-active).
+- Presence and multi-window UX: [navigation-ui-patterns.md](navigation-ui-patterns.md#multiple-windows-and-tabs-one-leader-shared-state-active-window).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API · https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel
 
@@ -999,7 +999,7 @@ const probe = (): Promise<boolean> =>
 - `onLine` is true behind captive portals, on a LAN without uplink, or with a dead VPN.
 - A `no-store` fetch still goes through the worker; exclude the probe route or give it a static `network` route.
 - Debounce the banner (~2 s).
-- Save-Data and connection hints: [device-apis.md](device-apis.md#network-status-onlineoffline-events-network-information-chromium-battery-status-dont).
+- Save-Data and connection hints: [device-apis.md](device-apis.md#network-information-save-data-and-battery-status-dont).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Navigator/onLine
 
@@ -1052,7 +1052,7 @@ if (bare && ui && Date.now() - ui.at < 7 * 864e5) history.replaceState(null, '',
 - `sessionStorage` dies with a killed app; read the boot hint from `localStorage` synchronously.
 - Expire and validate snapshots. Don't resume into confirm, payment or expired-auth screens.
 - Scroll to the anchor only after final layout; chat views restore distance from the bottom.
-- Per-screen scroll on Back: [navigation-ui-patterns.md](navigation-ui-patterns.md#preserve-state-scroll-per-screen-and-resume-the-last-screen-on-relaunch).
+- Per-screen scroll on Back: [navigation-ui-patterns.md](navigation-ui-patterns.md#preserve-scroll-per-screen-and-resume-the-last-screen-on-relaunch).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/History/scrollRestoration
 
@@ -1081,7 +1081,7 @@ setInterval(() => { if (Date.now() - beat > 30_000) resume(); beat = Date.now();
 - A WebSocket killed during suspension may still report `OPEN`; use an app-level ping with timeout.
 - Publish presence "away" on hidden, "online" on visible.
 - Missed-message alerts while suspended can only come from push.
-- Platform summary: [platform-quirks-testing.md](platform-quirks-testing.md#background-suspension-reconnect-and-catch-up-on-resume).
+- Platform summary: [platform-quirks-testing.md](#resume-from-background-reconnect-resync-refresh).
 
 **Sources:** https://developer.chrome.com/blog/timer-throttling-in-chrome-88 · https://developer.mozilla.org/en-US/docs/Web/API/Window/pageshow_event
 
@@ -1185,7 +1185,7 @@ self.addEventListener('push', (e) => e.waitUntil((async () => {
 
 ## Test the worker: pure decision module plus e2e against the production build
 
-Keep worker decisions (message parsing, notification data, URLs, capability detection) in a pure, unit-tested module ([sw-logic.ts](../templates/sw-logic.ts)); `sw.ts` and page glue only wire events. Test the wiring end to end against the built app. Field-tested: a missing `getNotifications` on iOS was a production-only crash. E2E setup: [platform-quirks-testing.md](platform-quirks-testing.md#e2e-against-the-production-build-manifest-icons-service-worker-offline-notifications-a11y).
+Keep worker decisions (message parsing, notification data, URLs, capability detection) in a pure, unit-tested module ([sw-logic.ts](../templates/sw-logic.ts)); `sw.ts` and page glue only wire events. Test the wiring end to end against the built app. Field-tested: a missing `getNotifications` on iOS was a production-only crash. E2E setup: [platform-quirks-testing.md](platform-quirks-testing.md#e2e-against-the-production-build).
 
 ```ts
 // Playwright: simulate an iOS Safari tab, whose registration can't notify
@@ -1195,7 +1195,7 @@ await page.addInitScript(() => {
 });
 ```
 
-**Support:** Playwright with Chromium supports service workers, `setOffline` and notification grants. iOS-only behaviour (push, storage isolation, 7-day eviction, killed-app relaunch) needs a device check ([platform-quirks-testing.md](platform-quirks-testing.md#ios-simulator-safari-web-inspector-and-a-real-device-checklist)).
+**Support:** Playwright with Chromium supports service workers, `setOffline` and notification grants. iOS-only behaviour (push, storage isolation, 7-day eviction, killed-app relaunch) needs a device check ([platform-quirks-testing.md](platform-quirks-testing.md#ios-simulator-and-safari-web-inspector)).
 
 **Gotchas:**
 - Dev servers have no worker (vite-plugin-pwa `devOptions` behave differently).

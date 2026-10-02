@@ -111,7 +111,7 @@ export function resolvedId(id: string | undefined, startUrl: URL): string {
 **Gotchas:**
 - `./`, `/`, `foo`, `../foo` resolve against the origin: on a shared origin (GitHub Pages project sites) `"./"` collides with every app there. Use the full path (`"/repo/"`). Field-tested: `"./"` on a subpath deploy silently became the origin root.
 - Set `id` before adding analytics parameters to `start_url`.
-- A changed id is a new app; Chromium desktop can migrate ([Updates](#manifest-updates-and-identity-migration)). DevTools > Application > Manifest shows the computed App Id ([platform-quirks-testing.md](platform-quirks-testing.md#debug-installability-with-devtools-chromeinspect-and-real-phones-lighthouse-no-longer-has-a-pwa-category)).
+- A changed id is a new app; Chromium desktop can migrate ([Updates](#manifest-updates-and-identity-migration)). DevTools > Application > Manifest shows the computed App Id ([platform-quirks-testing.md](platform-quirks-testing.md#debug-installability-with-devtools-not-lighthouse)).
 
 **Sources:** https://w3c.github.io/manifest/#id-member · https://developer.chrome.com/docs/capabilities/pwa-manifest-id
 
@@ -494,7 +494,7 @@ export function syncThemeColor(): void {
 **Support:** Chromium desktop 73+: installed apps only · Chrome Android: browser UI too (with system dark mode only when installed or a TWA) · Safari 15+; from Safari 26 (macOS and iOS) installed web apps only · Firefox: ignored.
 
 **Gotchas:**
-- `media` follows only the OS scheme; an in-app toggle needs the sync. Whole dark-mode strategy: [navigation-ui-patterns.md](navigation-ui-patterns.md#dark-mode-follow-the-system-allow-a-manual-override-keep-theme-color-in-sync-no-flash).
+- `media` follows only the OS scheme; an in-app toggle needs the sync. Whole dark-mode strategy: [navigation-ui-patterns.md](navigation-ui-patterns.md#dark-mode-follow-the-system-allow-an-override-sync-theme-color-no-flash).
 - Update it when a full-screen sheet or dark header opens, as native apps do.
 - Safari 26+ tabs tint from edge-hugging fixed elements: [viewport-keyboard-safe-areas.md](viewport-keyboard-safe-areas.md#safari-26-toolbar-tinting-and-full-screen-dims-come-from-edge-hugging-fixedsticky-elements).
 
@@ -637,7 +637,7 @@ export {};
 - Installed apps only. POST needs an active worker before the first share; text-only GET needs none.
 - Sources often put the URL in `text`: extract it. Validate every field and file.
 - On cold start the page collects the stash after the redirect; add [launch_handler](#single-instance-launches-launch_handler) so shares land in the open window.
-- Sharing out: [device-apis.md](device-apis.md#web-share-api-navigatorshare--canshare-including-files).
+- Sharing out: [device-apis.md](device-apis.md#web-share-navigatorshare-and-canshare-including-files).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest/Reference/share_target · https://learn.microsoft.com/en-us/windows/apps/develop/windows-integration/integrate-sharesheet-pwa
 
@@ -661,7 +661,7 @@ window.launchQueue?.setConsumer(async ({ files }) => {
 
 **Gotchas:**
 - `action` in scope; specific types, never `*/*`. The OS asks the user on first open; writing back may prompt.
-- Files arrive on the page, not in the worker; with `focus-existing`, in the open window. Keep `<input type="file">` for everyone else. Runtime details: [device-apis.md](device-apis.md#file-handling-manifest-file_handlers--launchqueue-files).
+- Files arrive on the page, not in the worker; with `focus-existing`, in the open window. Keep `<input type="file">` for everyone else. Runtime details: [device-apis.md](device-apis.md#opening-files-from-the-os-launchqueue-files).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest/Reference/file_handlers
 
@@ -711,7 +711,7 @@ window.launchQueue?.setConsumer(({ targetURL }) => {
 **Gotchas:**
 - `focus-existing` doesn't navigate: consume `targetURL` or the click looks ignored. `navigate-existing` reloads and loses state.
 - Test clicking your link from email or chat with the app installed.
-- Notification clicks: [offline-push-storage.md](offline-push-storage.md#notificationclick-focus-the-open-window-and-route-in-place-or-open-one). Runtime details: [device-apis.md](device-apis.md#launch-handler-single-instance-app-windows--launchqueue).
+- Notification clicks: [offline-push-storage.md](offline-push-storage.md#notificationclick-focus-the-open-window-and-route-in-place-or-open-one). Runtime details: [device-apis.md](device-apis.md#handling-launches-launchqueue-for-urls).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest/Reference/launch_handler · https://developer.chrome.com/docs/capabilities/pwa-navigation-management
 
@@ -810,7 +810,7 @@ Sets an installed Android app's default orientation. A lock that fights the rota
 
 **Gotchas:**
 - Chromium maps (source-checked): omitted → `USER` (sensor, respects rotation lock); `portrait` → `SENSOR_PORTRAIT` (can flip upside down); `any` → `FULL_USER` (respects the lock, else all four orientations, including upside-down portrait).
-- Design for both orientations on tablets regardless ([viewport-keyboard-safe-areas.md](viewport-keyboard-safe-areas.md#orientation-changes-respond-dont-lock)). Runtime `screen.orientation.lock()`: [device-apis.md](device-apis.md#screen-orientation-read-always-lock-only-in-fullscreen-or-installed-apps).
+- Design for both orientations on tablets regardless ([viewport-keyboard-safe-areas.md](viewport-keyboard-safe-areas.md#orientation-changes-respond-dont-lock)). Runtime `screen.orientation.lock()`: [device-apis.md](device-apis.md#screen-orientation-read-always-lock-only-in-fullscreen).
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest/Reference/orientation · https://github.com/chromium/chromium/blob/main/content/public/android/java/src/org/chromium/content/browser/ScreenOrientationProviderImpl.java
 
