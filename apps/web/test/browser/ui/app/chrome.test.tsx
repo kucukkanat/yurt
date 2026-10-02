@@ -91,6 +91,19 @@ describe('the app chrome', () => {
     useApp.getState().go({ code, ch: 'general' });
   });
 
+  it('leaves the open channel unread while another window has focus, and reads it on coming back', async () => {
+    const readAt = () => useApp.getState().workspaces.find((w) => w.code === code)?.lastRead.general ?? 0;
+    // Once the composer has taken focus on opening (or it would bring the focus back).
+    await expect.element(page.getByRole('textbox', { name: 'Message #general' })).toHaveFocus();
+    window.parent.focus(); // the test runner's page: as good as another app in front
+    await until(() => !document.hasFocus());
+    const e = await bo.say({ t: 'msg', ch: 'general', b: { text: 'while you were away' } });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readAt()).toBeLessThan(e.ts);
+    window.focus();
+    await until(() => readAt() >= e.ts);
+  });
+
   it('opens everything from the workspace menu and the mode chip', async () => {
     const menuButton = page.getByTestId('ws-menu-button');
     await menuButton.click();

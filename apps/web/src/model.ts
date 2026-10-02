@@ -199,7 +199,7 @@ export function channelTitle(state: WsState | undefined, ch: string, me: string)
 /**
  * What the tab icon should show (see lib/favicon.ts): unread mentions and DMs across every workspace,
  * other unread messages, calls, and whether we're cut off. The channel on screen doesn't count while
- * the tab is visible, matching the sidebar.
+ * I'm looking (visible and focused), matching the sidebar.
  */
 /** A call is going on in this workspace that I'm not in. */
 function callNearby(s: AppState, code: string, p: WorkspacePeer | undefined): boolean {

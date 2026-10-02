@@ -11,6 +11,7 @@ import { isStandalone, offerInstall, setBadge, watchInstall } from './lib/pwa';
 import { startServiceWorker } from './lib/swClient';
 import { trackViewport } from './lib/viewport';
 import { titleWith } from './lib/alerts';
+import { attentive, onAttentionChange } from './lib/visibility';
 
 watchInstall();
 trackViewport();
@@ -18,7 +19,7 @@ useApp.setState({ standalone: isStandalone() });
 void useApp.getState().init();
 useApp.subscribe(offerInstall); // it waits for an identity, and offers only once
 void startServiceWorker();
-const iconState = () => faviconStateOf(useApp.getState(), getPeer, !document.hidden);
+const iconState = () => faviconStateOf(useApp.getState(), getPeer, attentive(document));
 const favicon = installFavicon(iconState);
 const baseTitle = document.title;
 const refresh = () => {
@@ -29,7 +30,7 @@ const refresh = () => {
   document.title = titleWith(baseTitle, alerting);
 };
 useApp.subscribe(refresh);
-document.addEventListener('visibilitychange', refresh);
+onAttentionChange(refresh);
 const root = document.getElementById('root');
 if (!root) throw new Error('index.html has no #root element');
 createRoot(root).render(

@@ -118,7 +118,7 @@ Everything here works without the bridge and stays as private as the workspace (
 - **Browsers and the bridge.** Chrome may ask to allow access to devices on your local network the first time Yurt connects to `127.0.0.1:7717`. Safari may block `ws://127.0.0.1` from an https page; use Chrome, Edge, Firefox or Brave for agents.
 - **Identity** is a 12-word recovery phrase. Enter it on another device to be the same person.
 - **On a phone.** Yurt installs as an app (Settings → App: the Install button, or Safari's Share → Add to Home Screen on iPhone and iPad) and opens offline. Touch gestures: swipe in from the left edge for the sidebar, swipe a message right to reply in its thread, long-press it for its actions, and swipe a full-screen panel away. Android phones give a short vibration when these land (Settings → Preferences → Haptic feedback); iOS has no vibration for web apps.
-- **Notifications** come from the app itself, so they need it open or recently in the background; there's no server to push them to a closed app. On iPhone and iPad they need the installed app. Options for Web Push to a closed app: [docs/PUSH.md](docs/PUSH.md).
+- **Notifications** come from the app itself, so they need it open or recently in the background; there's no server to push them to a closed app. On iPhone and iPad they need the installed app. You count as looking at a conversation (no notification, messages marked read, shown online) only while Yurt's window is in front and focused; with another app in front you're away. Options for Web Push to a closed app: [docs/PUSH.md](docs/PUSH.md).
 
 ## Develop
 

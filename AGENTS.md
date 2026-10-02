@@ -87,6 +87,10 @@ Pages once the build and tests pass. Shared setup (Bun, Node, cached Chromium) i
 - Private channels: `dm:<a>:<b>`, `adm:<owner>:<agentId>`, `gdm:<member>:<owner>:<agentId>`; routing and sealing
   depend only on the `a`/`to` pair.
 - Web browser tests share one origin (IndexedDB, store), so that project runs files one at a time.
+- "Looking at the app" means visible *and* focused (`lib/visibility.ts`: `attentive`, `onAttentionChange`): it drives
+  read marks, notifications for the open conversation, the tab icon and presence `away`. Browser tests run in an iframe
+  that has no focus by itself, so `test/browser/attention-setup.ts` focuses it; `window.parent.focus()` is a real way to
+  look away in a test (wait for the composer's autofocus first, or it takes the focus back).
 - The service worker (`apps/web/src/sw.ts`) and its page glue (`lib/swClient.ts`) only exist in the built app: keep
   their decisions in `lib/swLogic.ts` (unit tested) and check the wiring in `e2e/pwa.spec.ts`.
 - The npm `yurt-bridge` bundles `@yurt/protocol` and `@yurt/ui`: source changes in any of the three need a bridge

@@ -234,6 +234,12 @@ describe('notifications', () => {
     o.peer.publish({ t: 'msg', ch: 'design-review', b: { text: '@ada you see this already' } });
     o.peer.publish({ t: 'react', ch: 'general', b: { target: 'x', icon: 'heart', on: true } });
     await until(() => said(dm).length === 1 && said('general').length === 1, 'the notifications');
+    // With another window in front, even the conversation on screen notifies.
+    await until(() => [...(app().states[relayCode]?.msgs.values() ?? [])].some((m) => m.text === '@ada you see this already'), 'the on-screen one');
+    window.parent.focus();
+    o.peer.publish({ t: 'msg', ch: 'design-review', b: { text: '@ada from behind another window' } });
+    await until(() => said('design-review').length === 1, 'the on-screen conversation to notify');
+    window.focus();
     // My other device runs my agent: its approval request is for me; an agent I don't know still has a name.
     const mine = olu(relayCode, me);
     await until(() => mine.peer.connected, 'my other device');
@@ -262,6 +268,7 @@ describe('notifications', () => {
     expect(said(dm)).toEqual(['Olu: a dm']);
     expect(said('general')).toEqual(['Olu in #general: hey @ada', 'Agent in #general: hi @ada from a stranger agent']);
     expect(said(adm)).toEqual(['Scout needs you: edit a file']);
+    expect(said('design-review')).toEqual(['Olu in #design-review: @ada from behind another window']);
     // Clicking one opens its conversation; reading a conversation clears its notifications.
     notificationsFor(relayCode, dm)[0]?.dispatchEvent(new Event('click'));
     await until(() => app().route.ch === dm, 'the DM to open');

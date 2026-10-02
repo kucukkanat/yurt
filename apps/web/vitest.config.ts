@@ -30,7 +30,7 @@ export default defineConfig({
           include: ['test/browser/**/*.test.{ts,tsx}'],
           exclude: ['test/browser/phone/**'],
           globalSetup: ['test/browser/global-setup.ts', 'test/browser/core/bridge-setup.ts'],
-          setupFiles: ['test/browser/backup-setup.ts'],
+          setupFiles: ['test/browser/backup-setup.ts', 'test/browser/attention-setup.ts'],
           // Test files share one page origin, so IndexedDB and the store are shared: run them one at a time.
           fileParallelism: false,
           browser: {
@@ -54,7 +54,7 @@ export default defineConfig({
           name: 'phone',
           include: ['test/browser/phone/**/*.test.{ts,tsx}'],
           globalSetup: ['test/browser/global-setup.ts'],
-          setupFiles: ['test/browser/backup-setup.ts'],
+          setupFiles: ['test/browser/backup-setup.ts', 'test/browser/attention-setup.ts'],
           fileParallelism: false,
           browser: {
             enabled: true,

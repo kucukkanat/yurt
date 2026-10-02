@@ -45,7 +45,7 @@ import { inAppAlerts, MESSAGE_TOAST_MS, messageToastKey } from './lib/alerts';
 import { chime } from './lib/chime';
 import { report } from './lib/diagnostics';
 import { buildHash, parseHash, type Route } from './lib/route';
-import { presenceNow } from './lib/visibility';
+import { attentive, onAttentionChange, presenceNow } from './lib/visibility';
 import { DEFAULT_SETTINGS, loadIdentity, loadSettings, loadWorkspaces, uploadServers, type Identity, type NetSettings, type Settings, type WsRecord } from './lib/stored';
 import type { NewWorkspaceNet } from './lib/newNet';
 import { backupConfig, docOf, ledgerFromText, ledgerOf, merge, missing, record, sameLedger, type Ledger } from './lib/backup';
@@ -204,7 +204,7 @@ function notificationFor(e: Ev, s: WsState, ctx: { me: Identity; route: Route; c
   // The reduced message, not the raw body: only what the reducer accepted is announced.
   const m = e.t === 'msg' && e.ch ? s.msgs.get(e.id) : undefined;
   if (!m || Date.now() - m.ts > 60_000) return null;
-  if (!document.hidden && ctx.route.code === ctx.code && ctx.route.ch === m.ch) return null;
+  if (attentive(document) && ctx.route.code === ctx.code && ctx.route.ch === m.ch) return null;
   const n = noticeFor(m, s, ctx.me.pub, ctx.muted);
   return n && { ...n, code: ctx.code, tag: ctx.code + ':' + m.id };
 }
@@ -508,7 +508,7 @@ export const useApp = create<AppState>((set, get) => {
         void syncBackup();
       });
       window.addEventListener('offline', () => set({ online: false }));
-      document.addEventListener('visibilitychange', () => {
+      onAttentionChange(() => {
         for (const p of allPeers()) p.setPresence({ st: presenceNow() });
       });
       if (identity) {

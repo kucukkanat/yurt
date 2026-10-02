@@ -98,7 +98,7 @@ A private pair's key is `HKDF(ikm = X25519(edToMontgomery(mySec), edToMontgomery
 |---|---|---|---|
 | `4344` | yes | session key | Public event: `seal(enc, JSON(ev))`, `y = tag`. |
 | `4344` | yes | one-off key per copy | Private event (`to` set): two copies, one tagged `y = inbox(to)` and one `y = inbox(a)`, each `seal(enc, JSON({a, to, c: seal(pairKey, JSON(ev))}))`. |
-| `24344` | no (ephemeral) | session key | Presence: `seal(enc, JSON({j, t, s}))` with `j = JSON(presence)`, `s = ed25519("yurt-pres:" + code + ":" + t + ":" + j)`; dropped when `t` is more than 150 s off. Sent on change and every 60 s, but only while the member is in the foreground, needs the room, or is a bridge. |
+| `24344` | no (ephemeral) | session key | Presence: `seal(enc, JSON({j, t, s}))` with `j = JSON(presence)`, `s = ed25519("yurt-pres:" + code + ":" + t + ":" + j)`; dropped when `t` is more than 150 s off. Sent on change and every 60 s, but only while the member is in the foreground (`st: "online"`: the app is visible *and* its window has focus; otherwise `away`), needs the room, or is a bridge. |
 
 Presence is `{pub, st, typing?, agents?, bridge?, rtc?, view?, focus?, cur?}`: typing, agents' working state (`agents: {id: {working, on?}}`, `on` = `task:<id>` or `doc:<id>`), what the member is looking at (`view`: a channel id, `thread:<msgId>` or `doc:<id>`; others can follow it), focus mode, and the caret's line in a doc (`cur {doc, line}`).
 
