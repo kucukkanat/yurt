@@ -1,5 +1,6 @@
 {
   "name": "yurt",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "workspaces": [
