@@ -34,7 +34,7 @@ describe('the app shell', () => {
 
   it('shows the workspace once there is an identity, opening its first channel', async () => {
     await app().createIdentity(newRecoveryPhrase(), 'Ada', 'ada');
-    code = await app().createWorkspace('Shell', { kind: 'nostr', relays: [inject('relayUrl')], blossom: [] });
+    code = await app().createWorkspace('Shell', { relays: [inject('relayUrl')], blossom: [] });
     await until(() => app().route.ch === 'general', '#general');
     app().go({ code }); // a workspace route without a channel goes to #general
     await until(() => app().route.ch === 'general', '#general again');

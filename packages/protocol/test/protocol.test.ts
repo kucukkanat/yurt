@@ -10,17 +10,11 @@ import {
   verifyEvent,
   reduce,
   EDIT_WINDOW_MS,
-  summarize,
-  diffDays,
-  idsByDays,
-  reconcile,
   normalizeCode,
   formatCode,
   newInviteCode,
   dmChannel,
   mentions,
-  parseOr,
-  SyncMsgSchema,
   type Ev,
 } from '../src';
 import { eventClock, northwind } from './util';
@@ -125,26 +119,5 @@ describe('reduce', () => {
     const fake = makeEvent(C, { ws: WS, t: 'ws.create', b: { name: 'Evil' }, ts: 1 });
     const s = reduce(WS, [fake, ...base()], { creator: A.pub });
     expect(s.name).toBe('Northwind');
-  });
-});
-
-describe('sync', () => {
-  it('finds exactly the missing events', () => {
-    const all = base().concat([ev(A, 'msg', { text: 'x' }, { ch: 'general' }), ev(B, 'msg', { text: 'y' }, { ch: 'general' })]);
-    const mine = all.slice(0, 3);
-    const theirs = all.slice(1);
-    const days = diffDays(summarize(mine), summarize(theirs));
-    expect(days.length).toBeGreaterThan(0);
-    const { want, give } = reconcile(mine, idsByDays(theirs, days), () => false);
-    expect(new Set(want)).toEqual(new Set(all.slice(3).map((e) => e.id)));
-    expect(give.map((e) => e.id)).toEqual([all[0]?.id]);
-  });
-  it('ignores hostile day keys and values from the other side', () => {
-    const mine = base();
-    // As they arrive: parsed by the wire schema first, then compared.
-    const ids = parseOr(SyncMsgSchema, { k: 'ids', d: JSON.parse('{"__proto__":[1],"constructor":5,"x":["a"],"1":{"length":1}}') });
-    expect(ids?.k === 'ids' && reconcile(mine, ids.d, () => false)).toEqual({ want: [], give: [] });
-    const sum = parseOr(SyncMsgSchema, { k: 'sum', s: JSON.parse('{"__proto__":"1:1","toString":"x"}') });
-    expect(sum?.k === 'sum' && diffDays(summarize(mine), sum.s)).toEqual(Object.keys(summarize(mine)));
   });
 });

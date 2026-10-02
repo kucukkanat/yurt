@@ -216,23 +216,13 @@ function ProfileActions({ p, code, me }: { p: Person; code: string; me: string }
 function Moderation({ p, code }: { p: Person; code: string }) {
   const { state, peer, identity } = useCurrent();
   const app = useApp.getState();
-  // Relay workspaces rotate the key on ban, which can't be undone, so the ban asks for a second click.
-  const relayed = peer?.transport.kind === 'nostr';
+  // A ban rotates the key, which can't be undone, so it asks for a second click.
   const [confirmBan, setConfirmBan] = useState(false);
   const iAmCreator = state?.creator === identity.pub;
   const ban = () => {
     setConfirmBan(false);
-    const e = app.publish(code, { t: 'ban', b: { target: p.pub, on: true } });
+    app.publish(code, { t: 'ban', b: { target: p.pub, on: true } });
     for (const pid of peer?.peerIdsFor([p.pub]) || []) (peer?.room?.getPeers()[pid] as RTCPeerConnection | undefined)?.close();
-    if (!relayed) {
-      app.toast({
-        title: p.name + ' is banned',
-        description: 'All their messages are hidden and they’re disconnected.',
-        actionLabel: 'Undo',
-        onAction: () => e && app.publish(code, { t: 'ban', b: { target: p.pub, on: false } }),
-      });
-      return;
-    }
     try {
       peer?.rotate();
       app.toast({
@@ -248,13 +238,13 @@ function Moderation({ p, code }: { p: Person; code: string }) {
     <Button size="sm" variant="secondary" onClick={() => app.publish(code, { t: 'ban', b: { target: p.pub, on: false } })}>
       Unban
     </Button>
-  ) : relayed && !confirmBan ? (
+  ) : !confirmBan ? (
     <Button size="sm" variant="danger" iconLeft="ban" data-testid="ban-button" onClick={() => setConfirmBan(true)}>
       Ban
     </Button>
   ) : (
-    <Button size="sm" variant="danger" iconLeft="ban" data-testid={relayed ? 'ban-confirm' : 'ban-button'} onClick={ban}>
-      {relayed ? 'Ban and rotate key' : 'Ban'}
+    <Button size="sm" variant="danger" iconLeft="ban" data-testid="ban-confirm" onClick={ban}>
+      Ban and rotate key
     </Button>
   );
   return (
@@ -272,7 +262,7 @@ function Moderation({ p, code }: { p: Person; code: string }) {
           </Button>
         )}
         {banButton}
-        {relayed && confirmBan && (
+        {confirmBan && (
           <span data-testid="ban-warning" style={{ flexBasis: '100%', fontSize: 12.5, color: 'var(--text-subtle)' }}>
             They keep what they’ve already read. Everyone else moves to a new key; old invite links stop working.
           </span>
@@ -304,12 +294,7 @@ function Thread({ id, code, ch }: { id: string; code: string; ch: string }) {
   const people = roster(state, peer, identity.pub);
   const typing = useTyping(ch);
   const parent = state?.msgs.get(id);
-  if (!state || !parent)
-    return (
-      <div style={{ padding: 20, fontSize: 14, color: 'var(--text-muted)' }}>
-        {peer?.transport.kind === 'nostr' ? 'This thread shows up once it arrives from the workspace’s relays.' : 'This thread syncs once a member who has it is online.'}
-      </div>
-    );
+  if (!state || !parent) return <div style={{ padding: 20, fontSize: 14, color: 'var(--text-muted)' }}>This thread shows up once it arrives from the workspace’s relays.</div>;
   const replies = parent.replies.map((rid) => state.msgs.get(rid)).filter((m): m is Msg => !!m);
   const ctx: MsgCtx = {
     state,

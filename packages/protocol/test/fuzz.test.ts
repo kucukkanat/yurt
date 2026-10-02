@@ -10,8 +10,6 @@ import {
   parseBody,
   parseOr,
   isEventShape,
-  summarize,
-  diffDays,
   normalizeCode,
   parseInvite,
   inviteHash,
@@ -27,9 +25,7 @@ import {
   BODY_SCHEMAS,
   PresenceSchema,
   HuddleStateSchema,
-  SyncMsgSchema,
   HandshakeSchema,
-  FileIdSchema,
   PrivateWrapperSchema,
   PresenceEnvelopeSchema,
   KeyHistorySchema,
@@ -108,7 +104,7 @@ describe('the reducer, fuzzed', () => {
 });
 
 describe('schemas, fuzzed', () => {
-  const live = { PresenceSchema, HuddleStateSchema, SyncMsgSchema, HandshakeSchema, FileIdSchema, PrivateWrapperSchema, PresenceEnvelopeSchema, KeyHistorySchema };
+  const live = { PresenceSchema, HuddleStateSchema, HandshakeSchema, PrivateWrapperSchema, PresenceEnvelopeSchema, KeyHistorySchema };
 
   it('never throw, and what they accept is a fixed point (parsing it again changes nothing)', () => {
     fc.assert(
@@ -152,16 +148,6 @@ describe('wire formats, fuzzed', () => {
     expect(verifyEvent(e)).toBe(true);
   });
 
-  it('day summaries ignore order, and two equal logs have no differing days', () => {
-    const ev = fc.record({ id: hex32, ts: fc.integer({ min: 0, max: 10 ** 13 }) });
-    fc.assert(
-      fc.property(fc.array(ev), (evs) => {
-        expect(summarize([...evs].reverse())).toEqual(summarize(evs));
-        expect(diffDays(summarize(evs), summarize([...evs].reverse()))).toEqual([]);
-      }),
-    );
-  });
-
   it('code and invite parsers never throw on arbitrary text', () => {
     fc.assert(
       fc.property(
@@ -187,14 +173,11 @@ describe('wire formats, fuzzed', () => {
     );
     const invite: fc.Arbitrary<Invite> = fc.record({
       code,
-      transport: fc.oneof(
-        fc.record({ kind: fc.constant('nostr' as const), key: fc.constant(newWorkspaceKey()), relays: relays.map((r) => [...new Set(r)]) }),
-        fc.record({ kind: fc.constant('trystero' as const), key: fc.constant(newWorkspaceKey()) }),
-      ),
+      transport: fc.record({ key: fc.constant(newWorkspaceKey()), relays: relays.map((r) => [...new Set(r)]) }),
     });
     fc.assert(
       fc.property(invite, (inv) => {
-        fc.pre(inv.transport.kind !== 'nostr' || inv.transport.relays.every((u) => /^wss?:\/\/[^\s/,]+/.test(u) && !/[\s,]/.test(u)));
+        fc.pre(inv.transport.relays.every((u) => /^wss?:\/\/[^\s/,]+/.test(u) && !/[\s,]/.test(u)));
         expect(parseInvite('https://yurt.example/' + inviteHash(inv))).toEqual(inv);
       }),
     );

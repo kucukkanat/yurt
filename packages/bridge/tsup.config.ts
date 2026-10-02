@@ -13,6 +13,5 @@ export default defineConfig({
   // resolve both from the bridge's single copy and crash on start (ERR_PACKAGE_PATH_NOT_EXPORTED).
   noExternal: ['@yurt/protocol', 'nostr-tools', /^@noble\//, /^@scure\//],
   // Native / Node-specific packages stay real dependencies.
-  // Both Trystero strategies must share one @trystero-p2p/core (one selfId), so neither is bundled.
-  external: ['trystero', '@trystero-p2p/torrent', 'werift', 'ws'],
+  external: ['ws'],
 });

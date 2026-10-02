@@ -10,11 +10,14 @@ const panel = () => page.getByTestId('huddle-panel');
 describe('the huddle panel', () => {
   it('shows who’s in my huddle beside the conversation, follows me, collapses to the dock and goes when I leave', async () => {
     await startApp({ as: 'Ada' });
-    const code = await useApp.getState().createWorkspace('Calls', { kind: 'trystero', signal: { kind: 'nostr', urls: [relayUrl()] } });
+    const code = await useApp.getState().createWorkspace('Calls', { relays: [relayUrl()], blossom: [] });
     const transport = useApp.getState().workspaces.find((w) => w.code === code)?.transport;
     if (!transport) throw new Error('no workspace');
-    const bo = (await openRemote()).makePeer({ code, transport, creator: me().pub });
+    const bo = (await openRemote()).makePeer({ code, transport, creator: me().pub, webrtc: true });
     await bo.peer.start();
+    // Call rooms open on demand; open both now so Bo is already connected when he joins a huddle.
+    getPeer(code)?.ensureRoom();
+    bo.peer.ensureRoom();
     await until(() => [...(getPeer(code)?.peers.values() ?? [])].some((p) => p.pub === bo.kp.pub), 30_000, 'Bo over WebRTC');
     bo.peer.publish({ t: 'profile', b: { name: 'Bo', handle: 'bo' } });
     bo.peer.setHuddle({ ch: 'general', mic: false });

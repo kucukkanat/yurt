@@ -13,7 +13,7 @@ import {
   type AgentConfig,
   type Ev,
   type KeyPair,
-  type KeyedTransport,
+  type WsTransport,
   type Msg,
 } from '@yurt/protocol';
 import { startRelay, type TestRelay } from '../../protocol/test/relay';
@@ -107,7 +107,7 @@ describe('agent triggers, end to end', () => {
   const B = keyFromPhrase(newRecoveryPhrase());
   const C = keyFromPhrase(newRecoveryPhrase());
   let relay: TestRelay;
-  let transport: KeyedTransport;
+  let transport: WsTransport;
   let cfg: Config;
   let ws: Workspaces;
   let b: WorkspacePeer;

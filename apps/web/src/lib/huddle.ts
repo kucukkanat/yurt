@@ -54,8 +54,8 @@ class Huddle {
 
   async join(target: WorkspacePeer, ch: string) {
     if (this.view.ch) await this.leave();
-    // Relay workspaces open their WebRTC room only on demand; ensureRoom is null only when WebRTC is off for them.
-    const off = 'Turn on “Allow WebRTC for voice and video” in Settings → Network to join calls here.';
+    // The WebRTC room opens only on demand; ensureRoom is null only when calls are turned off on this device.
+    const off = 'Turn on “Voice and video calls” in Settings → Connection to join calls.';
     if (!target.ensureRoom()) {
       this.emit({ error: off });
       return;

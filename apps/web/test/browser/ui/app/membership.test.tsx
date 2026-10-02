@@ -105,17 +105,7 @@ describe('being a member of someone else’s workspace', () => {
     await expect.element(page.getByText('This device no longer holds the current workspace key.')).toBeVisible();
   });
 
-  it('bans in a peer-to-peer workspace at once, with an undo', async () => {
-    const p2p = await useApp.getState().createWorkspace('Live', { kind: 'trystero', signal: { kind: 'nostr', urls: ['ws://127.0.0.1:9'] } });
-    await until(() => useApp.getState().route.code === p2p);
-    const stranger = keyFromPhrase(newRecoveryPhrase()).pub;
-    useApp.getState().setPanel({ type: 'profile', id: stranger });
-    await page.getByTestId('ban-button').click();
-    await expect.element(page.getByText(/is banned$/)).toBeVisible();
-    await expect.element(panel('Profile').getByText('Banned')).toBeVisible();
-    await page.getByRole('button', { name: /Undo/ }).click();
-    await expect.element(panel('Profile').getByText('Banned')).not.toBeInTheDocument();
-    // A workspace named without letters shows a placeholder initial in the rail.
+  it('shows a placeholder initial for a workspace named without letters', async () => {
     await createWorkspace('-');
     await expect.element(page.getByRole('navigation', { name: 'Workspaces' }).getByRole('button', { name: '-', exact: true })).toHaveTextContent('Y');
   });

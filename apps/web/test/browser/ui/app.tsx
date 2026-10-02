@@ -5,19 +5,19 @@ import { expect, inject } from 'vitest';
 import { page, type Locator } from 'vitest/browser';
 // /pure: no cleanup after each test. A file is one session, its tests are steps through it.
 import { render } from 'vitest-browser-react/pure';
-import { keyFromPhrase, newRecoveryPhrase, WorkspacePeer, type EventFields, type KeyPair, type KeyedTransport } from '@yurt/protocol';
+import { keyFromPhrase, newRecoveryPhrase, WorkspacePeer, type EventFields, type KeyPair, type WsTransport } from '@yurt/protocol';
 import { App } from '../../../src/App';
 import { useApp } from '../../../src/store';
 import { blobsDb, eventsDb, kv } from '../../../src/lib/db';
 import { getPeer } from '../../../src/lib/net';
 import { memStore, until } from '../../../../../packages/protocol/test/util';
 
-export { useApp, getPeer, until, kv };
+export { useApp, getPeer, until };
 
 export const relayUrl = () => inject('relayUrl');
 export const blossomUrl = () => inject('blossomUrl');
 /** A relay workspace on the local relay and file server. */
-export const localNet = () => ({ kind: 'nostr' as const, relays: [relayUrl()], blossom: [blossomUrl()] });
+export const localNet = () => ({ relays: [relayUrl()], blossom: [blossomUrl()] });
 
 /**
  * Starts the app from an empty device (each test file runs in its own page, so this runs once per file).
@@ -66,15 +66,14 @@ export async function member(
   code: string,
   name: string,
   kp: KeyPair = keyFromPhrase(newRecoveryPhrase()),
-  opts: { profile?: boolean; transport?: KeyedTransport; creator?: string | null } = {},
+  opts: { profile?: boolean; transport?: WsTransport; creator?: string | null } = {},
 ) {
   const rec = useApp.getState().workspaces.find((w) => w.code === code);
-  const transport = opts.transport ?? (rec?.transport as KeyedTransport | undefined);
+  const transport = opts.transport ?? (rec?.transport as WsTransport | undefined);
   if (!transport) throw new Error('unknown workspace ' + code);
   const p = new WorkspacePeer({
     code,
     kp,
-    selfId: kp.pub.slice(0, 20),
     transport,
     creator: opts.creator !== undefined ? opts.creator : (rec?.creator ?? null),
     store: memStore().store,

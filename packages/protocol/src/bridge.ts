@@ -62,8 +62,7 @@ export type ToBridge =
   | { t: 'hello'; token?: string }
   | { t: 'pair'; code: string }
   | { t: 'identity'; phrase: string; name: string; handle: string }
-  // `transport` is optional so an older web app's joins still work; absent means Trystero.
-  | { t: 'ws.join'; code: string; name: string; transport?: WsTransport; creator?: string | null; agents: string[] }
+  | { t: 'ws.join'; code: string; name: string; transport: WsTransport; creator?: string | null; agents: string[] }
   | { t: 'ws.leave'; code: string }
   | { t: 'ws.agents'; code: string; agents: string[] }
   // bridge UI only (local admin token)

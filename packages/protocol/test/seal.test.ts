@@ -11,13 +11,8 @@ import {
   parseInvite,
   parseRelays,
   newNostrTransport,
-  newTrysteroTransport,
-  signalingOf,
-  isLegacy,
   padSize,
   DEFAULT_RELAYS,
-  DEFAULT_SIGNAL_URLS,
-  LEGACY_TRYSTERO,
 } from '../src';
 
 const A = keyFromPhrase(newRecoveryPhrase());
@@ -86,31 +81,11 @@ describe('seal', () => {
 });
 
 describe('invite', () => {
-  it('carries a WebRTC workspace’s signaling, and leaves the default out', () => {
-    const torrent = { code: 'K7QX2MPD', transport: newTrysteroTransport({ kind: 'torrent', urls: ['wss://t.example', 'ws://127.0.0.1:8000'] }) };
-    expect(inviteHash(torrent)).toContain('/s/');
-    expect(parseInvite(inviteHash(torrent))).toEqual(torrent);
-    const builtIn = { code: 'K7QX2MPD', transport: newTrysteroTransport({ kind: 'torrent', urls: [] }) };
-    expect(parseInvite(inviteHash(builtIn))).toEqual(builtIn);
-    const nostrDefault = newTrysteroTransport({ kind: 'nostr', urls: [] });
-    expect(nostrDefault).not.toHaveProperty('signal');
-    expect(inviteHash({ code: 'K7QX2MPD', transport: nostrDefault })).not.toContain('/s/');
-    // Nostr signaling with no servers means nos.lol at runtime too, for new and older workspaces alike.
-    expect(signalingOf(nostrDefault)).toEqual({ kind: 'nostr', urls: [...DEFAULT_SIGNAL_URLS] });
-    expect(signalingOf(LEGACY_TRYSTERO)).toEqual({ kind: 'nostr', urls: [...DEFAULT_SIGNAL_URLS] });
-    expect(signalingOf(newTrysteroTransport({ kind: 'torrent', urls: [] }))).toEqual({ kind: 'torrent', urls: [] });
-    expect(signalingOf(newNostrTransport(['wss://r.example']))).toEqual({ kind: 'nostr', urls: ['wss://r.example'] });
-  });
-
-  it('refuses a link with an unknown signaling method', () => {
-    expect(parseInvite('#/w/K7QX2MPD/k/' + newWorkspaceKey() + '/s/carrier-pigeon')).toBeNull();
-  });
-
-  it('round-trips a Trystero invite, key included', () => {
-    const inv = { code: 'K7QX2MPD', transport: newTrysteroTransport() };
-    const h = inviteHash(inv);
-    expect(h).toMatch(/^#\/w\/K7QX2MPD\/k\/[A-Za-z0-9_-]{43}$/);
-    expect(parseInvite('https://x.io/yurt/' + h + '/c/general')).toEqual(inv);
+  it('refuses links without relays, and ignores old signaling segments', () => {
+    const key = newWorkspaceKey();
+    expect(parseInvite(`#/w/K7QX2MPD/k/${key}`)).toBeNull();
+    expect(parseInvite(`#/w/K7QX2MPD/k/${key}/s/nostr`)).toBeNull();
+    expect(parseInvite(`#/w/K7QX2MPD/k/${key}/s/torrent/n/-`)).toEqual({ code: 'K7QX2MPD', transport: { key, relays: DEFAULT_RELAYS } });
   });
 
   it('round-trips a Nostr invite with default relays as "-"', () => {
@@ -128,25 +103,23 @@ describe('invite', () => {
   it('refuses bare codes, code-only links, bad codes and malformed keys', () => {
     expect(parseInvite('k7qx-2mpd')).toBeNull();
     expect(parseInvite('https://x.io/yurt/#/w/K7QX2MPD')).toBeNull();
-    expect(parseInvite('#/w/NOPE/k/' + newWorkspaceKey())).toBeNull();
-    expect(parseInvite('#/w/K7QX2MPD/k/tooshort')).toBeNull();
+    expect(parseInvite('#/w/NOPE/k/' + newWorkspaceKey() + '/n/-')).toBeNull();
+    expect(parseInvite('#/w/K7QX2MPD/k/tooshort/n/-')).toBeNull();
   });
 
-  it('pins the creator key with /o/, on either transport', () => {
+  it('pins the creator key with /o/', () => {
     const creator = 'ab'.repeat(32);
-    for (const transport of [newTrysteroTransport(), newNostrTransport()]) {
-      const inv = { code: 'K7QX2MPD', transport, creator };
-      const h = inviteHash(inv);
-      expect(h.endsWith('/o/' + creator)).toBe(true);
-      expect(parseInvite('https://x.io/yurt/' + h + '/c/general')).toEqual(inv);
-    }
+    const inv = { code: 'K7QX2MPD', transport: newNostrTransport(), creator };
+    const h = inviteHash(inv);
+    expect(h.endsWith('/o/' + creator)).toBe(true);
+    expect(parseInvite('https://x.io/yurt/' + h + '/c/general')).toEqual(inv);
   });
 
   it('treats a malformed creator as absent, so old-style TOFU applies', () => {
     const key = newWorkspaceKey();
     for (const o of ['AB'.repeat(32), 'ab'.repeat(31), 'zz'.repeat(32), '']) {
-      const inv = parseInvite(`#/w/K7QX2MPD/k/${key}/o/${o}`);
-      expect(inv).toEqual({ code: 'K7QX2MPD', transport: { kind: 'trystero', key } });
+      const inv = parseInvite(`#/w/K7QX2MPD/k/${key}/n/-/o/${o}`);
+      expect(inv).toEqual({ code: 'K7QX2MPD', transport: { key, relays: DEFAULT_RELAYS } });
       expect(inv && 'creator' in inv).toBe(false);
     }
   });
@@ -155,19 +128,13 @@ describe('invite', () => {
     const key = newWorkspaceKey();
     expect(parseInvite(`#/w/K7QX2MPD/k/${key}/n/%E0`)).toBeNull();
     expect(parseInvite(`#/w/K7QX2MPD/k/%E0${key}`)).toBeNull();
-    expect(parseInvite(`#/w/K7QX2MPD/k/${key}/o/%`)).toEqual({ code: 'K7QX2MPD', transport: { kind: 'trystero', key } });
-  });
-
-  it('marks only keyless Trystero workspaces as legacy', () => {
-    expect(isLegacy(LEGACY_TRYSTERO)).toBe(true);
-    expect(isLegacy(newTrysteroTransport())).toBe(false);
-    expect(isLegacy(newNostrTransport())).toBe(false);
+    expect(parseInvite(`#/w/K7QX2MPD/k/${key}/n/-/o/%`)).toEqual({ code: 'K7QX2MPD', transport: { key, relays: DEFAULT_RELAYS } });
   });
 
   it('falls back to default relays when none are usable', () => {
     expect(newNostrTransport([])).toMatchObject({ relays: DEFAULT_RELAYS });
     const key = newWorkspaceKey();
-    expect(parseInvite(`#/w/K7QX2MPD/k/${key}/n/${encodeURIComponent('http://nope')}`)?.transport).toEqual({ kind: 'nostr', key, relays: DEFAULT_RELAYS });
+    expect(parseInvite(`#/w/K7QX2MPD/k/${key}/n/${encodeURIComponent('http://nope')}`)?.transport).toEqual({ key, relays: DEFAULT_RELAYS });
   });
 
   it('parses relay lists from free text', () => {

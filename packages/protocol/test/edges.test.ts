@@ -4,8 +4,6 @@ import { randomBytes } from '@noble/ciphers/webcrypto';
 import { joinRoom as trysteroJoin } from 'trystero';
 import {
   WorkspacePeer,
-  LEGACY_TRYSTERO,
-  APP_ID,
   newRecoveryPhrase,
   keyFromPhrase,
   makeEvent,
@@ -19,9 +17,7 @@ import {
   sha256hex,
   verify,
   parseInvite,
-  roomIdFor,
   newNostrTransport,
-  newTrysteroTransport,
   newWorkspaceKey,
   workspaceKeys,
   seal,
@@ -88,20 +84,13 @@ describe('codes, crypto and events', () => {
 });
 
 describe('room config', () => {
-  it('derives every credential from the key, or from the code for legacy workspaces', () => {
-    const t = newTrysteroTransport({ kind: 'nostr', urls: ['wss://relay.example'] });
-    const keyed = roomConfig(WS, t, t.key, { iceServers: [] });
+  it('derives every credential from the key and signals over the workspace relays', () => {
+    const t = newNostrTransport(['wss://relay.example']);
     const k = workspaceKeys(t.key);
-    expect(keyed).toEqual({ config: { appId: k.app, password: k.password, iceServers: [], relayConfig: { urls: ['wss://relay.example'] } }, roomId: k.room });
-    const legacy = roomConfig(WS, LEGACY_TRYSTERO, undefined, undefined);
-    expect(legacy.config.appId).toBe(APP_ID);
-    expect(legacy.config.password).toBe(WS);
-    expect(legacy.roomId).toBe(roomIdFor(WS));
-  });
-
-  it("leaves signaling servers to the strategy's defaults when the workspace names none", () => {
-    const t = newTrysteroTransport({ kind: 'torrent', urls: [] });
-    expect(roomConfig(WS, t, t.key, undefined).config).not.toHaveProperty('relayConfig');
+    expect(roomConfig(t.relays, t.key, { iceServers: [] })).toEqual({
+      config: { appId: k.app, password: k.password, iceServers: [], relayConfig: { urls: ['wss://relay.example'] } },
+      roomId: k.room,
+    });
   });
 });
 
@@ -147,7 +136,7 @@ describe('key rotation edge cases', () => {
     // B rotates for itself only (A has no profile, so A isn't a member B seals the key for).
     const { body } = makeRekey(buildKeyring(t.key, [], [], B), B, [B.pub]);
     const rk = makeEvent(B, { ws: WS, t: 'rekey', b: body });
-    const a = new WorkspacePeer({ code: WS, kp: A, selfId: 'a', transport: t, store: memStore().store, onError: noErrors });
+    const a = new WorkspacePeer({ code: WS, kp: A, transport: t, store: memStore().store, onError: noErrors });
     a.receive([create, promote, rk]);
     expect(() => a.rotate()).toThrow('This device no longer holds the current workspace key.');
     expect(a.lockedOut).toBe(true);
@@ -221,19 +210,19 @@ describe('reduce edge cases', () => {
 describe('a peer before it starts', () => {
   const store = () => memStore().store;
 
-  it('is a legacy peer-to-peer workspace when no transport is given, with nobody around yet', () => {
-    const p = new WorkspacePeer({ code: WS, kp: A, selfId: 'a', joinRoom, store: store(), onError: noErrors });
-    expect(p.transport).toEqual(LEGACY_TRYSTERO);
+  it('has nobody around yet, its relays not connected, and the transport key for invites', () => {
+    const t = newNostrTransport(['ws://127.0.0.1:9']);
+    const p = new WorkspacePeer({ code: WS, kp: A, transport: t, calls: { joinRoom, selfId: 'a' }, store: store(), onError: noErrors });
+    expect(p.transport).toEqual(t);
     expect(p.presence.size).toBe(0);
-    expect(p.relayStatus().size).toBe(0);
-    expect(p.inviteKey).toBeUndefined();
+    expect([...p.relayStatus()]).toEqual([['ws://127.0.0.1:9', false]]);
+    expect(p.inviteKey).toBe(t.key);
     expect(p.connected).toBe(false);
+    expect(p.calls).toBe(true);
   });
 
-  it('uses the transport key for invites, and needs the user opt-in for WebRTC in relay workspaces', () => {
-    const t = newTrysteroTransport();
-    expect(new WorkspacePeer({ code: WS, kp: A, selfId: 'a', transport: t, joinRoom, store: store(), onError: noErrors }).inviteKey).toBe(t.key);
-    const relayOnly = new WorkspacePeer({ code: WS, kp: A, selfId: 'a', transport: newNostrTransport(['ws://127.0.0.1:9']), store: store(), onError: noErrors });
+  it('needs the user opt-in for WebRTC', () => {
+    const relayOnly = new WorkspacePeer({ code: WS, kp: A, transport: newNostrTransport(['ws://127.0.0.1:9']), store: store(), onError: noErrors });
     expect(relayOnly.calls).toBe(false);
     expect(relayOnly.ensureRoom()).toBeNull();
     expect(relayOnly['roomIdleMs']).toBe(60_000);
@@ -241,7 +230,7 @@ describe('a peer before it starts', () => {
 
   it('drops events that are not for it, from the future, or unverifiable, and keeps the rest of the batch', () => {
     const t = newNostrTransport(['ws://127.0.0.1:9']);
-    const p = new WorkspacePeer({ code: WS, kp: A, selfId: 'a', transport: t, store: store(), onError: noErrors, roomIdleMs: 1_000 });
+    const p = new WorkspacePeer({ code: WS, kp: A, transport: t, store: store(), onError: noErrors, roomIdleMs: 1_000 });
     const good = makeEvent(B, { ws: WS, t: 'profile', b: { name: 'Bo' } });
     const notMine = makeEvent(B, { ws: WS, t: 'msg', ch: dmChannel(B.pub, C.pub), to: C.pub, b: { text: 'psst' } });
     const future = makeEvent(B, { ws: WS, t: 'profile', b: { name: 'Later' }, ts: Date.now() + 3_600_000 });

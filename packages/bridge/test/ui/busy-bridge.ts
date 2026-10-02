@@ -64,7 +64,7 @@ await server.listen();
 ws.setIdentity(phrase);
 
 const B = keyFromPhrase(newRecoveryPhrase());
-const b = new WorkspacePeer({ code: 'BUSYWSPC', kp: B, selfId: 'member-b', transport, store: memStore().store, onError: () => {} });
+const b = new WorkspacePeer({ code: 'BUSYWSPC', kp: B, transport, store: memStore().store, onError: () => {} });
 await b.start();
 b.publish({ t: 'ws.create', b: { name: 'Busy' } });
 b.publish({ t: 'ch.create', b: { id: 'general', name: 'general' } });

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
-import { newNostrTransport, newTrysteroTransport } from '@yurt/protocol';
+import { newNostrTransport } from '@yurt/protocol';
 import type { Workspaces } from '../src/workspaces';
 import type { Config } from '../src/config';
 import { startBridge, tempDir, until } from './helpers';
@@ -40,7 +40,7 @@ describe('Workspaces leave/rejoin', () => {
 describe('Workspaces ws.join updates', () => {
   const record = (code: string) => cfg.workspaces.find((w) => w.code === code);
 
-  it('moves a relay workspace to edited relays on a fresh peer, keeping kind and key', () => {
+  it('moves a workspace to edited relays on a fresh peer, keeping its key', () => {
     ws.join('EEEEFFFF', 'Relays', null, [], transport);
     const before = ws.peers.get('EEEEFFFF');
     const edited = { ...transport, relays: ['ws://127.0.0.1:10'] };
@@ -50,25 +50,16 @@ describe('Workspaces ws.join updates', () => {
     expect(ws.peers.has('EEEEFFFF')).toBe(true);
   });
 
-  it('moves a peer-to-peer workspace to edited signaling, and leaves an unchanged one alone', () => {
-    // Closed local ports: the peers never reach the network.
-    const p2p = newTrysteroTransport({ kind: 'nostr', urls: ['ws://127.0.0.1:9'] });
-    ws.join('GGGGHHHH', 'P2P', null, [], p2p);
-    const first = ws.peers.get('GGGGHHHH');
-    ws.join('GGGGHHHH', 'P2P', null, [], p2p);
-    expect(ws.peers.get('GGGGHHHH')).toBe(first);
-    // A workspace first joined without signaling (Trystero's defaults) must follow the app's later setting.
-    const trackers = { ...p2p, signal: { kind: 'torrent' as const, urls: ['ws://127.0.0.1:10'] } };
-    ws.join('GGGGHHHH', 'P2P', null, [], trackers);
-    expect(cfg.workspaces.find((w) => w.code === 'GGGGHHHH')?.transport).toEqual(trackers);
-    expect(ws.peers.get('GGGGHHHH')).not.toBe(first);
+  it('leaves an unchanged workspace alone', () => {
+    const peer = ws.peers.get('EEEEFFFF');
+    ws.join('EEEEFFFF', 'Relays', null, [], record('EEEEFFFF')?.transport ?? transport);
+    expect(ws.peers.get('EEEEFFFF')).toBe(peer);
   });
 
-  it('never changes the key or kind, and leaves the peer alone', () => {
+  it('never changes the key, and leaves the peer alone', () => {
     const peer = ws.peers.get('EEEEFFFF');
     const saved = record('EEEEFFFF')?.transport;
     ws.join('EEEEFFFF', 'Relays', null, [], newNostrTransport(['ws://127.0.0.1:11']));
-    ws.join('EEEEFFFF', 'Relays', null, [], { kind: 'trystero', key: 'k' });
     expect(record('EEEEFFFF')?.transport).toEqual(saved);
     expect(ws.peers.get('EEEEFFFF')).toBe(peer);
   });

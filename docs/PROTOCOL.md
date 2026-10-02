@@ -11,13 +11,11 @@ Version 1. All code in `packages/protocol`.
 
 - Workspace id: 8 chars from `ABCDEFGHJKMNPQRSTVWXYZ23456789`, shown as `K7QX-2MPD`. It is **not a secret** and can't be used to join.
 - Workspace key `wk`: 32 random bytes made at creation. Every secret below derives from it (see [Keys](#keys)).
-- Each workspace has a **transport**, chosen at creation and fixed: `trystero` (events travel peer to peer; history lives only on members' devices) or `nostr` (events are end-to-end encrypted and stored on relays; see [Nostr transport](#nostr-transport)).
-- Invites are links only: `…/#/w/<id>/k/<key>[/s/<method>,<urls>]` (Trystero) or `…/#/w/<id>/k/<key>/n/<relays>` (Nostr), optionally followed by `/o/<creator pub>`. `<key>` is `wk` in base64url; `<relays>` is a URI-encoded comma list, or `-` for the defaults (`wss://nos.lol`). Links without a valid key, or with an unknown signaling method, are refused.
-- `/s/` is a Trystero workspace's **signaling**: how members find each other. `<method>` is `nostr` (Nostr relays) or `torrent` (WebSocket BitTorrent trackers), followed by optional server URLs (none = the strategy's built-in public servers). New workspaces default to `nostr,wss://nos.lol`; absent means `nostr` with Trystero's built-in relays (older links). Members only meet over the same method and a shared server, so it belongs to the workspace, not to each member.
+- A workspace's **transport** is its key and its Nostr relays: events are end-to-end encrypted and stored on the relays (see [Nostr transport](#nostr-transport)), files on Blossom servers (see [Files on Blossom](#files-on-blossom)). WebRTC is used only for calls (see [Calls](#calls)).
+- Invites are links only: `…/#/w/<id>/k/<key>/n/<relays>`, optionally followed by `/o/<creator pub>`. `<key>` is `wk` in base64url; `<relays>` is a URI-encoded comma list, or `-` for the defaults (`wss://nos.lol`). Links without a valid key or without `/n/` are refused.
 - `/o/` pins the creator: joiners take the creator from the link instead of trusting the first `ws.create` they see, so a forged or backdated `ws.create` can't make someone else the creator. Links without it fall back to trust on first use.
 - The key lives only in the `#` fragment, which browsers never send to a server. On load the app keeps the invite in memory and removes it from the address bar and history (`history.replaceState`), so it can't end up in synced browser history.
-- WebRTC room (Trystero, using the workspace's signaling; relay workspaces signal calls over their own relays): `appId = HKDF(wk, "app")`, `roomId = HKDF(wk, "room")`, `password = HKDF(wk, "room-pw")`. Nothing in the signaling identifies the app or the workspace, and the room can't be found or joined without the key.
-- **Legacy workspaces** (created before keys) have only the code: `appId = "yurt.p2p.v1"`, `password = code`, `roomId = sha256("yurt-room:" + code)[0:24]`. That's brute-forceable from public relay traffic (~39 bits), so they keep working for existing members but can't be joined anew; the app asks members to recreate them.
+- Call room (WebRTC via Trystero's Nostr strategy, signaled over the workspace's own relays): `appId = HKDF(wk, "app")`, `roomId = HKDF(wk, "room")`, `password = HKDF(wk, "room-pw")`, with `wk` the current write key. Nothing in the signaling identifies the app or the workspace, and the room can't be found or joined without the key.
 - Handshake (`onPeerHandshake`): each side sends `{pub, sig}` where `sig = sign("yurt-hs:" + code + ":" + selfId + ">" + remotePeerId)`. The receiver verifies against its own ids and rejects banned keys.
 
 ## Events
@@ -44,24 +42,22 @@ Every change is an immutable, signed event:
 | `react` | `{target, icon, on}` | Reactor = `pub` or `pub/agentId`. |
 | `pin` | `{target, on}` | Any member. |
 | `role` | `{target, admin}` | Promote: creator only. Demote: the creator demotes admins; never the creator. |
-| `ban` | `{target, on}` | Admins ban non-admins; only the creator bans an admin; never the creator or self. **All** of a banned key's events are ignored whatever their timestamps (so backdating can't slip past a ban), connected peers are dropped, and it fails the handshake. Un-ban restores them. |
+| `ban` | `{target, on}` | Admins ban non-admins; only the creator bans an admin; never the creator or self. **All** of a banned key's events are ignored whatever their timestamps (so backdating can't slip past a ban), it's dropped from calls and fails their handshake. Un-ban restores them. |
 | `agent` | `{id, name, handle, runtime, model?, replyIn, respondTo?, postIn?, discoverable?, removed?}` | Declares one of the author's agents. `respondTo {mentions, replies}`: what triggers it. `postIn {thread, channel}`: where it answers (both = a thread reply also in the channel). `discoverable`: other members may DM it. `replyIn` (`'thread'` when `postIn.thread`, else `'channel'`) is kept for older peers, which drop agent events without it; when the newer fields are missing or malformed they are derived from it (mentions on, replies off, not discoverable). |
 | `approve` | `{req, option}` | Owner's answer to an agent permission request (private, `to` = owner). |
-| `rekey` | `{epoch, keys, history}` | Relay workspaces: replaces the workspace key (see [Key rotation](#key-rotation)). Counts when its author has ever been made an admin (or is the creator) and isn't banned; the earliest `(ts, id)` wins an epoch. |
+| `rekey` | `{epoch, keys, history}` | Replaces the workspace key (see [Key rotation](#key-rotation)). Counts when its author has ever been made an admin (or is the creator) and isn't banned; the earliest `(ts, id)` wins an epoch. |
 
 State is `reduce(events)`: roles and bans are computed first, then the remaining events are applied in `(ts, id)` order, skipping banned authors. Every peer with the same events computes the same state. Events must be well formed (string fields, integer `ts`, known `t`) and bodies are treated as untrusted: a malformed field is ignored, and no single event can abort the reduction. Messages in `dm:`/`adm:` channels must be addressed (`to`) to the other party and written by one of them; approvals count only from the owner (no `ag`). In `gdm:<member>:<owner>:<agentId>` the member writes to the owner (no `ag`) and the owner writes only as that agent (`ag = agentId`) to the member; member and owner must differ, and approvals are dropped. Transports route and seal it like a DM between member and owner, so other members never receive it. Whether an agent is discoverable is enforced by the bridge (it doesn't answer otherwise) and the UI, not the reducer, so history survives a settings change.
 
-## Actions (Trystero)
+## Calls
 
-**Transports don't mix.** Trystero workspaces use this WebRTC room for everything. Nostr workspaces use Nostr for everything (events, presence, files via [Blossom](#files-on-blossom)); only `hud` and media streams may use a WebRTC room, and only if the user turned on *Allow WebRTC for voice and video* in Settings → Network. Without that opt-in a Nostr workspace has no WebRTC room at all, and neither does the bridge.
+Everything goes over Nostr (events, presence) and [Blossom](#files-on-blossom) (files). WebRTC carries only calls: huddle state and media streams, in the call room above. A device uses it only while *Voice and video calls* is on (Settings → Connection; on by default). With it off the device has no WebRTC room at all, and neither does the bridge, ever.
+
+A member in a huddle sets `rtc: true` in its presence; members with calls on who see it join the room, and everyone leaves once nobody has needed it for 60 s (banned members' presence is ignored).
 
 | action | payload | purpose |
 |---|---|---|
-| `ev` | `Ev[]` | New events. Public ones broadcast; private ones only to the two parties' peers. |
-| `sync` | `{k:'sum', s}` → `{k:'ids', d}` → `{k:'want', ids}` | Anti-entropy on join. `s` maps UTC day → `count:xor(id[0:8])` over events visible to both sides. Differing days exchange id lists, each side pushes what the other lacks and asks for what it lacks. |
-| `pres` | `{pub, st, typing?, agents?, bridge?}` | Presence, typing, agent working state. Re-sent every 30 s. |
-| `hud` | `{ch, mic, cam, screen}` | Huddle membership. Media streams carry metadata `{kind: 'mic'|'cam'|'screen', ch}` and flow only between peers in the same huddle. Video capped at 4. |
-| `fwant` / `file` | `{id}` / binary + `{id}` | Trystero workspaces only. Content-addressed files (`id = sha256(bytes)`), ≤25 MB. A file is requested from, and served only to, peers who can see a `msg` that attaches it, so DM files stay within the pair even if a member asks directly. Pending requests are re-sent as peers join, for up to a minute. |
+| `hud` | `{ch, mic, cam, screen}` | Huddle membership, sent on change and to members as they join the room. Media streams carry metadata `{kind: 'mic'|'cam'|'screen', ch}` and flow only between peers in the same huddle. Video capped at 4. |
 
 ## Nostr transport
 
@@ -76,7 +72,7 @@ With `HKDF-SHA256(ikm = wk, info = "yurt-<name>-v1")`:
 | `enc` | 32 | XChaCha20-Poly1305 key for everything members share |
 | `tag` | 16 (hex) | relay index tag for the workspace |
 | `inbox:<pub>` | 16 (hex) | a member's mailbox tag for private events |
-| `app` / `room` / `room-pw` | 16 / 12 / 32 (hex) | WebRTC app id / room id / password (both transports) |
+| `app` / `room` / `room-pw` | 16 / 12 / 32 (hex) | WebRTC call room app id / room id / password |
 
 A private pair's key is `HKDF(ikm = X25519(edToMontgomery(mySec), edToMontgomery(theirPub)), salt = wk, info = "yurt-dm-v1")`; both sides derive the same key.
 
@@ -92,17 +88,15 @@ A private pair's key is `HKDF(ikm = X25519(edToMontgomery(mySec), edToMontgomery
 
 The session key is a fresh random secp256k1 key per app session, never the member's identity (a shared key would also let any member file NIP-09 deletions for everyone). Private copies use one-off keys, so a relay can't link the two inboxes as a pair or tie a DM to the session's other traffic.
 
-The inner Yurt event keeps its own Ed25519 signature and passes the same validation as on Trystero, so relays can't forge or alter events.
+The inner Yurt event keeps its own Ed25519 signature and is validated before it's accepted, so relays can't forge or alter events.
 
 **Sync.** Clients subscribe live to `{kinds: [4344, 24344], "#y": [tag, inbox(me)], since: now − 2 h}` and then page each relay backwards on its own cursor (`limit` 500; a relay is done when a page brings nothing new, so relays with a lower cap are still read fully) from now to `mark − 1 day`. `mark` is when the last complete backfill finished; it's 0 on first join, so **a new member fetches the whole history**. The day of margin covers backdating and senders with skewed clocks, since `created_at` is theirs. Backfill re-runs whenever relays come back. After it, any of my own recent events the relays don't have (the app closed before an ack) are re-sent.
 
 **Delivery.** A public event leaves "queued" when the first relay acks it; a private one when both of its copies are acked. Unacked events retry every 15 s while offline. A relay that refuses an event (`OK false`, other than rate limiting) gets 3 tries, then the refusal is reported once and the event stays queued without further retries.
 
-**Calls (opt-in).** With the WebRTC opt-in, a member in a huddle sets `rtc: true` in presence; opted-in members who see it join the room, and everyone leaves after 60 s without it. The room signals over the workspace's own relays. Members without the opt-in never join, so they can't take part in calls.
-
 ### Files on Blossom
 
-Nostr workspaces keep attachments on [Blossom](https://github.com/hzrd149/blossom) servers (BUD-01/02), chosen per workspace in its Connection view, else in Settings → Network (default: `blossom.primal.net`, `nostr.download`, `files.sovbit.host`). Only `https://` servers are used (plain `http://` only in local development), so a member can't point others at internal addresses.
+Attachments live on [Blossom](https://github.com/hzrd149/blossom) servers (BUD-01/02). Uploads go to the servers set for the workspace on this device (at creation or in its Network settings), else to the free public defaults: `blossom.primal.net`, `nostr.download`, `files.sovbit.host`. File servers aren't in the invite link: each reference names the servers its file is on. Only `https://` servers are used (plain `http://` only in local development), so a member can't point others at internal addresses.
 
 - **Sealing.** Each file gets a fresh random 32-byte key: `cipher = sealBytes(fileKey, aad = "yurt-file-v1", bytes)`, padded like everything else. Its Blossom id is `sha256(cipher)`.
 - **Upload.** `PUT /upload` to every server, authorized by a kind `24242` event (`t=upload`, `x=<hash>`, 5-minute `expiration`) signed by a one-off key. It succeeds if any server accepts; otherwise the message isn't sent.
@@ -111,7 +105,7 @@ Nostr workspaces keep attachments on [Blossom](https://github.com/hzrd149/blosso
 
 ### Key rotation
 
-Banning someone in a relay workspace also rotates the workspace key, so they can't read anything posted afterwards.
+Banning someone also rotates the workspace key, so they can't read anything posted afterwards.
 
 - **Chain.** A workspace's keys form a chain: the invite key, then one key per `rekey`. Each device rebuilds its chain from the key it holds plus the rekeys in its log; nothing else is stored.
 - **Rekey body.** The admin picks a fresh random key `wk'` and publishes `{epoch: n+1, keys, history}`:
@@ -122,7 +116,7 @@ Banning someone in a relay workspace also rotates the workspace key, so they can
 - **Concurrent rotations.** If two admins rotate at once, the earliest `(ts, id)` rekey wins the epoch for writing. The loser's key still reads, so nothing either wrote is lost.
 - **Removed.** A member who can't open a valid rekey newer than its write key is locked out (`WorkspacePeer.lockedOut`). The app says so; the fix is a fresh invite link.
 - **WebRTC.** The call room's credentials derive from the write key, so a rotation also moves calls to a room the removed member can't find.
-- **Limits.** Nothing takes back what a removed member already read or downloaded, and relays keep old ciphertext. Unbanning doesn't restore access; send a new invite. Rotation isn't used in Trystero workspaces, where a ban already stops all delivery.
+- **Limits.** Nothing takes back what a removed member already read or downloaded, and relays keep old ciphertext. Unbanning doesn't restore access; send a new invite.
 
 ### Identity backup
 
@@ -148,11 +142,11 @@ pubkey that is in no workspace. Not the identity or its workspaces; the padded s
 
 **Anyone else on Nostr** can read the same stored events as the operator (minus IPs and arrival times) but can't find a workspace without its tag, and sees only padded, backdated ciphertext.
 
-**Blossom servers** (Nostr workspaces) see IP addresses, when files are uploaded and fetched, padded ciphertext sizes and one-off pubkeys. Not names, contents, or which workspace or message a file belongs to.
+**Blossom servers** see IP addresses, when files are uploaded and fetched, padded ciphertext sizes and one-off pubkeys. Not names, contents, or which workspace or message a file belongs to.
 
-**Signaling relays and STUN/TURN servers** (WebRTC: always in Trystero workspaces, only during opted-in calls in Nostr ones) see IP addresses and connection timing. Signaling topics derive from the key and don't identify Yurt. TURN is off by default; the bridge never uses it. STUN servers (Trystero's defaults) see your IP address whenever a room is joined.
+**The workspace's relays as signaling, and STUN/TURN servers** (WebRTC, only while a call needs the room) see IP addresses and connection timing. Signaling topics derive from the key and don't identify Yurt. TURN is off by default; the bridge never uses WebRTC. STUN servers (Trystero's defaults) see your IP address whenever a room is joined.
 
-**Members** see everything in the workspace while they're members, and each other's IP addresses while in the same WebRTC room. A removed member keeps what it already had, but nothing written after its removal's key rotation. They can tell which inboxes receive private events and, by opening the outer wrapper, who the pair is, but never the contents. DM files only go to the pair.
+**Members** see everything in the workspace while they're members, and each other's IP addresses while in the same call room. A removed member keeps what it already had, but nothing written after its removal's key rotation. They can tell which inboxes receive private events and, by opening the outer wrapper, who the pair is, but never the contents. DM files only go to the pair.
 
 **Known limits.**
 - Removal is forward-only: a removed member keeps everything from before its ban, and the relays keep the old ciphertext. A member who never published a profile when a rotation happens isn't among the recipients and needs a new invite.
@@ -167,7 +161,7 @@ pubkey that is in no workspace. Not the identity or its workspaces; the padded s
 1. `hello {token?}` → `hello {paired, admin}`. The bridge's own page gets an admin token embedded in its same-origin HTML.
 2. Unpaired browsers send `pair {code}` with the 6-digit code shown by the bridge (rotates on use, every 10 min, and after 5 misses) → `paired {token}`.
 3. The browser sends `identity {phrase, name, handle}`; the bridge stores it in `~/.yurt/identity.json` (0600) and joins workspaces as a headless peer with that key.
-4. `ws.join {code, name, transport?, creator, agents}` (a missing `transport` means a legacy Trystero workspace; a later join with the same kind and key but different relays updates the bridge's relays) / `ws.agents` / `ws.leave` choose which agents sit in which workspace. The bridge publishes `agent` events and presence `{bridge: true, agents: {id: {working}}}`.
+4. `ws.join {code, name, transport, creator, agents}` (a later join with the same key but different relays moves the bridge to those relays) / `ws.agents` / `ws.leave` choose which agents sit in which workspace. The bridge publishes `agent` events and presence `{bridge: true, agents: {id: {working}}}`.
 
 ### ACP mapping
 
@@ -176,5 +170,5 @@ pubkey that is in no workspace. Not the identity or its workspaces; the padded s
 - Prompt: identity, owner instructions, the last N messages of the channel or thread, and the triggering message.
 - `session/update`: `agent_message_chunk` → reply text; `tool_call` / `tool_call_update` → trace steps with timings.
 - `session/request_permission`: tool kinds on the auto-approve list get `allow_once`. Anything else posts a private `msg` with `approval` to the owner and waits (30 min timeout → reject) for an `approve` event.
-- Attachments: the triggering message's files are fetched (Blossom in Nostr workspaces, WebRTC in Trystero ones) and written to `<workdir>/.yurt/files/<msgId>/<name>` (dirs `0700`, files `0600`; names reduced to plain characters and kept inside that folder). The prompt lists `name → path`, or `name (couldn't download)`. Earlier messages' files are listed by name only.
+- Attachments: the triggering message's files are fetched from Blossom and written to `<workdir>/.yurt/files/<msgId>/<name>` (dirs `0700`, files `0600`; names reduced to plain characters and kept inside that folder). The prompt lists `name → path`, or `name (couldn't download)`. Earlier messages' files are listed by name only.
 - Reply: `msg {text, trace, meta, parent?, alsoInChannel?}` with `ag = agentId`. DMs stay flat (`to` = the owner, or the member in a guest DM). Elsewhere `postIn` decides: thread only → in the trigger's thread (starting one); channel only → top level, or inside the thread the trigger is already in; both → in the thread with `alsoInChannel: true`.

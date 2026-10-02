@@ -6,14 +6,13 @@ import {
   keyFromPhrase,
   newRecoveryPhrase,
   newNostrTransport,
-  newTrysteroTransport,
   dmChannel,
   workspaceKeys,
   open,
   type Ev,
   type KeyPair,
   type PeerStore,
-  type KeyedTransport,
+  type WsTransport,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
 import { memStore, until as waitFor } from './util';
@@ -32,7 +31,7 @@ const E = key();
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let relay: TestRelay;
-let transport: KeyedTransport;
+let transport: WsTransport;
 let errors: string[];
 const peers: WorkspacePeer[] = [];
 
@@ -41,7 +40,6 @@ async function join(kp: KeyPair, name: string, opts: { key?: string | undefined;
   const p = new WorkspacePeer({
     code: CODE,
     kp,
-    selfId: kp.pub.slice(0, 20),
     transport: t,
     creator: A.pub,
     store: opts.store ?? memStore().store,
@@ -188,21 +186,6 @@ describe('key rotation', () => {
     const a = await join(A, 'Ada', { onKey: (k) => keys.push(k) });
     a.rotate();
     expect(keys).toEqual([a.inviteKey]);
-  });
-
-  it('only rotates relay workspaces', () => {
-    const p = new WorkspacePeer({
-      code: CODE,
-      kp: A,
-      selfId: 'a',
-      transport: newTrysteroTransport(),
-      store: memStore().store,
-      onError: (m) => errors.push(m),
-      joinRoom: () => {
-        throw new Error('unused');
-      },
-    });
-    expect(() => p.rotate()).toThrow('Only relay workspaces');
   });
 });
 

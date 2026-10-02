@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { newNostrTransport, newRecoveryPhrase, newTrysteroTransport } from '@yurt/protocol';
+import { newNostrTransport, newRecoveryPhrase } from '@yurt/protocol';
 import { must, tempDir } from './helpers';
 
 // config.ts reads YURT_HOME on import, so it's imported after pointing it at a temp folder.
@@ -36,7 +36,7 @@ describe('loadConfig', () => {
     write('{ not json');
     expect(config.loadConfig().agents).toEqual([]);
     const t = newNostrTransport(['wss://relay.example']);
-    const p2p = newTrysteroTransport({ kind: 'torrent', urls: ['wss://tracker.example'] });
+    const p2 = newNostrTransport(['wss://other.example']);
     write({
       adminToken: 42,
       tokens: ['ok', 7],
@@ -46,8 +46,9 @@ describe('loadConfig', () => {
       workspaces: [
         { code: 'AAAABBBB', name: 'W', agents: ['a-1', 3], transport: t, creator: null },
         { code: '' },
-        { code: 'CCCCDDDD', transport: { kind: 'nostr' } },
-        { code: 'EEEEFFFF', name: 'P', agents: [], transport: p2p },
+        { code: 'CCCCDDDD', transport: { relays: [] } },
+        { code: 'GGGGHHHH', name: 'Old', agents: [] },
+        { code: 'EEEEFFFF', name: 'P', agents: [], transport: p2 },
       ],
     });
     const c = config.loadConfig();
@@ -58,8 +59,8 @@ describe('loadConfig', () => {
     expect(c.agents.map((a) => a.id)).toEqual(['a-1']); // the unrunnable agent is dropped
     expect(c.workspaces).toEqual([
       { code: 'AAAABBBB', name: 'W', agents: ['a-1'], transport: t, creator: null },
-      { code: 'CCCCDDDD', name: '', agents: [], transport: { kind: 'trystero' } }, // an unreadable transport: legacy, as before transports existed
-      { code: 'EEEEFFFF', name: 'P', agents: [], transport: p2p },
+      // Workspaces without a readable transport can't be joined: dropped.
+      { code: 'EEEEFFFF', name: 'P', agents: [], transport: p2 },
     ]);
   });
 });

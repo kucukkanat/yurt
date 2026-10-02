@@ -21,7 +21,7 @@ export default defineConfig(({ command }) => ({
         id: './',
         name: 'Yurt',
         short_name: 'Yurt',
-        description: 'Team chat that runs entirely in your browser, peer to peer.',
+        description: 'Team chat that runs entirely in your browser, end-to-end encrypted.',
         start_url: './',
         scope: './',
         display: 'standalone',

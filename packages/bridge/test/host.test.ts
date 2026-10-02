@@ -14,7 +14,7 @@ import {
   uploadFile,
   type AgentConfig,
   type KeyPair,
-  type KeyedTransport,
+  type WsTransport,
   type Msg,
 } from '@yurt/protocol';
 import { startRelay, type TestRelay } from '../../protocol/test/relay';
@@ -72,7 +72,7 @@ const AGENTS = [
 
 let relay: TestRelay;
 let blossom: TestBlossom;
-let transport: KeyedTransport;
+let transport: WsTransport;
 let cfg: Config;
 let ws: Workspaces;
 let owner: WorkspacePeer; // the owner's browser: same key as the bridge

@@ -8,7 +8,7 @@ import { FetchableBlobRefSchema } from './schemas';
 import { MAX_FILE_BYTES } from './events';
 
 /**
- * Files for relay workspaces, on Blossom (BUD-01/02: content-addressed blob servers over HTTPS).
+ * Files, on Blossom (BUD-01/02: content-addressed blob servers over HTTPS).
  * Each file is sealed with its own random key before upload, so a server holds only padded
  * ciphertext. The key travels inside the (encrypted) message, so only people who can read the
  * message can open the file.

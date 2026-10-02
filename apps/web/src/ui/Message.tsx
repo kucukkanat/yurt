@@ -19,7 +19,6 @@ const isIconName = (s: string): s is IconName => Object.hasOwn(ICONS, s);
 
 function useBlobUrl(f: FileRef, code: string) {
   const ver = useApp((s) => s.blobVer[f.id] ?? 0); // only this blob's arrivals re-run the load
-  const progress = useApp((s) => s.blobProgress[f.id]);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -48,11 +47,11 @@ function useBlobUrl(f: FileRef, code: string) {
     },
     [url],
   );
-  return { url, progress, failed, retry: () => setAttempt((n) => n + 1) };
+  return { url, failed, retry: () => setAttempt((n) => n + 1) };
 }
 
 function Attachment({ f, code }: { f: FileRef; code: string }) {
-  const { url, progress, failed, retry } = useBlobUrl(f, code);
+  const { url, failed, retry } = useBlobUrl(f, code);
   const isImg = f.type.startsWith('image/');
   if (isImg && url) {
     return (
@@ -66,14 +65,8 @@ function Attachment({ f, code }: { f: FileRef; code: string }) {
       </a>
     );
   }
-  // Relay workspaces fetch sealed files from Blossom; Trystero ones need a member who has the file online.
-  const note = url
-    ? fmtBytes(f.size)
-    : failed
-      ? 'Couldn’t download · retry'
-      : progress != null && progress < 1
-        ? 'Fetching · ' + Math.round(progress * 100) + '%'
-        : fmtBytes(f.size) + (f.blob ? ' · downloading' : ' · waiting for a peer who has it');
+  // Sealed files come from Blossom.
+  const note = url ? fmtBytes(f.size) : failed ? 'Couldn’t download · retry' : fmtBytes(f.size) + ' · downloading';
   return (
     <div
       style={{

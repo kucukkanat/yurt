@@ -9,15 +9,15 @@ import type { Presence } from './schemas';
  * code paths (heartbeats, retries, expiry) in seconds instead of minutes.
  */
 export interface LinkTiming {
-  /** Presence heartbeat. Relay links: 60 s; Trystero: 30 s. */
+  /** Presence heartbeat. 60 s. */
   beatMs: number;
-  /** Relay links: how long a member's presence counts without a heartbeat. 150 s. */
+  /** How long a member's presence counts without a heartbeat. 150 s. */
   presenceTtlMs: number;
-  /** Relay links: resend events relays haven't acknowledged. 15 s. */
+  /** Resend events relays haven't acknowledged. 15 s. */
   retryMs: number;
-  /** Relay links: check connectivity, catch up after reconnecting and expire presence. 5 s. */
+  /** Check connectivity, catch up after reconnecting and expire presence. 5 s. */
   sweepMs: number;
-  /** Relay links: wait before reconnecting a dropped relay. Unset: nostr-tools' backoff, 10 s growing to 60 s. */
+  /** Wait before reconnecting a dropped relay. Unset: nostr-tools' backoff, 10 s growing to 60 s. */
   reconnectMs?: number;
 }
 
@@ -28,9 +28,6 @@ export interface LinkHost {
   readonly events: ReadonlyMap<string, Ev>;
   /** Published here but not yet delivered to anyone. */
   readonly queued: ReadonlySet<string>;
-  /** Handshaked WebRTC peers (peerId → identity), for links that route over the room. */
-  readonly peers: ReadonlyMap<string, { pub: string }>;
-  visibleFor(pub: string): Ev[];
   /** Banned in the current state: links ignore their presence and send them nothing. */
   isBanned(pub: string): boolean;
   /** Untrusted input: the host validates every event before accepting it. */
@@ -42,29 +39,23 @@ export interface LinkHost {
   error(msg: string): void;
 }
 
-/**
- * Carries events and presence for a workspace. Trystero sends them peer to peer over its WebRTC
- * room, which also carries files and huddles. Nostr stores them encrypted on relays, with files
- * on Blossom; a Nostr workspace uses WebRTC only for opted-in voice and video.
- */
 /** Every workspace key a member holds (epoch null = not yet known), and the one new events use. */
 export interface LinkKeys {
   readonly all: readonly { key: string; epoch: number | null }[];
   readonly write: string;
 }
 
+/** Carries events and presence for a workspace: encrypted on its Nostr relays (see transports/nostr.ts). */
 export interface DataLink {
   /** Who is online, keyed by a link-specific id. Every entry's `pub` is authenticated. */
   readonly presence: ReadonlyMap<string, Presence>;
-  /** Whether the link can currently deliver anything (a peer or a relay is reachable). */
+  /** Whether the link can currently deliver anything (a relay is reachable). */
   readonly connected: boolean;
   send(evs: readonly Ev[]): void;
   setPresence(p: Presence): void;
-  /** Relay links: each configured relay → connected. */
-  relayStatus?(): ReadonlyMap<string, boolean>;
-  /** Relay links: the workspace keys changed (a rotation). Read with all of them, write with `write`. */
-  setKeys?(keys: LinkKeys): void;
-  onPeerJoin?(peerId: string, pub: string): void;
-  onPeerLeave?(peerId: string): void;
+  /** Each configured relay → connected. */
+  relayStatus(): ReadonlyMap<string, boolean>;
+  /** The workspace keys changed (a rotation). Read with all of them, write with `write`. */
+  setKeys(keys: LinkKeys): void;
   leave(): void;
 }

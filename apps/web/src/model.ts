@@ -209,7 +209,7 @@ export function faviconStateOf(s: AppState, peerOf: (code: string) => WorkspaceP
   const unreadAny = counts.some((c) => c.n);
   const nearby = s.workspaces.some((w) => callNearby(s, w.code, peerOf(w.code)));
   const cur = s.route.code ? peerOf(s.route.code) : undefined;
-  // Peer-to-peer workspaces are often alone, which isn't being offline; relay workspaces are offline without relays.
-  const offline = !s.online || (cur?.transport.kind === 'nostr' && !cur.connected);
+  // Offline: no network, or no relay reachable.
+  const offline = !s.online || (!!cur && !cur.connected);
   return { mentions: mentionCount, unread: unreadAny, inCall: !!s.huddle.ch, callNearby: nearby, offline };
 }

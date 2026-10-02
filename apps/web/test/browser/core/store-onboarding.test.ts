@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
-import { inviteHash, keyFromPhrase, newInviteCode, newNostrTransport, newRecoveryPhrase, newTrysteroTransport } from '@yurt/protocol';
+import { inviteHash, keyFromPhrase, newInviteCode, newNostrTransport, newRecoveryPhrase } from '@yurt/protocol';
 import { kv } from '../../../src/lib/db';
 import { getPeer } from '../../../src/lib/net';
 import { useApp } from '../../../src/store';
@@ -14,7 +14,7 @@ const code = newInviteCode();
 const transport = newNostrTransport([inject('relayUrl')]);
 const phrase = newRecoveryPhrase();
 // A workspace saved on this device without an identity (e.g. the identity was removed in devtools).
-const saved = { code: newInviteCode(), name: 'Saved', transport: newTrysteroTransport({ kind: 'nostr', urls: [inject('relayUrl')] }), creator: null, lastRead: {}, muted: [] };
+const saved = { code: newInviteCode(), name: 'Saved', transport: newNostrTransport([inject('relayUrl')]), creator: null, lastRead: {}, muted: [] };
 
 beforeAll(async () => {
   await resetDb();
@@ -46,7 +46,7 @@ describe('an invite opened before onboarding', () => {
     const app = useApp.getState();
     expect(await app.updateSettings({ turn: 'default' })).toBe(1); // reconnecting it still connects nothing
     expect(getPeer(saved.code)).toBeUndefined();
-    await expect(app.createWorkspace('No one', { kind: 'nostr', relays: [inject('relayUrl')], blossom: [] })).rejects.toThrow('Create your identity');
+    await expect(app.createWorkspace('No one', { relays: [inject('relayUrl')], blossom: [] })).rejects.toThrow('Create your identity');
     await app.updateProfile('Nobody', 'nobody');
     expect(useApp.getState().identity).toBeNull();
     const route = useApp.getState().route;

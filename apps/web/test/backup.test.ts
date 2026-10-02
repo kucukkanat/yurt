@@ -7,7 +7,7 @@ const KEY = 'k'.repeat(43);
 const ws = (code: string, p: Partial<WsRecord> = {}): WsRecord => ({
   code,
   name: code,
-  transport: { kind: 'nostr', key: KEY, relays: ['wss://r.example'] },
+  transport: { key: KEY, relays: ['wss://r.example'] },
   creator: null,
   lastRead: { general: 5 },
   muted: ['random'],
@@ -41,7 +41,7 @@ describe('the workspace backup ledger', () => {
     // Leaving one already marked left keeps its time.
     expect(record(theirs, [A], [], 10)[A.code]).toEqual({ at: 9, ws: null });
     // Restoring B just as the ledger has it records nothing new, whatever the key order.
-    const restored: Ledger = { [B.code]: { at: 5, ws: { creator: null, transport: { relays: ['wss://r.example'], key: KEY, kind: 'nostr' }, name: B.name, code: B.code } } };
+    const restored: Ledger = { [B.code]: { at: 5, ws: { creator: null, transport: { relays: ['wss://r.example'], key: KEY }, name: B.name, code: B.code } } };
     expect(record(restored, [], [B], 10)).toEqual(restored);
   });
 

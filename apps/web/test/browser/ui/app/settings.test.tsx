@@ -69,7 +69,7 @@ describe('Settings', () => {
 
   it('saves calls and TURN for this device, reconnecting what needs it', async () => {
     await open('connection');
-    await expect.element(section('connection').getByText(/This workspace’s own relays or signaling/)).toBeVisible();
+    await expect.element(section('connection').getByText(/This workspace’s own relays and file servers/)).toBeVisible();
     const save = page.getByTestId('network-save');
     await expect.element(save).toBeDisabled();
     await page.getByTestId('turn-custom').click();
@@ -144,9 +144,8 @@ describe('Settings', () => {
     await expect.element(page.getByTestId('bridge-install')).toBeVisible();
   });
 
-  it('shows the workspace: name, mode, invite, and a two-step leave', async () => {
+  it('shows the workspace: name, invite, and a two-step leave', async () => {
     await open('ws-general');
-    await expectText(page.getByTestId('ws-mode'), /Nostr relays/);
     await expect.element(page.getByTestId('invite-link')).toBeVisible();
     // Where the browser has a share sheet, the link can go straight to it. (Not pressed here: opening the system sheet
     // brings headless Chromium down on macOS.)
@@ -158,7 +157,6 @@ describe('Settings', () => {
 
   it('edits relays and file servers, with status per relay and validation', async () => {
     await open('ws-network');
-    await expectText(page.getByTestId('connection-kind'), /Nostr relays/);
     const relayState = (url: string) => () => document.querySelector('[data-relay="' + url + '"]')?.getAttribute('data-connected');
     await expect.poll(relayState(relayUrl())).toBe('true');
     const relays = page.getByTestId('connection-relays');
@@ -246,23 +244,5 @@ describe('Settings outside a workspace and on a narrow screen', () => {
     await expect.element(section('app')).toBeVisible();
     await userEvent.keyboard('{Escape}');
     await page.viewport(1280, 860);
-    // A peer-to-peer workspace's network section: signaling, members connected.
-    const p2p = await useApp.getState().createWorkspace('P2P', { kind: 'trystero', signal: { kind: 'nostr', urls: ['ws://127.0.0.1:9'] } });
-    await until(() => useApp.getState().route.code === p2p);
-    useApp.getState().openSettings('ws-network');
-    await expectText(page.getByTestId('connection-kind'), /Peer-to-peer \(WebRTC\)/);
-    await expectText(page.getByTestId('connection-peers'), /0 members right now/);
-    await page.getByTestId('ws-signal-torrent').click();
-    await page.getByTestId('ws-signal-urls').fill('bad url');
-    await page.getByTestId('connection-save').click();
-    await expect.element(dlg().getByText('Not a ws:// or wss:// server: bad, url')).toBeVisible();
-    await page.getByTestId('ws-signal-urls').fill('');
-    await page.getByTestId('connection-save').click();
-    await toast('Network settings saved');
-    expect(useApp.getState().workspaces.find((w) => w.code === p2p)?.transport).toMatchObject({ kind: 'trystero', signal: { kind: 'torrent', urls: [] } });
-    await page.getByTestId('ws-signal-nostr').click();
-    await page.getByTestId('connection-save').click();
-    await until(() => !('signal' in (useApp.getState().workspaces.find((w) => w.code === p2p)?.transport ?? {})));
-    await userEvent.keyboard('{Escape}');
   });
 });

@@ -10,10 +10,8 @@ import {
   MAX_FILE_BYTES,
   parseInvite,
   newNostrTransport,
-  newTrysteroTransport,
   uploadFile,
   type WsTransport,
-  type Signaling,
   type WorkspacePeer,
   type WsState,
   type Ev,
@@ -33,12 +31,11 @@ import { report } from './lib/diagnostics';
 import { buildHash, parseHash, type Route } from './lib/route';
 import { presenceNow } from './lib/visibility';
 import { DEFAULT_SETTINGS, loadIdentity, loadSettings, loadWorkspaces, uploadServers, type Identity, type NetSettings, type Settings, type WsRecord } from './lib/stored';
-import { rememberNet, type NewWorkspaceNet } from './lib/newNet';
+import type { NewWorkspaceNet } from './lib/newNet';
 import { backupConfig, docOf, ledgerFromText, ledgerOf, merge, missing, record, sameLedger, type Ledger } from './lib/backup';
 
 export type { Settings, WsRecord } from './lib/stored';
 
-type ConnectionChange = { kind: 'nostr'; relays: string[]; blossom: string[] } | { kind: 'trystero'; signal: Signaling };
 /** Sections of the single Settings window: "you" (account and this device) and the current workspace. */
 export type SettingsSection = 'profile' | 'identity' | 'preferences' | 'app' | 'connection' | 'agents' | 'ws-general' | 'ws-network' | 'ws-agents';
 type PanelType = 'members' | 'profile' | 'thread' | 'pinned' | 'search' | null;
@@ -70,7 +67,6 @@ export interface AppData {
   tick: number;
   /** Bumped per blob id when its bytes land, so only that attachment reloads. */
   blobVer: Record<string, number>;
-  blobProgress: Record<string, number>;
   panel: Panel;
   dialog: DialogType;
   settingsSection: SettingsSection;
@@ -124,24 +120,17 @@ export interface AppState extends AppData {
   /** Resolves false when the attachment couldn't be fetched. */
   fetchBlob(code: string, id: string): Promise<boolean>;
   setAgents(code: string, agentIds: string[]): void;
-  /** A workspace's own network settings: relays and file servers, or signaling. Saves and reconnects it. */
-  updateConnection(code: string, change: ConnectionChange): Promise<void>;
+  /** A workspace's own network settings: relays and file servers. Saves and reconnects it. */
+  updateConnection(code: string, change: NewWorkspaceNet): Promise<void>;
 }
 
 /** The side panel after navigating: a thread route opens its thread; leaving one closes the thread panel. */
 const panelFor = (r: Route, cur: Panel): Panel => (r.thread ? { type: 'thread', id: r.thread } : cur.type === 'thread' ? { type: null } : cur);
 
-/** A workspace's transport after a settings change, refusing changes that don't fit its (fixed) mode. */
-function changedTransport(t: WsTransport, change: ConnectionChange): { transport: WsTransport; blossom?: string[] | undefined } {
-  if (t.kind === 'nostr') {
-    if (change.kind !== 'nostr') throw new Error('A relay workspace’s settings are its relays and file servers');
-    if (!change.relays.length) throw new Error('A relay workspace needs at least one relay');
-    return { transport: { ...t, relays: change.relays }, blossom: change.blossom.length ? change.blossom : undefined };
-  }
-  if (change.kind !== 'trystero') throw new Error('A peer-to-peer workspace’s setting is its signaling');
-  // The default (Nostr, built-in servers) is stored as no signal, matching new workspaces and short links.
-  const { signal: _old, ...rest } = t;
-  return { transport: change.signal.kind === 'nostr' && !change.signal.urls.length ? rest : { ...rest, signal: change.signal } };
+/** A workspace's transport and file servers after a settings change. Its key stays. */
+function changedTransport(t: WsTransport, change: NewWorkspaceNet): { transport: WsTransport; blossom?: string[] | undefined } {
+  if (!change.relays.length) throw new Error('A workspace needs at least one relay');
+  return { transport: { ...t, relays: change.relays }, blossom: change.blossom.length ? change.blossom : undefined };
 }
 
 /** A desktop notification for a fresh message, if it's for me (a mention or any direct message) and I'm not looking at it. */
@@ -167,7 +156,6 @@ const initialState = (): AppData => ({
   states: {},
   tick: 0,
   blobVer: {},
-  blobProgress: {},
   panel: { type: null },
   dialog: null,
   settingsSection: 'profile',
@@ -268,10 +256,10 @@ export const useApp = create<AppState>((set, get) => {
   };
 
   /**
-   * Stores attachments locally and, in relay workspaces (`servers` given), uploads them to Blossom sealed with a
-   * per-file key. Null when an upload failed: a message whose attachment nobody could open isn't sent.
+   * Stores attachments locally and uploads them to Blossom sealed with a per-file key. Null when an upload failed: a
+   * message whose attachment nobody could open isn't sent.
    */
-  const attach = async (files: File[], servers: readonly string[] | null): Promise<FileRef[] | null> => {
+  const attach = async (files: File[], servers: readonly string[]): Promise<FileRef[] | null> => {
     const refs: FileRef[] = [];
     for (const f of files) {
       const buf = await f.arrayBuffer();
@@ -279,7 +267,7 @@ export const useApp = create<AppState>((set, get) => {
       await blobsDb.put(id, buf);
       const ref: FileRef = { id, name: f.name, size: f.size, type: f.type || 'application/octet-stream' };
       try {
-        refs.push(servers ? { ...ref, blob: await uploadFile(servers, new Uint8Array(buf)) } : ref);
+        refs.push({ ...ref, blob: await uploadFile(servers, new Uint8Array(buf)) });
       } catch (err) {
         // The composer keeps the draft for a retry.
         get().toast({ tone: 'danger', title: 'Couldn’t upload ' + f.name, description: errorText(err), duration: 10_000 });
@@ -309,10 +297,8 @@ export const useApp = create<AppState>((set, get) => {
       onPeers: () => set((st) => ({ tick: st.tick + 1 })),
       onCreator: (code, pub) => patchWs(code, { creator: pub }),
       // After a rotation, remember the newest key: invite links use it, and it opens all earlier ones.
-      // Only relay workspaces rotate, so only their records change.
-      onKey: (code, key) => saveWs(get().workspaces.map((w) => (w.code === code && w.transport.kind === 'nostr' ? { ...w, transport: { ...w.transport, key } } : w))),
+      onKey: (code, key) => saveWs(get().workspaces.map((w) => (w.code === code ? { ...w, transport: { ...w.transport, key } } : w))),
       onBlob: (id) => set((st) => ({ blobVer: { ...st.blobVer, [id]: (st.blobVer[id] ?? 0) + 1 } })),
-      onBlobProgress: (id, p) => set((st) => ({ blobProgress: { ...st.blobProgress, [id]: p } })),
       onJoinError: (code, d) => report(code, 'join', d),
       // Fail loud: a device that can't save or store files must say so, not just log it.
       onError: (code, msg) => {
@@ -396,7 +382,7 @@ export const useApp = create<AppState>((set, get) => {
         const mine = new Set(get().workspaces.map((w) => w.code));
         for (const w of state.workspaces) if (!mine.has(w.code)) bridge.send({ t: 'ws.leave', code: w.code });
         // ...and re-send the rest with the app's current transport: the bridge only meets members over the
-        // workspace's own signaling or relays, which may have changed here while it was down.
+        // workspace's own relays, which may have changed here while it was down.
         for (const w of state.workspaces) if (mine.has(w.code)) get().setAgents(w.code, w.agents);
       };
       bridge.subscribe((status, state) => {
@@ -461,13 +447,10 @@ export const useApp = create<AppState>((set, get) => {
       set({ settings });
       await kv.set('settings', settings);
       // Reconnect just the workspaces whose live connection depends on what changed, so nothing needs a reload.
-      // Relay, file server and signaling defaults only shape new workspaces and uploads; TURN and the calls
-      // switch are how this device connects now.
+      // TURN and the calls switch are how this device connects now; TURN matters only while calls are allowed.
       const changed = (k: keyof NetSettings) => p[k] !== undefined && p[k] !== prev[k];
       const turn = changed('turn') || changed('turnUrls') || changed('turnUser') || changed('turnPass');
-      const affected = get()
-        .workspaces.filter((w) => (w.transport.kind === 'trystero' ? turn : changed('webrtc') || (settings.webrtc && turn)))
-        .map((w) => w.code);
+      const affected = changed('webrtc') || (settings.webrtc && turn) ? get().workspaces.map((w) => w.code) : [];
       if (affected.length) await reconnect(affected);
       if (p.theme) applyTheme(p.theme);
       // Turning notifications on asks the browser; a refusal turns the setting back off.
@@ -526,7 +509,7 @@ export const useApp = create<AppState>((set, get) => {
       const code = newInviteCode();
       const me = get().identity;
       if (!me) throw new Error('Create your identity before a workspace');
-      const transport = net.kind === 'nostr' ? newNostrTransport(net.relays) : newTrysteroTransport(net.signal);
+      const transport = newNostrTransport(net.relays);
       const rec: WsRecord = {
         code,
         name: name.trim(),
@@ -534,11 +517,11 @@ export const useApp = create<AppState>((set, get) => {
         creator: me.pub,
         lastRead: {},
         muted: [],
-        ...(net.kind === 'nostr' && net.blossom.length ? { blossom: net.blossom } : {}),
+        ...(net.blossom.length ? { blossom: net.blossom } : {}),
       };
       saveWs([...get().workspaces, rec]);
-      // Remember these settings: they prefill the next workspace created in this mode.
-      const settings = { ...get().settings, lastNet: rememberNet(get().settings.lastNet, net) };
+      // Remember these settings: they prefill the next new workspace.
+      const settings = { ...get().settings, lastNet: net };
       set({ settings });
       await kv.set('settings', settings);
       const p = connectAs(me, rec);
@@ -662,7 +645,7 @@ export const useApp = create<AppState>((set, get) => {
       if (!rec) throw new Error('Unknown workspace');
       patchWs(code, changedTransport(rec.transport, change));
       await reconnect([code]);
-      // The bridge runs its own peer for this workspace: move it to the same signaling or relays.
+      // The bridge runs its own peer for this workspace: move it to the same relays.
       const onBridge = get().bridgeState?.workspaces.find((w) => w.code === code);
       if (onBridge) get().setAgents(code, onBridge.agents);
     },

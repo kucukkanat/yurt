@@ -1,6 +1,6 @@
 import type React from 'react';
 import { useState } from 'react';
-import { Dialog, Button, Input, Tabs, Switch, Radio, Icon, Kbd, Avatar } from '@yurt/ui';
+import { Dialog, Button, Input, Tabs, Switch, Icon, Kbd, Avatar } from '@yurt/ui';
 import {
   formatCode,
   dmChannel,
@@ -11,16 +11,13 @@ import {
   parseRelays,
   parseServers,
   DEFAULT_RELAYS,
-  DEFAULT_SIGNAL_URLS,
-  type WsTransport,
-  type SignalKind,
   type WorkspacePeer,
   type WsState,
 } from '@yurt/protocol';
 import { useApp, type WsRecord } from '../store';
 import { useCurrent, roster } from '../model';
-import { defaultNewNet, netFromForm, type LastNet, type NetForm, type NewWorkspaceNet } from '../lib/newNet';
-import { Settings, SignalFields, InviteBody, listError, rejected } from './Settings';
+import { defaultNewNet, netFromForm } from '../lib/newNet';
+import { Settings, InviteBody, listError, rejected } from './Settings';
 
 export function Dialogs() {
   const dialog = useApp((s) => s.dialog);
@@ -37,55 +34,31 @@ export function Dialogs() {
   );
 }
 
-/** One mode's network settings as the create form's text fields. */
-const formText = (n: NewWorkspaceNet): Partial<NetForm> =>
-  n.kind === 'nostr' ? { relays: n.relays.join(', '), blossom: n.blossom.join(', ') } : { sigKind: n.signal.kind, sigUrls: n.signal.urls.join(', ') };
-
-/** The create form's fields, each mode prefilled from what the last workspace in it used (or the built-ins). */
-const startForm = (last: LastNet | undefined): NetForm => ({
-  sigKind: 'nostr',
-  sigUrls: '',
-  relays: '',
-  blossom: '',
-  ...formText(defaultNewNet(last, 'trystero')),
-  ...formText(defaultNewNet(last, 'nostr')),
-});
-
 export function CreateJoin({ onDone }: { onDone?: () => void }) {
   const [tab, setTab] = useState('create');
   const [name, setName] = useState('');
-  const [kind, setKind] = useState<WsTransport['kind']>('trystero');
   const [code, setCode] = useState('');
   const [err, setErr] = useState('');
   const app = useApp.getState();
-  // The new workspace's own network settings, prefilled from the last workspace created in each mode.
+  // The new workspace's own network settings, prefilled from the last workspace created.
   const settings = useApp((x) => x.settings);
-  const [start] = useState(() => startForm(settings.lastNet));
-  const [sigKind, setSigKind] = useState<SignalKind>(start.sigKind);
-  const [sigUrls, setSigUrls] = useState(start.sigUrls);
-  const [relays, setRelays] = useState(start.relays);
-  const [blossom, setBlossom] = useState(start.blossom);
+  const [start] = useState(() => defaultNewNet(settings.lastNet));
+  const [relays, setRelays] = useState(start.relays.join(', '));
+  const [blossom, setBlossom] = useState(start.blossom.join(', '));
   const [netOpen, setNetOpen] = useState(false);
-  const [netErr, setNetErr] = useState<{ signal?: string | undefined; relays?: string | undefined; blossom?: string | undefined }>({});
+  const [netErr, setNetErr] = useState<{ relays?: string | undefined; blossom?: string | undefined }>({});
   const list = (urls: string[], none: string) => (urls.length ? urls.join(', ') : none);
-  const summary =
-    kind === 'nostr'
-      ? 'Relays: ' + list(parseRelays(relays), DEFAULT_RELAYS.join(', ')) + ' · Files: ' + list(parseServers(blossom), 'default servers')
-      : 'Signaling: ' +
-        (sigKind === 'nostr' ? 'Nostr relays · ' + list(parseRelays(sigUrls), DEFAULT_SIGNAL_URLS.join(', ')) : 'BitTorrent trackers · ' + list(parseRelays(sigUrls), 'built-in'));
+  const summary = 'Relays: ' + list(parseRelays(relays), DEFAULT_RELAYS.join(', ')) + ' · Files: ' + list(parseServers(blossom), 'default servers');
   const create = async () => {
     if (!name.trim()) return setErr('Give it a name people will recognize.');
-    const errs =
-      kind === 'nostr'
-        ? { relays: listError(rejected(relays, parseRelays), 'a ws:// or wss:// relay'), blossom: listError(rejected(blossom, parseServers), 'an http(s) server') }
-        : { signal: listError(rejected(sigUrls, parseRelays), 'a ws:// or wss:// server') };
+    const errs = { relays: listError(rejected(relays, parseRelays), 'a ws:// or wss:// relay'), blossom: listError(rejected(blossom, parseServers), 'an http(s) server') };
     setNetErr(errs);
     if (Object.values(errs).some(Boolean)) {
       setNetOpen(true);
       return;
     }
-    // The form's values through the same rules as Settings → Network: emptied fields mean the built-in defaults.
-    const net = netFromForm(kind, { sigKind, sigUrls, relays, blossom });
+    // The form's values through the same rules as a workspace's Connection settings: emptied fields mean the built-in defaults.
+    const net = netFromForm({ relays, blossom });
     await app.createWorkspace(name, net);
     onDone?.();
   };
@@ -113,32 +86,9 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
           style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
         >
           <Input label="Workspace name" placeholder="Northwind design" value={name} onChange={(e) => setName(e.target.value)} error={err || undefined} autoFocus data-autofocus />
-          <div role="radiogroup" aria-label="How messages travel" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <Radio
-              name="transport"
-              value="trystero"
-              label="Live, peer to peer"
-              description="Messages go straight between members’ browsers and are stored nowhere else. Members need to be online together to sync."
-              checked={kind === 'trystero'}
-              onChange={() => {
-                setKind('trystero');
-                setNetErr({});
-              }}
-              data-testid="transport-trystero"
-            />
-            <Radio
-              name="transport"
-              value="nostr"
-              label="Encrypted on Nostr relays"
-              description="Relays keep end-to-end encrypted history, so messages arrive even when no one else is online. Relays can’t read them."
-              checked={kind === 'nostr'}
-              onChange={() => {
-                setKind('nostr');
-                setNetErr({});
-              }}
-              data-testid="transport-nostr"
-            />
-          </div>
+          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>
+            Messages are end-to-end encrypted and kept on Nostr relays, so they arrive even when no one else is online. Relays can’t read them.
+          </span>
           <div
             data-testid="create-net"
             style={{
@@ -179,35 +129,32 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
                 </span>
               </span>
             </button>
-            {netOpen &&
-              (kind === 'nostr' ? (
-                <>
-                  <Input
-                    label="Relays"
-                    placeholder="wss://nos.lol"
-                    data-testid="create-relays"
-                    error={netErr.relays}
-                    value={relays}
-                    hint="ws:// or wss:// URLs, separated by spaces or commas. Empty means wss://nos.lol."
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRelays(e.target.value)}
-                  />
-                  <Input
-                    label="File servers (Blossom)"
-                    optional
-                    placeholder="https://blossom.example.com"
-                    data-testid="create-blossom"
-                    error={netErr.blossom}
-                    value={blossom}
-                    hint="Where your uploads in this workspace go. Leave empty for the defaults."
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBlossom(e.target.value)}
-                  />
-                </>
-              ) : (
-                <SignalFields prefix="create" kind={sigKind} urls={sigUrls} error={netErr.signal} onKind={setSigKind} onUrls={setSigUrls} />
-              ))}
+            {netOpen && (
+              <>
+                <Input
+                  label="Relays"
+                  placeholder="wss://nos.lol"
+                  data-testid="create-relays"
+                  error={netErr.relays}
+                  value={relays}
+                  hint="ws:// or wss:// URLs, separated by spaces or commas. Empty means wss://nos.lol."
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRelays(e.target.value)}
+                />
+                <Input
+                  label="File servers (Blossom)"
+                  optional
+                  placeholder="https://blossom.example.com"
+                  data-testid="create-blossom"
+                  error={netErr.blossom}
+                  value={blossom}
+                  hint="Where your uploads in this workspace go. Leave empty for the defaults."
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBlossom(e.target.value)}
+                />
+              </>
+            )}
             {netOpen && (
               <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--text-subtle)' }}>
-                Members need {kind === 'nostr' ? 'a relay' : 'a server'} in common; the invite link carries these. Starts from what you used last.
+                Members need a relay in common; the invite link carries the relays (file servers stay on this device). Starts from what you used last.
               </span>
             )}
           </div>
@@ -215,9 +162,7 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
             Create workspace
           </Button>
           <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>
-            {kind === 'nostr'
-              ? 'You get an invite link that carries the workspace key. Share it privately: anyone with it can read the history.'
-              : 'You get an invite link that carries the workspace key. Share it privately: anyone with it can join.'}
+            You get an invite link that carries the workspace key. Share it privately: anyone with it can read the history.
           </span>
         </form>
       ) : (

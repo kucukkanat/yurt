@@ -15,8 +15,8 @@ export async function onboard(page: Page, name: string, finish: 'Start chatting'
 }
 
 /**
- * Points new relay workspaces at the local relay and file server, through the same IndexedDB settings the Settings dialog
- * writes. `extra` sets other settings the same way (e.g. the theme).
+ * Points new workspaces at the local relay and file server, through the same IndexedDB settings the create form
+ * writes (`lastNet`, which prefills it). `extra` sets other settings the same way (e.g. the theme).
  */
 export async function pointAtLocalRelay(page: Page, extra: Record<string, unknown> = {}) {
   await page.goto('./');
@@ -28,7 +28,7 @@ export async function pointAtLocalRelay(page: Page, extra: Record<string, unknow
           const t = r.result.transaction('kv', 'readwrite');
           const kv = t.objectStore('kv');
           const get = kv.get('settings');
-          get.onsuccess = () => kv.put({ ...(get.result || {}), relays, blossom: servers, ...extra }, 'settings');
+          get.onsuccess = () => kv.put({ ...(get.result || {}), lastNet: { relays: [relays], blossom: [servers] }, ...extra }, 'settings');
           t.oncomplete = () => res();
           t.onerror = () => rej(t.error);
         };
@@ -40,9 +40,8 @@ export async function pointAtLocalRelay(page: Page, extra: Record<string, unknow
 }
 
 /** Creates a workspace from the onboarding/home form and waits for its #general. */
-export async function createWorkspace(page: Page, name: string, mode: 'p2p' | 'relays' = 'p2p') {
+export async function createWorkspace(page: Page, name: string) {
   await page.getByLabel('Workspace name').fill(name + ' ' + Date.now());
-  if (mode === 'relays') await page.getByText('Encrypted on Nostr relays').click();
   await page.getByRole('button', { name: 'Create workspace' }).click();
   await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
 }

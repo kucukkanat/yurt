@@ -14,7 +14,7 @@ export interface FaviconState {
   inCall: boolean;
   /** Someone is in a huddle I'm not in: a dot in the other corner. */
   callNearby: boolean;
-  /** No network, or the current relay workspace can't reach any relay: greyed out. */
+  /** No network, or the current workspace can't reach any relay: greyed out. */
   offline: boolean;
 }
 

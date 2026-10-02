@@ -27,7 +27,7 @@ export interface FileRef {
   name: string;
   size: number;
   type: string;
-  /** Relay workspaces: the file sealed on Blossom. Absent on Trystero, where peers serve files over WebRTC. */
+  /** The file sealed on Blossom. Absent or malformed: nobody can download it. */
   blob?: BlobRef | undefined;
 }
 
@@ -102,7 +102,7 @@ export interface BanBody {
   on: boolean;
 }
 /**
- * Relay workspaces: an admin replaces the workspace key (after a ban). `keys` maps each remaining
+ * An admin replaces the workspace key (after a ban). `keys` maps each remaining
  * member's pubkey to the new key sealed with the admin↔member pair key; `history` seals every earlier
  * key under the new one, so whoever holds the new key can still read the whole history.
  */

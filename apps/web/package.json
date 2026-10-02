@@ -13,7 +13,6 @@
     "test:merge": "vitest run --merge-reports --coverage"
   },
   "dependencies": {
-    "@trystero-p2p/torrent": "0.25.4",
     "@yurt/protocol": "*",
     "@yurt/ui": "*",
     "react": "^18.3.1",

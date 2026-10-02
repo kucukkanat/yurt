@@ -4,17 +4,21 @@ Guidance for AI coding agents (and humans) working in this repo. Read it before 
 
 ## What this is
 
-Yurt is a peer-to-peer team chat with optional AI agents. A Bun monorepo:
+Yurt is a serverless, end-to-end encrypted team chat with optional AI agents. A Bun monorepo:
 
 | Path | Package | What |
 |---|---|---|
-| `packages/protocol` | `@yurt/protocol` | Events, reducer, crypto, invites, transports (Trystero WebRTC, encrypted Nostr relays), Blossom files, Valibot schemas |
+| `packages/protocol` | `@yurt/protocol` | Events, reducer, crypto, invites, the encrypted Nostr relay transport, Blossom files, WebRTC call rooms (Trystero), Valibot schemas |
 | `packages/bridge` | `yurt-bridge` | Local CLI: runs agent CLIs over ACP, headless workspace peer, its own setup UI (`ui/src`) |
 | `packages/ui` | `@yurt/ui` | Design system: JSX components + `.d.ts` types, tokens |
 | `apps/web` | `@yurt/web` | The React app (Vite, zustand), deployed to GitHub Pages |
 | `e2e` | | Playwright specs |
 
 Protocol details: `docs/PROTOCOL.md`. Product overview: `README.md`.
+
+Every workspace is a Nostr relay workspace: events and presence go over its relays, files over Blossom. WebRTC
+(Trystero, signaled over the workspace's relays) is only for calls: voice, video and screen sharing. The bridge never
+uses WebRTC.
 
 ## Commands
 
@@ -62,6 +66,10 @@ Pages once the build and tests pass. Shared setup (Bun, Node, cached Chromium) i
   what can be tested without media (pure helpers, state, rules such as the video cap). Don't add media tests to
   close the call UI's coverage gap; that gap is accepted.
 - Mutation testing (Stryker) was tried and removed: too slow. Don't reintroduce it.
+
+**Docs**
+- Every change updates the docs it affects in the same commit: `README.md` (what users see), `docs/PROTOCOL.md` (wire
+  formats, rules, threat model) and this file (layout, rules, gotchas). Stale docs count as a bug.
 
 **Git**
 - Conventional Commits (`feat:`, `fix:`, `chore:`, `refactor:`, `test:`…). Work on `main` unless asked to branch.

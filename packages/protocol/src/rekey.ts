@@ -6,7 +6,7 @@ import { isWorkspaceKey, newWorkspaceKey, open, seal, workspaceKeys, type WsKeys
 import { KeyHistorySchema } from './schemas';
 
 /**
- * Key rotation for relay workspaces. A workspace key is a chain: the invite key, then one key per
+ * Key rotation. A workspace key is a chain: the invite key, then one key per
  * `rekey` event. Every device rebuilds its chain from the key it holds plus the rekeys in its log,
  * so nothing but the invite key is ever stored:
  * - forwards: a rekey seals the new key for each remaining member with the admin↔member pair key;

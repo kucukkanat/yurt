@@ -3,8 +3,6 @@ import {
   DEFAULT_BLOSSOM,
   DEFAULT_RELAYS,
   EventSchema,
-  LEGACY_TRYSTERO,
-  SIGNAL_KINDS,
   formatCode,
   isRecord,
   isValidPhrase,
@@ -14,11 +12,10 @@ import {
   parseOr,
   type Ev,
   type KeyPair,
-  type Signaling,
   type WsTransport,
 } from '@yurt/protocol';
 import { handleFrom } from './format';
-import { dropLegacy, migrateLastNet, type LastNet } from './newNet';
+import { LastNetSchema, type NewWorkspaceNet } from './newNet';
 
 /**
  * What this app reads back from IndexedDB. It's our own earlier writes, but from any older version, a
@@ -48,7 +45,7 @@ export interface NetSettings {
   turnUrls: string;
   turnUser: string;
   turnPass: string;
-  /** Relay workspaces use WebRTC (voice and video) only when this is on. Trystero workspaces always use it. */
+  /** Calls (voice, video, screen) are the only thing that uses WebRTC, and only when this is on. */
   webrtc: boolean;
 }
 
@@ -59,8 +56,8 @@ export interface Settings extends NetSettings {
   haptics: boolean;
   /** The "install Yurt" suggestion was shown on this device. */
   installHint: boolean;
-  /** What the create step used last for each mode; prefills the next new workspace. */
-  lastNet?: LastNet | undefined;
+  /** What the create step used last; prefills the next new workspace. */
+  lastNet?: NewWorkspaceNet | undefined;
 }
 
 // No TURN by default: a third-party relay would see who connects to whom. Opt in under Settings → Network.
@@ -73,7 +70,7 @@ export const DEFAULT_SETTINGS: Settings = {
   turnUrls: '',
   turnUser: '',
   turnPass: '',
-  webrtc: false,
+  webrtc: true,
 };
 
 const text = v.string();
@@ -86,24 +83,14 @@ const strings = v.pipe(
 );
 const workspaceKey = v.pipe(text, v.check(isWorkspaceKey));
 
-const SignalingSchema: v.GenericSchema<unknown, Signaling> = v.object({ kind: v.picklist(SIGNAL_KINDS), urls: strings });
-
-const TransportSchema: v.GenericSchema<unknown, WsTransport> = v.variant('kind', [
-  v.object({
-    kind: v.literal('nostr'),
-    key: workspaceKey,
-    // A relay workspace with no relays can't reach anyone; the built-ins at least let it sync again.
-    relays: v.pipe(
-      strings,
-      v.transform((rs) => (rs.length ? rs : [...DEFAULT_RELAYS])),
-    ),
-  }),
-  v.pipe(
-    v.object({ kind: v.literal('trystero'), key: v.optional(workspaceKey), signal: v.fallback(v.optional(SignalingSchema), undefined) }),
-    // Absent fields are left out, not set to undefined (the transport is compared and sent as JSON).
-    v.transform(({ key, signal }): WsTransport => ({ kind: 'trystero', ...(key ? { key } : {}), ...(signal ? { signal } : {}) })),
+const TransportSchema: v.GenericSchema<unknown, WsTransport> = v.object({
+  key: workspaceKey,
+  // A workspace with no relays can't reach anyone; the built-ins at least let it sync again.
+  relays: v.pipe(
+    strings,
+    v.transform((rs) => (rs.length ? rs : [...DEFAULT_RELAYS])),
   ),
-]);
+});
 
 export const WsRecordSchema: v.GenericSchema<unknown, WsRecord> = v.pipe(
   v.custom<Record<string, unknown>>(isRecord),
@@ -113,8 +100,7 @@ export const WsRecordSchema: v.GenericSchema<unknown, WsRecord> = v.pipe(
       v.check((c) => normalizeCode(c) === c),
     ),
     name: v.fallback(v.optional(text), undefined),
-    // Records from before transports existed are Trystero workspaces.
-    transport: v.optional(TransportSchema, LEGACY_TRYSTERO),
+    transport: TransportSchema,
     creator: v.fallback(v.nullable(v.pipe(text, v.regex(HEX64))), null),
     lastRead: v.pipe(
       v.optional(v.unknown(), null), // a missing key is an empty value (via the transform), not an invalid record
@@ -131,8 +117,8 @@ export const WsRecordSchema: v.GenericSchema<unknown, WsRecord> = v.pipe(
   v.transform(({ name, blossom, ...r }): WsRecord => ({ ...r, name: name ?? formatCode(r.code), ...(blossom ? { blossom } : {}) })),
 );
 
-/** Where a workspace's attachments are uploaded: its file servers (else the defaults) for relay workspaces, none for peer-to-peer ones. */
-export const uploadServers = (w: WsRecord): readonly string[] | null => (w.transport.kind !== 'nostr' ? null : w.blossom?.length ? w.blossom : DEFAULT_BLOSSOM);
+/** Where a workspace's attachments are uploaded: its file servers, else the defaults. */
+export const uploadServers = (w: WsRecord): readonly string[] => (w.blossom?.length ? w.blossom : DEFAULT_BLOSSOM);
 
 /** Saved workspaces: bad records are skipped (they couldn't connect anyway), and a code appears once. */
 export function loadWorkspaces(raw: unknown): WsRecord[] {
@@ -164,13 +150,14 @@ const SettingsSchema = v.object({
   turnUser: v.fallback(text, DEFAULT_SETTINGS.turnUser),
   turnPass: v.fallback(text, DEFAULT_SETTINGS.turnPass),
   webrtc: v.fallback(v.boolean(), DEFAULT_SETTINGS.webrtc),
+  lastNet: LastNetSchema,
 });
 
-/** Saved settings over the defaults; older versions' app-wide network defaults become `lastNet` once. */
+/** Saved settings over the defaults. */
 export function loadSettings(raw: unknown): Settings {
-  const saved = isRecord(raw) ? raw : {};
-  const lastNet = migrateLastNet(saved);
-  return { ...v.parse(SettingsSchema, dropLegacy(saved)), ...(lastNet ? { lastNet } : {}) };
+  const { lastNet, ...s } = v.parse(SettingsSchema, isRecord(raw) ? raw : {});
+  // Left out rather than undefined when absent (exactOptionalPropertyTypes; settings are compared as JSON).
+  return { ...s, ...(lastNet ? { lastNet } : {}) };
 }
 
 /** A stored string (e.g. the bridge pairing token), or null. */

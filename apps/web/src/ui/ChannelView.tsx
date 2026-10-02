@@ -3,7 +3,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { Icon, IconButton, Button, Tooltip, Kbd, Avatar, DayDivider, UnreadDivider, TypingIndicator, ConnectionBanner } from '@yurt/ui';
 import { agentKey, parseGuestDm, type Channel, type Msg, type WorkspacePeer, type WsState } from '@yurt/protocol';
 import { useApp } from '../store';
-import { useCurrent, roster, personFor, authorKey, channelTitle, othersOnline, type Person } from '../model';
+import { useCurrent, roster, personFor, authorKey, channelTitle, type Person } from '../model';
 import { privateTarget } from '../lib/private';
 import { fmtDay } from '../lib/format';
 import { MessageItem, type MsgCtx } from './Message';
@@ -133,15 +133,14 @@ function conversationOf(state: WsState, peer: WorkspacePeer | undefined, ch: str
 }
 
 /** The hint under the composer: connection trouble first, then who can see this conversation. */
-function composerNote(c: Conversation, net: { online: boolean; relayed: boolean; connected: boolean; nobody: boolean }): React.ReactNode {
-  if (!net.online) return net.relayed ? 'Offline · sends when a relay is reachable' : 'Offline · sends when a member is reachable';
-  if (net.relayed && !net.connected) return 'Relays unreachable · sends when one is back';
+function composerNote(c: Conversation, net: { online: boolean; connected: boolean }): React.ReactNode {
+  if (!net.online) return 'Offline · sends when a relay is reachable';
+  if (!net.connected) return 'Relays unreachable · sends when one is back';
   if (c.kind === 'guest')
     return c.agent.presence === 'offline'
       ? c.agent.name + ' answers when ' + c.owner.name + '’s machine is on'
       : 'Only you and ' + c.owner.name + ', who runs ' + c.agent.name + ', see this';
   if (c.kind === 'agent') return c.agent.presence === 'offline' ? c.agent.name + ' is off. Start yurt-bridge to get replies.' : 'Only you and ' + c.agent.name + ' see this';
-  if (net.nobody) return 'No one else is online · sends when someone joins';
   return c.kind === 'dm' ? 'Private between you two' : <>Type @ to mention a person or agent</>;
 }
 
@@ -151,7 +150,7 @@ function composerPlaceholder(c: Conversation, title: string): string {
   return c.kind === 'dm' ? 'Message ' + title : 'Message #' + title;
 }
 
-function EmptyState({ c, relayed }: { c: Conversation; relayed: boolean }) {
+function EmptyState({ c }: { c: Conversation }) {
   const app = useApp.getState();
   switch (c.kind) {
     case 'guest': {
@@ -194,13 +193,7 @@ function EmptyState({ c, relayed }: { c: Conversation; relayed: boolean }) {
         <Intro
           avatar={<Avatar name={c.other.name} self={c.other.self} presence={c.other.presence} size={56} decorative cutout="var(--surface-page)" />}
           title={c.other.self ? 'Notes to yourself' : 'You and ' + c.other.name}
-          body={
-            c.other.self
-              ? 'Drafts, links, reminders. Only you see these.'
-              : relayed
-                ? 'Only the two of you can read this conversation. Relays keep it end-to-end encrypted.'
-                : 'Only the two of you hold this conversation. It syncs directly between your devices.'
-          }
+          body={c.other.self ? 'Drafts, links, reminders. Only you see these.' : 'Only the two of you can read this conversation. Relays keep it end-to-end encrypted.'}
         />
       );
     case 'channel':
@@ -449,10 +442,9 @@ function useFileDrop(at: string) {
   };
 }
 
-/** Status lines above the messages: removed from the workspace, a guessable legacy code, guest-DM visibility, connection. */
+/** Status lines above the messages: removed from the workspace, guest-DM visibility, connection. */
 function Banners({ c, online }: { c: Conversation; online: boolean }) {
-  const { rec, peer } = useCurrent();
-  const relayed = peer?.transport.kind === 'nostr';
+  const { peer } = useCurrent();
   return (
     <>
       {peer?.lockedOut && (
@@ -460,13 +452,8 @@ function Banners({ c, online }: { c: Conversation; online: boolean }) {
           You no longer receive new messages here: you were removed, or your invite predates a key change. Ask a member for a new invite link.
         </div>
       )}
-      {rec && !rec.transport.key && (
-        <div role="status" data-testid="legacy-warning" style={bannerStyle}>
-          This workspace uses a short code anyone on the network can guess. Create a new workspace to keep conversations private.
-        </div>
-      )}
       {c.kind === 'guest' && <GuestNotice c={c} />}
-      <ConnectionBanner state={!online ? 'offline' : relayed && !peer?.connected ? 'reconnecting' : 'online'} queued={peer?.queued.size || 0} />
+      <ConnectionBanner state={!online ? 'offline' : !peer?.connected ? 'reconnecting' : 'online'} queued={peer?.queued.size || 0} />
     </>
   );
 }
@@ -534,20 +521,15 @@ function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: stri
   const ids = state.channelMsgs.get(ch) || [];
   const entryRead = useReadMarks(code, ch, ids.length);
 
-  // On Nostr the relays hold messages, so being alone is fine; only unreachable relays matter.
-  const relayed = peer?.transport.kind === 'nostr';
   const c = conversationOf(state, peer, ch, me);
-  if (!c) {
-    return (
-      <Centered title="Channel not synced yet" body={relayed ? 'It shows up once it arrives from the workspace’s relays.' : 'It shows up once a member who has it comes online.'} />
-    );
-  }
+  if (!c) return <Centered title="Channel not synced yet" body="It shows up once it arrives from the workspace’s relays." />;
   // useCurrent re-renders on every tick, so the roster is always current.
   const people = roster(state, peer, me);
   const ctx: MsgCtx = { state, peer, me, handle: identity.handle.toLowerCase(), roster: people, code, forceRender: force };
   const title = channelTitle(state, ch, me);
   const togglePanel = (type: 'members' | 'pinned' | 'search') => app.setPanel(panel.type === type ? { type: null } : { type });
-  const note = composerNote(c, { online, relayed, connected: !!peer?.connected, nobody: !relayed && othersOnline(peer, me) === 0 });
+  // The relays hold messages, so being alone is fine; only unreachable relays matter.
+  const note = composerNote(c, { online, connected: !!peer?.connected });
   const huddles = c.kind === 'channel' || c.kind === 'dm';
   return (
     <section
@@ -577,7 +559,7 @@ function Conversation({ narrow, code, ch, state }: { narrow: boolean; code: stri
       </header>
       <Banners c={c} online={online} />
       <HuddleStrip ch={ch} />
-      <MessageList key={code + ch} ids={ids} ctx={ctx} lastRead={entryRead} emptyState={ids.length ? null : <EmptyState c={c} relayed={relayed} />} highlight={highlight} />
+      <MessageList key={code + ch} ids={ids} ctx={ctx} lastRead={entryRead} emptyState={ids.length ? null : <EmptyState c={c} />} highlight={highlight} />
       <ComposerArea c={c} code={code} ch={ch} draftKey={draftKey} narrow={narrow} people={people} dropFiles={drop.files} placeholder={composerPlaceholder(c, title)} note={note} />
       {drop.dragging && (
         <div

@@ -1,22 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { selfId as bridgeSelfId } from 'trystero';
-import { RTCPeerConnection } from 'werift';
-import {
-  type WorkspacePeer,
-  agentKey,
-  keyFromPhrase,
-  newNostrTransport,
-  newRecoveryPhrase,
-  newTrysteroTransport,
-  workspaceKeys,
-  type AgentConfig,
-  type JoinRoom,
-  type KeyPair,
-  type KeyedTransport,
-  type TRoom,
-} from '@yurt/protocol';
+import { type WorkspacePeer, agentKey, keyFromPhrase, newNostrTransport, newRecoveryPhrase, type AgentConfig, type KeyPair, type WsTransport } from '@yurt/protocol';
 import { startRelay, type TestRelay } from '../../protocol/test/relay';
 import type { Config } from '../src/config';
 import type { Workspaces } from '../src/workspaces';
@@ -44,7 +29,7 @@ const agent: AgentConfig = {
 };
 
 let relay: TestRelay;
-let transport: KeyedTransport;
+let transport: WsTransport;
 let cfg: Config;
 let ws: Workspaces;
 let mods: { workspaces: typeof import('../src/workspaces'); config: typeof import('../src/config') };
@@ -164,17 +149,13 @@ describe('storage on disk', () => {
 });
 
 describe('joining and leaving', () => {
-  it('treats an older app without transports as legacy, and upgrades it when a keyed one arrives', () => {
-    // No identity on this one: nothing joins any network.
+  it('joins nothing without an identity, and leaves what was never joined harmlessly', () => {
     const bare = new mods.workspaces.Workspaces(cfg, () => {});
-    bare.join('LEGACYWS', 'Legacy', null, []);
-    expect(record('LEGACYWS').transport).toEqual({ kind: 'trystero' });
+    bare.join('NOIDENTY', 'No identity', null, [], newNostrTransport(['ws://127.0.0.1:9']));
     expect(bare.me).toBeNull();
-    const keyed = newTrysteroTransport({ kind: 'nostr', urls: ['ws://127.0.0.1:9'] });
-    bare.join('LEGACYWS', 'Legacy', null, [], keyed);
-    expect(record('LEGACYWS').transport).toEqual(keyed);
-    bare.leave('LEGACYWS');
-    bare.leave('NEVERWAS'); // leaving what was never joined is harmless
+    expect(bare.peers.size).toBe(0);
+    bare.leave('NOIDENTY');
+    bare.leave('NEVERWAS');
     bare.presence('NEVERWAS');
   });
 
@@ -190,30 +171,4 @@ describe('joining and leaving', () => {
     ws.leave('IDENTITY');
     ws.presence('IDENTITY'); // a leaving workspace's presence: no record, nothing to say
   });
-});
-
-describe('peer-to-peer workspaces', () => {
-  const raws: TRoom[] = [];
-  afterAll(() => {
-    for (const r of raws) r.leave();
-  });
-
-  it('logs a member who joins its room with the wrong password', async () => {
-    const t = newTrysteroTransport({ kind: 'nostr', urls: [relay.url] });
-    ws.join('JOINERRS', 'Join errors', null, [], t);
-    // Trystero's lower peer id makes the offer: keep making raw peers until one sorts first, so the bridge is the
-    // side that receives an offer it can't decrypt.
-    const k = workspaceKeys(must(t.key, 'key'));
-    for (let tries = 0; ; tries++) {
-      if (tries > 50) throw new Error('no raw peer id sorted before the bridge in 50 tries');
-      vi.resetModules();
-      const { joinRoom, selfId } = await import('trystero');
-      if (selfId >= bridgeSelfId) continue;
-      const config = { appId: k.app, password: 'not the room password', relayConfig: { urls: [relay.url] }, rtcPolyfill: RTCPeerConnection };
-      raws.push((joinRoom as unknown as JoinRoom)(config, k.room, {}));
-      break;
-    }
-    await until(() => lines.some((l) => l.startsWith('warn p2p: join error in JOINERRS')), 30_000);
-    ws.leave('JOINERRS');
-  }, 45_000);
 });

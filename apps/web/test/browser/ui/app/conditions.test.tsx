@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
-import { dmChannel, inviteHash, keyFromPhrase, newInviteCode, newNostrTransport, newRecoveryPhrase, newTrysteroTransport } from '@yurt/protocol';
+import { dmChannel, inviteHash, keyFromPhrase, newInviteCode, newNostrTransport, newRecoveryPhrase } from '@yurt/protocol';
 import { createWorkspace, me, member, startApp, until, useApp } from '../app';
 
 let code = '';
@@ -22,7 +22,7 @@ describe('conditions a conversation can be in', () => {
     window.dispatchEvent(new Event('online'));
     await note('Type @ to mention a person or agent');
     // A relay workspace whose relays can't be reached: queued sends, reconnecting.
-    const dead = await useApp.getState().createWorkspace('Unreachable', { kind: 'nostr', relays: [DEAD], blossom: [] });
+    const dead = await useApp.getState().createWorkspace('Unreachable', { relays: [DEAD], blossom: [] });
     await note('Relays unreachable · sends when one is back');
     await expect.element(main().getByText(/^Reconnecting/)).toBeVisible();
     await page.getByRole('textbox', { name: 'Message #general' }).fill('stuck in the queue');
@@ -33,28 +33,17 @@ describe('conditions a conversation can be in', () => {
     go('general');
   });
 
-  it('describes peer-to-peer workspaces, where members must be online together', async () => {
-    const p2p = await useApp.getState().createWorkspace('Live', { kind: 'trystero', signal: { kind: 'nostr', urls: [DEAD] } });
-    await until(() => useApp.getState().route.code === p2p);
-    await note('No one else is online · sends when someone joins');
-    window.dispatchEvent(new Event('offline'));
-    await note('Offline · sends when a member is reachable');
-    window.dispatchEvent(new Event('online'));
-    go('nowhere', p2p);
-    await expect.element(main().getByText('It shows up once a member who has it comes online.')).toBeVisible();
-    // A DM with someone this device has never heard from: offline, synced directly.
+  it('describes a DM with someone never seen, and a thread that hasn’t arrived', async () => {
     const stranger = keyFromPhrase(newRecoveryPhrase()).pub;
-    go(dmChannel(me().pub, stranger), p2p);
+    go(dmChannel(me().pub, stranger));
     await expect.element(main().getByText('Offline · messages sync when they’re back')).toBeVisible();
-    await expect.element(main().getByText(/It syncs directly between your devices\./)).toBeVisible();
-    useApp.getState().go({ code: p2p, ch: 'general', thread: 'f'.repeat(64) });
-    await expect.element(page.getByText('This thread syncs once a member who has it is online.')).toBeVisible();
+    await expect.element(main().getByText(/Relays keep it end-to-end encrypted\./)).toBeVisible();
+    useApp.getState().go({ code, ch: 'general', thread: 'f'.repeat(64) });
+    await expect.element(page.getByText('This thread shows up once it arrives from the workspace’s relays.')).toBeVisible();
     go('general');
   });
 
-  it('shows joined workspaces that have no channels yet, in each mode', async () => {
-    await useApp.getState().joinWorkspace(inviteHash({ code: newInviteCode(), transport: newTrysteroTransport({ kind: 'nostr', urls: [DEAD] }) }));
-    await expect.element(page.getByText('Syncs when a member is online')).toBeVisible();
+  it('shows joined workspaces that have no channels yet', async () => {
     await useApp.getState().joinWorkspace(inviteHash({ code: newInviteCode(), transport: newNostrTransport([DEAD]) }));
     await expect.element(page.getByText('Syncing from relays…')).toBeVisible();
     go('general');

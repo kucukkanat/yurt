@@ -19,8 +19,8 @@ beforeAll(async () => {
   await commands.bridgeAllowOrigin(location.origin);
   await app().init();
   await app().createIdentity(newRecoveryPhrase(), 'Ada', 'ada');
-  kept = await app().createWorkspace('Kept', { kind: 'nostr', relays: [inject('relayUrl')], blossom: [] });
-  left = await app().createWorkspace('Left', { kind: 'nostr', relays: [inject('relayUrl')], blossom: [] });
+  kept = await app().createWorkspace('Kept', { relays: [inject('relayUrl')], blossom: [] });
+  left = await app().createWorkspace('Left', { relays: [inject('relayUrl')], blossom: [] });
 });
 
 afterAll(async () => {
@@ -49,7 +49,7 @@ describe('the bridge and the app', () => {
   });
 
   it('moves the bridge’s peer when a workspace’s relays change', async () => {
-    await app().updateConnection(kept, { kind: 'nostr', relays: [inject('relayUrl'), 'ws://127.0.0.1:9'], blossom: [] });
+    await app().updateConnection(kept, { relays: [inject('relayUrl'), 'ws://127.0.0.1:9'], blossom: [] });
     await until(() => app().bridgeState?.workspaces.some((w) => w.code === kept) === true, 'still on the bridge');
   });
 });

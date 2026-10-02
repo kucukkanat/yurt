@@ -125,9 +125,6 @@ describe('the app chrome', () => {
     await expectText(page.getByTestId('ws-online'), /2 other members online/);
     await menuButton.click();
     cy.leave();
-    await sidebar().getByTestId('mode-chip').click();
-    await expect.element(page.getByTestId('settings-section-ws-network')).toBeVisible();
-    await userEvent.keyboard('{Escape}');
   });
 
   it('adds from the section headers and opens your profile and the bridge from the bottom', async () => {

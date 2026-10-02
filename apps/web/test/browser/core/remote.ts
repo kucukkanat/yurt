@@ -8,7 +8,7 @@ interface RemoteOpts {
   code: string;
   transport: WsTransport;
   creator?: string | null;
-  /** Join the workspace's WebRTC room (calls); Trystero workspaces always do. */
+  /** May join the workspace's WebRTC room (calls). */
   webrtc?: boolean;
   kp?: KeyPair;
 }
@@ -20,12 +20,11 @@ function makePeer(o: RemoteOpts) {
   const peer = new WorkspacePeer({
     code: o.code,
     kp,
-    selfId,
     transport: o.transport,
     creator: o.creator ?? null,
     store,
     devFileServers: true,
-    ...(o.transport.kind === 'trystero' || o.webrtc ? { joinRoom: joinRoom as unknown as JoinRoom } : {}),
+    ...(o.webrtc ? { calls: { joinRoom: joinRoom as unknown as JoinRoom, selfId } } : {}),
     onError: (m) => errors.push(m),
   });
   /** A file only this member holds (bytes made in this frame), ready to attach to a message. */

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
-import { keyFromPhrase, newInviteCode, newRecoveryPhrase, newTrysteroTransport, newWorkspaceKey, type WorkspacePeer } from '@yurt/protocol';
+import { keyFromPhrase, newInviteCode, newNostrTransport, newRecoveryPhrase, newWorkspaceKey, type WorkspacePeer } from '@yurt/protocol';
 import { huddle, MAX_VIDEO } from '../../../src/lib/huddle';
 import { connect, disconnect } from '../../../src/lib/net';
 import { DEFAULT_SETTINGS } from '../../../src/lib/stored';
@@ -9,7 +9,7 @@ import type { RemoteApi } from './remote';
 // Real calls: this page's huddle against members in their own frames, over WebRTC with Chromium's fake devices,
 // signalling through the local relay.
 const code = newInviteCode();
-const transport = newTrysteroTransport({ kind: 'nostr', urls: [inject('relayUrl')] });
+const transport = newNostrTransport([inject('relayUrl')]);
 const kp = keyFromPhrase(newRecoveryPhrase());
 let me: WorkspacePeer;
 let remote: RemoteApi;
@@ -23,10 +23,14 @@ const bobId = () => [...me.peers].find(([, p]) => p.pub === bob.kp.pub)?.[0] ?? 
 
 beforeAll(async () => {
   await resetDb();
-  me = connect(code, kp, null, transport, DEFAULT_SETTINGS, quiet());
+  me = connect(code, kp, null, transport, DEFAULT_SETTINGS, quiet()); // calls are on by default
   remote = await openRemote();
-  bob = remote.makePeer({ code, transport });
+  bob = remote.makePeer({ code, transport, webrtc: true });
   await bob.peer.start();
+  // Rooms open for calls; open them now so the tests start with Bob and me already connected.
+  await until(() => me.connected && bob.peer.connected, 'the relay');
+  me.ensureRoom();
+  bob.peer.ensureRoom();
   await until(() => !!myIdAtBob() && !!bobId(), 'Bob and me to meet over WebRTC', 30_000);
 }, 40_000);
 
@@ -112,8 +116,10 @@ describe('huddles', () => {
     const others = await Promise.all(
       Array.from({ length: MAX_VIDEO }, async () => {
         const r = await openRemote();
-        const p = r.makePeer({ code, transport });
+        const p = r.makePeer({ code, transport, webrtc: true });
         await p.peer.start();
+        // Presence isn't stored on relays: my call shows up at my next heartbeat. Join the room now instead.
+        p.peer.ensureRoom();
         return p;
       }),
     );
@@ -147,13 +153,13 @@ describe('huddles', () => {
   });
 
   it('explain why a call can’t start', async () => {
-    // A relay workspace without the WebRTC opt-in has no room for calls.
+    // Without the WebRTC opt-in there is no room for calls.
     const relayCode = newInviteCode();
-    const relayPeer = connect(relayCode, kp, null, { kind: 'nostr', key: newWorkspaceKey(), relays: [inject('relayUrl')] }, DEFAULT_SETTINGS, quiet());
+    const relayPeer = connect(relayCode, kp, null, { key: newWorkspaceKey(), relays: [inject('relayUrl')] }, { ...DEFAULT_SETTINGS, webrtc: false }, quiet());
     // Connected before it's left: closing a relay subscription mid-connect trips a nostr-tools bug (see report).
     await until(() => relayPeer.connected, 'the relay');
     await huddle.join(relayPeer, 'general');
-    expect(huddle.view.error).toMatch(/Allow WebRTC/);
+    expect(huddle.view.error).toMatch(/Voice and video calls/);
     // A workspace left while the microphone prompt was open.
     const gone = connect(newInviteCode(), kp, null, transport, DEFAULT_SETTINGS, quiet());
     const joining = huddle.join(gone, 'general');
@@ -164,17 +170,17 @@ describe('huddles', () => {
   });
 
   it('explain a call blocked by a settings change made while the microphone prompt was open', async () => {
-    const callsOn = { ...DEFAULT_SETTINGS, webrtc: true };
-    const relayTransport = { kind: 'nostr' as const, key: newWorkspaceKey(), relays: [inject('relayUrl')] };
+    const callsOff = { ...DEFAULT_SETTINGS, webrtc: false };
+    const relayTransport = { key: newWorkspaceKey(), relays: [inject('relayUrl')] };
     const c = newInviteCode();
     const h = quiet();
-    const before = connect(c, kp, null, relayTransport, callsOn, h);
+    const before = connect(c, kp, null, relayTransport, DEFAULT_SETTINGS, h);
     await until(() => before.connected, 'the relay');
     const joining = huddle.join(before, 'general');
     disconnect(c);
-    const after = connect(c, kp, null, relayTransport, DEFAULT_SETTINGS, h); // reconnected with calls turned off
+    const after = connect(c, kp, null, relayTransport, callsOff, h); // reconnected with calls turned off
     await joining;
-    expect(huddle.view.error).toMatch(/Allow WebRTC/);
+    expect(huddle.view.error).toMatch(/Voice and video calls/);
     await until(() => after.connected, 'the relay again');
     disconnect(c);
   });
@@ -182,8 +188,8 @@ describe('huddles', () => {
   it('leave cleanly after a key rotation left the call room', async () => {
     const c = newInviteCode();
     const h = quiet();
-    const relayTransport = { kind: 'nostr' as const, key: newWorkspaceKey(), relays: [inject('relayUrl')] };
-    const mine = connect(c, kp, kp.pub, relayTransport, { ...DEFAULT_SETTINGS, webrtc: true }, h);
+    const relayTransport = { key: newWorkspaceKey(), relays: [inject('relayUrl')] };
+    const mine = connect(c, kp, kp.pub, relayTransport, DEFAULT_SETTINGS, h);
     await until(() => mine.connected, 'the relay');
     mine.publish({ t: 'ws.create', b: { name: 'Rekey' } });
     await until(() => mine.state.creator === kp.pub, 'my workspace');

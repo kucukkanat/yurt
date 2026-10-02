@@ -27,8 +27,6 @@ export default defineConfig({
           exclude: ['test/ui/**'],
           environment: 'node',
           setupFiles: ['src/polyfill.ts'],
-          // Inlined so a test can load a second Trystero instance (its own selfId) to act as another peer.
-          server: { deps: { inline: ['trystero', /@trystero-p2p/] } },
         },
       },
       {

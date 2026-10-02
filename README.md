@@ -15,7 +15,7 @@
   <a href="#develop">Develop</a>
 </p>
 
-Team chat that runs entirely in the browser. Workspaces, channels, DMs, threads, files and huddles travel directly between members over WebRTC ([Trystero](https://trystero.dev), Nostr signaling). There are no accounts and no server: you are an Ed25519 key, and a workspace is a signed event log that every member holds a copy of.
+Team chat that runs entirely in the browser. Workspaces, channels, DMs and threads are end-to-end encrypted on Nostr relays, files on [Blossom](https://github.com/hzrd149/blossom) file servers, and huddles (voice, video, screen share) go directly between members over WebRTC ([Trystero](https://trystero.dev), signaled over the workspace's relays). There are no accounts and no server of our own: you are an Ed25519 key, and a workspace is a signed event log that every member holds a copy of.
 
 Optionally, `yurt-bridge` runs on your machine and brings your own coding agents (GitHub Copilot CLI, OpenCode, Codex, Claude Code, Pi) into rooms over the [Agent Client Protocol](https://agentclientprotocol.com).
 
@@ -25,7 +25,7 @@ Optionally, `yurt-bridge` runs on your machine and brings your own coding agents
   <tr>
     <td width="33%" valign="top"><b>No server, no accounts</b><br>You are a key. A workspace is a signed event log every member holds. The app is static files on GitHub Pages.</td>
     <td width="33%" valign="top"><b>Your agents, in the room</b><br>Claude Code, Codex, Copilot CLI, OpenCode and Pi join over ACP. Every tool call shows as a trace; tools you haven't pre-approved ask you first.</td>
-    <td width="33%" valign="top"><b>Two transports</b><br>Live peer to peer over WebRTC, or end-to-end encrypted on Nostr relays so messages arrive while you're away.</td>
+    <td width="33%" valign="top"><b>Works while you're away</b><br>End-to-end encrypted on Nostr relays, so messages arrive even when nobody else is online.</td>
   </tr>
   <tr>
     <td valign="top"><b>Sealed by default</b><br>The invite link carries a 256-bit key; relays see only ciphertext. DMs get their own pairwise key.</td>
@@ -38,32 +38,31 @@ Optionally, `yurt-bridge` runs on your machine and brings your own coding agents
 
 ```mermaid
 flowchart LR
-  A["Your browser"] <-- "WebRTC" --> B["Teammate's browser"]
-  A <-. "sealed events" .-> R[("Nostr relays")]
-  B <-. "sealed events" .-> R
+  A["Your browser"] <-. "sealed events" .-> R[("Nostr relays")]
+  B["Teammate's browser"] <-. "sealed events" .-> R
+  A <-. "sealed files" .-> F[("Blossom servers")]
+  B <-. "sealed files" .-> F
+  A <-- "WebRTC (calls only)" --> B
   A <-- "paired, 127.0.0.1:7717" --> Br["yurt-bridge<br>(your machine)"]
   Br <-- "joins as you, headless" --> R
   Br <-- "ACP" --> Ag["Your agent CLIs<br>(Claude Code, Codex, …)"]
 ```
 
-## Two ways to carry a workspace
+## How a workspace travels
 
-When you create a workspace you choose how its messages travel. The choice is fixed and travels with the invite link.
+| | |
+|---|---|
+| Messages and history | End-to-end encrypted on Nostr relays; they arrive even when nobody else is online |
+| Files | Encrypted on [Blossom](https://github.com/hzrd149/blossom) file servers (public ones by default, or your own) |
+| Voice, video, screen share | WebRTC between the people in the call, signaled over the workspace's relays. On by default; turn it off in **Settings → Connection** |
+| Invite | A link that carries the workspace key and its relays |
 
-| | Live, peer to peer (Trystero) | Encrypted on Nostr relays |
-|---|---|---|
-| Where history lives | Only on members' devices | On relays, end-to-end encrypted |
-| Messages arrive when nobody else is online | No, they sync when members overlap | Yes |
-| Invite | Link (carries the workspace key) | Link (carries the workspace key) |
-| Files | WebRTC, from members who are online | Encrypted on [Blossom](https://github.com/hzrd149/blossom) file servers |
-| Voice and video | WebRTC | WebRTC, only if you turn it on in **Settings → Network** |
+Invites are links only: the 8-character code is just an id, and a 256-bit key in the link's `#` fragment is what lets people in. Relays can't read workspaces: every event is sealed with that key, private messages get a second, pairwise key, and sizes and timestamps are blurred. Details and the threat model are in [docs/PROTOCOL.md](docs/PROTOCOL.md#nostr-transport). **Settings** is one window, opened from the gear in the workspace rail (or <kbd>⌘/Ctrl ,</kbd>):
 
-Invites are links only: the 8-character code is just an id, and a 256-bit key in the link's `#` fragment is what lets people in. Relays can't read Nostr workspaces: every event is sealed with that key, private messages get a second, pairwise key, and sizes and timestamps are blurred. Details and the threat model are in [docs/PROTOCOL.md](docs/PROTOCOL.md#nostr-transport). **Settings** is one window, opened from the gear in the workspace rail (or <kbd>⌘/Ctrl ,</kbd>):
+- **You**: profile, identity, preferences, **Connection** (this device only: whether it joins voice and video calls, and TURN for them) and **Agents & bridge**.
+- **The current workspace**: **General** (invite link, leave), **Network** (its relays with live status, and its file servers) and **Agents**. The workspace menu jumps straight into these.
 
-- **You**: profile, identity, preferences, **Connection** (this device only: TURN, and whether it joins voice and video calls in relay workspaces) and **Agents & bridge**.
-- **The current workspace** (shown with its mode chip): **General** (mode, invite link, leave), **Network** (only its own mode: a peer-to-peer workspace's signaling, or a relay workspace's relays with live status and file servers) and **Agents**. The workspace menu jumps straight into these.
-
-A workspace's network is chosen when it's created: after picking a mode, a collapsed *Network settings* row sets its signaling, or its relays and file servers, starting from what you used last. The mode is fixed after that; members need a signaling server or relay in common, and invite links carry the workspace's current list.
+When you create a workspace, a collapsed *Network settings* row sets its relays and file servers, starting from what you used last (`wss://nos.lol` and the default Blossom servers the first time). Members need a relay in common; invite links carry the workspace's current relays. File servers stay on each device: they're where *your* uploads go, and every file reference names the servers it's on.
 
 ## Agents
 
@@ -94,15 +93,15 @@ The bridge launches each CLI's ACP mode. Adapters move fast, so check these agai
 
 ## Things to know
 
-- **Room size.** In peer-to-peer workspaces every member connects to every other member. Designed for 2–10 people.
-- **History** lives in IndexedDB. Peer-to-peer workspaces sync it from whoever is online (if nobody is, you wait); relay workspaces fetch the whole encrypted history from relays, even when nobody else is online.
-- **The invite link is the key.** Anyone holding it can join and read the full history, including messages from before they joined. Bans are signed by admins and enforced by every peer: all of a banned key's events are hidden and it's disconnected. In relay workspaces a ban also rotates the workspace key, so the removed member can't read anything new (they keep what they already had), and old invite links stop letting anyone into new conversations.
+- **Call size.** In a huddle every member connects to every other member over WebRTC. Designed for 2–10 people.
+- **History** lives in IndexedDB, and comes from the relays: a new member fetches the whole encrypted history, even when nobody else is online.
+- **The invite link is the key.** Anyone holding it can join and read the full history, including messages from before they joined. Bans are signed by admins and enforced by every peer: all of a banned key's events are hidden and it's dropped from calls. A ban also rotates the workspace key, so the removed member can't read anything new (they keep what they already had), and old invite links stop letting anyone into new conversations.
 - **DMs** are sealed with a key only the two participants can derive (and your own bridge, which shares your key); other members, including later joiners, can't read them.
-- **Files** (≤25 MB) are content-addressed (SHA-256): fetched from online peers in peer-to-peer workspaces, or from Blossom servers (sealed with a per-file key) in relay workspaces.
+- **Files** (≤25 MB) are content-addressed (SHA-256) and sealed with a per-file key on Blossom servers. The defaults are free public servers; set your own per workspace under its **Network** settings, or when you create it.
 - **Huddles** are audio-first per channel, with video for up to 4 people and screen share.
 - **Editing.** Your messages can be edited or deleted for 15 minutes; the Edit action shows the time left. After that it turns into a lock that explains why and offers to reply in the thread instead.
 - **Tab icon.** The favicon reflects what's going on: a red count for unread mentions and DMs, a dot for other unread messages, a green ring while you're in a call, a green dot when a call is happening elsewhere, and greyed out when offline. It decorates whatever favicon the page declares, so replacing the icon keeps working.
-- **TURN.** Off by default (a TURN operator sees who connects to whom). Opt into the free Open Relay or your own server under Settings → Network → WebRTC.
+- **TURN.** Off by default (a TURN operator sees who connects to whom). It only matters for calls. Opt into the free Open Relay or your own server under Settings → Connection.
 - **Browsers and the bridge.** Chrome may ask to allow access to devices on your local network the first time Yurt connects to `127.0.0.1:7717`. Safari may block `ws://127.0.0.1` from an https page; use Chrome, Edge, Firefox or Brave for agents.
 - **Identity** is a 12-word recovery phrase. Enter it on another device to be the same person.
 - **On a phone.** Yurt installs as an app (Settings → App: the Install button, or Safari's Share → Add to Home Screen on iPhone and iPad) and opens offline. Touch gestures: swipe in from the left edge for the sidebar, swipe a message right to reply in its thread, long-press it for its actions, and swipe a full-screen panel away. Android phones give a short vibration when these land (Settings → Preferences → Haptic feedback); iOS has no vibration for web apps.
@@ -112,11 +111,11 @@ The bridge launches each CLI's ACP mode. Adapters move fast, so check these agai
 
 ```
 apps/web            React + Vite app, deployed to GitHub Pages
-packages/protocol   Events, signatures, reducer, sync, shared WorkspacePeer (web + bridge)
+packages/protocol   Events, signatures, reducer, Nostr transport, Blossom files, shared WorkspacePeer (web + bridge)
 packages/ui         Agentic Design System components and tokens
 packages/bridge     yurt-bridge: local agent host, headless peer, its own setup UI
 docs/PROTOCOL.md    Wire formats and rules
-e2e/                Playwright: two browsers, real P2P
+e2e/                Playwright: real browsers against a local relay and Blossom server
 ```
 
 ### Run it
@@ -124,8 +123,8 @@ e2e/                Playwright: two browsers, real P2P
 ```sh
 bun install
 bun run dev          # http://localhost:5173
-bun run test         # protocol + bridge unit/integration tests (Vitest; local relay, Blossom server and real WebRTC, no network)
-bun run e2e          # Playwright: P2P chat over public relays, relay workspaces over a local relay and Blossom server
+bun run test         # unit/integration tests (Vitest; local relay, Blossom server and real WebRTC for calls, no network)
+bun run e2e          # Playwright against the production build, a local relay and Blossom server
 ```
 
 Open two browser profiles (or one normal + one private window), create a workspace in one and paste its invite link into the other.

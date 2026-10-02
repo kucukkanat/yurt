@@ -19,7 +19,7 @@ const me = keyFromPhrase(phrase);
 const app = () => useApp.getState();
 let remote: RemoteApi;
 let relayCode = '';
-let p2pCode = '';
+let otherCode = '';
 
 /** Olu, joining one of my workspaces with its current invite. */
 function olu(code: string, kp = keyFromPhrase(newRecoveryPhrase())) {
@@ -46,17 +46,17 @@ afterAll(async () => {
 
 describe('workspaces', () => {
   it('creates a relay workspace with its own servers, opens #general and remembers the settings', async () => {
-    relayCode = await app().createWorkspace('  Team  ', { kind: 'nostr', relays: [relay], blossom: [blossom] });
+    relayCode = await app().createWorkspace('  Team  ', { relays: [relay], blossom: [blossom] });
     await until(() => app().route.code === relayCode && app().route.ch === 'general', '#general');
     expect(app().workspaces.find((w) => w.code === relayCode)).toMatchObject({ name: 'Team', creator: me.pub, blossom: [blossom] });
-    expect(app().settings.lastNet?.nostr).toEqual({ relays: [relay], blossom: [blossom] });
+    expect(app().settings.lastNet).toEqual({ relays: [relay], blossom: [blossom] });
     await until(() => app().states[relayCode]?.channels.has('general') === true, 'the workspace state');
   });
 
-  it('creates a peer-to-peer workspace, and one without file servers', async () => {
-    p2pCode = await app().createWorkspace('P2P', { kind: 'trystero', signal: { kind: 'nostr', urls: [relay] } });
-    expect(app().workspaces.find((w) => w.code === p2pCode)?.transport.kind).toBe('trystero');
-    const bare = await app().createWorkspace('Bare', { kind: 'nostr', relays: [relay], blossom: [] });
+  it('creates a second workspace, and one without file servers', async () => {
+    otherCode = await app().createWorkspace('Second', { relays: [relay], blossom: [blossom] });
+    expect(app().workspaces.find((w) => w.code === otherCode)?.transport.relays).toEqual([relay]);
+    const bare = await app().createWorkspace('Bare', { relays: [relay], blossom: [] });
     expect(app().workspaces.find((w) => w.code === bare)?.blossom).toBeUndefined();
     await app().leaveWorkspace(bare);
   });
@@ -66,7 +66,7 @@ describe('workspaces', () => {
     app().go({});
     await until(() => !app().route.code, 'home');
     const t = app().workspaces.find((w) => w.code === relayCode)?.transport;
-    if (t?.kind !== 'nostr') throw new Error('missing');
+    if (!t) throw new Error('missing');
     expect(await app().joinWorkspace(inviteHash({ code: relayCode, transport: t }))).toBe(true);
     await until(() => app().route.code === relayCode, 'the workspace');
     expect(app().workspaces.filter((w) => w.code === relayCode)).toHaveLength(1);
@@ -109,10 +109,10 @@ describe('messages and files', () => {
     const big = new File([new Uint8Array(MAX_FILE_BYTES + 1)], 'huge.bin');
     expect(await app().send('x', [big])).toBe(false);
     expect(app().toasts.at(-1)?.title).toBe('huge.bin is over 25 MB');
-    await app().updateConnection(relayCode, { kind: 'nostr', relays: [relay], blossom: ['http://127.0.0.1:9'] });
+    await app().updateConnection(relayCode, { relays: [relay], blossom: ['http://127.0.0.1:9'] });
     expect(await app().send('x', [new File(['y'], 'b.txt')])).toBe(false);
     expect(app().toasts.at(-1)?.title).toBe('Couldn’t upload b.txt');
-    await app().updateConnection(relayCode, { kind: 'nostr', relays: [relay], blossom: [] }); // back to the defaults
+    await app().updateConnection(relayCode, { relays: [relay], blossom: [] }); // back to the defaults
     expect(app().workspaces.find((w) => w.code === relayCode)?.blossom).toBeUndefined();
     app().go({});
     await until(() => !app().route.code, 'home');
@@ -123,16 +123,7 @@ describe('messages and files', () => {
     useApp.setState({ route: {} });
   });
 
-  it('sends files directly between members in a peer-to-peer workspace', async () => {
-    app().go({ code: p2pCode, ch: 'general' });
-    await until(() => app().route.code === p2pCode && app().states[p2pCode]?.channels.has('general') === true, 'the channel');
-    expect(await app().send('', [new File(['p2p'], 'p.txt')])).toBe(true);
-    const m = [...(app().states[p2pCode]?.msgs.values() ?? [])].find((x) => x.files[0]?.name === 'p.txt');
-    expect(m?.files[0]?.blob).toBeUndefined();
-  });
-
-  it('fetches a member’s attachment: from the file server, or from them over WebRTC', async () => {
-    // From the file server (relay workspace).
+  it('fetches a member’s attachment from the file server', async () => {
     const o = olu(relayCode);
     await until(() => o.peer.state.channels.has('general'), 'Olu to sync');
     const up = await remote.uploaded([blossom], 3000);
@@ -140,14 +131,6 @@ describe('messages and files', () => {
     await until(() => [...(app().states[relayCode]?.msgs.values() ?? [])].some((m) => m.files[0]?.id === up.id), 'his message');
     expect(await app().fetchBlob(relayCode, up.id)).toBe(true);
     expect(app().blobVer[up.id]).toBe(1);
-    // From Olu himself, over WebRTC (peer-to-peer workspace).
-    const p = olu(p2pCode);
-    await until(() => p.peer.peers.size > 0 && (getPeer(p2pCode)?.peers.size ?? 0) > 0, 'Olu to connect', 30_000);
-    const own = await p.ownFile(200_000);
-    p.peer.publish({ t: 'msg', ch: 'general', b: { text: 'big', files: [own] } });
-    await until(() => [...(app().states[p2pCode]?.msgs.values() ?? [])].some((m) => m.files[0]?.id === own.id), 'his message');
-    expect(await app().fetchBlob(p2pCode, own.id)).toBe(true);
-    expect(app().blobProgress[own.id]).toBeGreaterThan(0);
     expect(await app().fetchBlob('NOWHERE1', 'x')).toBe(false);
     // A file whose server is gone can't be fetched: reported, not thrown.
     const lost = await remote.uploaded([blossom], 10);
@@ -159,20 +142,22 @@ describe('messages and files', () => {
     await until(() => [...(app().states[relayCode]?.msgs.values() ?? [])].some((m) => m.files[0]?.id === lost.id), 'the lost file message');
     expect(await app().fetchBlob(relayCode, lost.id)).toBe(false);
     o.peer.leave();
-    p.peer.leave();
   }, 60_000);
 
-  it('keeps a banned member out of a peer-to-peer workspace’s room', async () => {
+  it('keeps a banned member out of a call room', async () => {
     const mallory = keyFromPhrase(newRecoveryPhrase());
-    app().publish(p2pCode, { t: 'ban', b: { target: mallory.pub, on: true } });
-    await until(() => app().states[p2pCode]?.bans.has(mallory.pub) === true, 'the ban');
+    app().publish(otherCode, { t: 'ban', b: { target: mallory.pub, on: true } });
+    await until(() => app().states[otherCode]?.bans.has(mallory.pub) === true, 'the ban');
     // Her own device (frame): a fresh peer id, as a separate person always has.
-    const rec = app().workspaces.find((w) => w.code === p2pCode);
+    const rec = app().workspaces.find((w) => w.code === otherCode);
     if (!rec) throw new Error('missing');
-    const m = (await openRemote()).makePeer({ code: p2pCode, transport: rec.transport, creator: rec.creator, kp: mallory });
-    void m.peer.start();
-    await until(() => recentDiagnostics().some((d) => d.code === p2pCode && d.kind === 'join'), 'the refused handshake', 30_000);
-    expect([...(getPeer(p2pCode)?.peers.values() ?? [])].some((x) => x.pub === mallory.pub)).toBe(false);
+    const m = (await openRemote()).makePeer({ code: otherCode, transport: rec.transport, creator: rec.creator, kp: mallory, webrtc: true });
+    // Her call presence doesn't open my room (she's banned), so both rooms are opened directly.
+    getPeer(otherCode)?.ensureRoom();
+    await m.peer.start();
+    m.peer.ensureRoom();
+    await until(() => recentDiagnostics().some((d) => d.code === otherCode && d.kind === 'join'), 'the refused handshake', 30_000);
+    expect([...(getPeer(otherCode)?.peers.values() ?? [])].some((x) => x.pub === mallory.pub)).toBe(false);
     m.peer.leave();
   }, 40_000);
 
@@ -305,33 +290,24 @@ describe('keys and connections', () => {
   it('ignore the late state of a connection that was just replaced', async () => {
     const before = getPeer(relayCode);
     app().publish(relayCode, { t: 'msg', ch: 'general', b: { text: 'right before a reconnect' } });
-    await app().updateConnection(relayCode, { kind: 'nostr', relays: [relay], blossom: [blossom] });
+    await app().updateConnection(relayCode, { relays: [relay], blossom: [blossom] });
     expect(getPeer(relayCode)).not.toBe(before);
     await until(() => [...(app().states[relayCode]?.msgs.values() ?? [])].some((m) => m.text === 'right before a reconnect'), 'the new connection to load it');
   });
 
-  it('refuse changes that don’t fit a workspace’s mode', async () => {
-    await expect(app().updateConnection('NOWHERE1', { kind: 'nostr', relays: [relay], blossom: [] })).rejects.toThrow('Unknown workspace');
-    await expect(app().updateConnection(relayCode, { kind: 'nostr', relays: [], blossom: [] })).rejects.toThrow('at least one relay');
-    await expect(app().updateConnection(relayCode, { kind: 'trystero', signal: { kind: 'nostr', urls: [] } })).rejects.toThrow('relays and file servers');
-    await expect(app().updateConnection(p2pCode, { kind: 'nostr', relays: [relay], blossom: [] })).rejects.toThrow('signaling');
-  });
-
-  it('move a peer-to-peer workspace to other signaling, and back to the default', async () => {
-    await app().updateConnection(p2pCode, { kind: 'trystero', signal: { kind: 'torrent', urls: ['ws://127.0.0.1:9'] } });
-    expect(app().workspaces.find((w) => w.code === p2pCode)?.transport).toMatchObject({ signal: { kind: 'torrent' } });
-    await app().updateConnection(p2pCode, { kind: 'trystero', signal: { kind: 'nostr', urls: [] } });
-    expect(app().workspaces.find((w) => w.code === p2pCode)?.transport).not.toHaveProperty('signal');
-    await app().updateConnection(p2pCode, { kind: 'trystero', signal: { kind: 'nostr', urls: [relay] } });
+  it('refuse a change without relays, or for an unknown workspace', async () => {
+    await expect(app().updateConnection('NOWHERE1', { relays: [relay], blossom: [] })).rejects.toThrow('Unknown workspace');
+    await expect(app().updateConnection(relayCode, { relays: [], blossom: [] })).rejects.toThrow('at least one relay');
   });
 
   it('reconnect only the workspaces a network setting affects', async () => {
     expect(await app().updateSettings({ theme: 'light' })).toBe(0);
     expect(document.documentElement.dataset.theme).toBe('light');
-    expect(await app().updateSettings({ turn: 'default' })).toBe(1); // TURN: the peer-to-peer workspace
+    expect(await app().updateSettings({ turn: 'default' })).toBe(2); // TURN, with calls on: every workspace
     expect(await app().updateSettings({ turn: 'default' })).toBe(0); // unchanged
-    expect(await app().updateSettings({ webrtc: true })).toBe(1); // calls: the relay workspace
-    expect(await app().updateSettings({ turnUrls: 'turn:x.example', turn: 'custom' })).toBe(2); // with calls on, both
+    expect(await app().updateSettings({ webrtc: false })).toBe(2); // calls off
+    expect(await app().updateSettings({ turnUrls: 'turn:x.example', turn: 'custom' })).toBe(0); // TURN with calls off: nothing
+    expect(await app().updateSettings({ webrtc: true })).toBe(2);
     expect(await app().updateSettings({ turnUser: 'u' })).toBe(2);
     expect(await app().updateSettings({ turnPass: 'p' })).toBe(2);
   });
@@ -341,7 +317,7 @@ describe('keys and connections', () => {
     if (!peer) throw new Error('no peer');
     await huddle.join(peer, 'general');
     expect(huddle.view.ch).toBe('general');
-    await app().updateConnection(relayCode, { kind: 'nostr', relays: [relay], blossom: [blossom] });
+    await app().updateConnection(relayCode, { relays: [relay], blossom: [blossom] });
     expect(huddle.view.ch).toBeNull();
   });
 
@@ -351,7 +327,7 @@ describe('keys and connections', () => {
     useApp.setState({
       bridgeState: { version: '1', identity: null, agents: [], workspaces: [{ code: relayCode, name: 'Team', agents: [] }], runtimes: [], startOnLogin: false, allowedOrigins: [] },
     });
-    await app().updateConnection(relayCode, { kind: 'nostr', relays: [relay], blossom: [blossom] });
+    await app().updateConnection(relayCode, { relays: [relay], blossom: [blossom] });
     useApp.setState({ bridgeState: null });
   });
 
@@ -366,21 +342,21 @@ describe('leaving', () => {
   it('drops a workspace’s history and the files only it used, and goes home', async () => {
     const shared = new File(['shared'], 's.txt');
     const own = new File(['own'], 'o.txt');
-    app().go({ code: p2pCode, ch: 'general' });
-    await until(() => app().route.code === p2pCode, 'p2p');
+    app().go({ code: otherCode, ch: 'general' });
+    await until(() => app().route.code === otherCode, 'the second workspace');
     await app().send('', [shared, own]);
     app().go({ code: relayCode, ch: 'general' });
     await until(() => app().route.code === relayCode, 'relay');
     await app().send('', [shared]);
     const [sharedId, ownId] = await Promise.all([shared, own].map(async (f) => sha256Buf(await f.arrayBuffer())));
     await until(() => [...(app().states[relayCode]?.msgs.values() ?? [])].some((m) => m.files.some((f) => f.id === sharedId)), 'the shared file in both');
-    const peer = getPeer(p2pCode);
+    const peer = getPeer(otherCode);
     if (!peer) throw new Error('no peer');
     await huddle.join(peer, 'general');
-    await app().leaveWorkspace(p2pCode);
+    await app().leaveWorkspace(otherCode);
     expect(huddle.view.ch).toBeNull();
-    expect(app().workspaces.map((w) => w.code)).not.toContain(p2pCode);
-    expect(app().states[p2pCode]).toBeUndefined();
+    expect(app().workspaces.map((w) => w.code)).not.toContain(otherCode);
+    expect(app().states[otherCode]).toBeUndefined();
     expect(await blobsDb.get(ownId ?? '')).toBeNull();
     expect(await blobsDb.get(sharedId ?? '')).not.toBeNull();
     await until(() => !app().route.code, 'home');

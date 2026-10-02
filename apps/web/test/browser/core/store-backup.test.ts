@@ -37,7 +37,7 @@ beforeAll(async () => {
 describe('the workspace backup', () => {
   it('keeps the workspaces an identity joins on its relays, encrypted', async () => {
     await app().createIdentity(phrase, 'Ada', 'ada');
-    code = await app().createWorkspace('Kept', { kind: 'nostr', relays: local(), blossom: [] });
+    code = await app().createWorkspace('Kept', { relays: local(), blossom: [] });
     await eventually(async () => expect((await backedUp())[code]?.ws?.name).toBe('Kept'));
     // Its history on the relay too, so the next device has something to read back.
     await until(() => getPeer(code)?.queued.size === 0, 'the workspace’s events on the relay');
@@ -61,7 +61,7 @@ describe('the workspace backup', () => {
 
   it('reports a sync no relay answered, without replacing the backup, and syncs once back online', async () => {
     backupConfig.relays = ['ws://127.0.0.1:1'];
-    const offline = await app().createWorkspace('Offline', { kind: 'nostr', relays: local(), blossom: [] });
+    const offline = await app().createWorkspace('Offline', { relays: local(), blossom: [] });
     await until(() => recentDiagnostics().some((d) => d.code === 'backup' && d.detail.includes('No relay answered')), 'the failed sync');
     expect((await backedUp())[offline]).toBeUndefined();
     backupConfig.relays = local();

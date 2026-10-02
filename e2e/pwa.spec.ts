@@ -47,7 +47,7 @@ test('notifies through the service worker, and closes the notification once the 
   const a = await actx.newPage();
   await pointAtLocalRelay(a);
   await onboard(a, 'Ada', 'Start chatting');
-  await createWorkspace(a, 'Ping', 'relays');
+  await createWorkspace(a, 'Ping');
   await ready(a);
   // Notifications on (Settings → Preferences), then away from #general.
   await a.getByTestId('me-row').click();
@@ -83,7 +83,7 @@ test('keeps working where the worker can’t notify (Safari in a tab has no getN
     // Safari in a tab: a worker registration without the method.
     Reflect.deleteProperty(ServiceWorkerRegistration.prototype, 'getNotifications');
   });
-  await page.goto('./');
+  await pointAtLocalRelay(page);
   await onboard(page, 'Ada', 'Start chatting');
   await createWorkspace(page, 'Tab');
   await ready(page);

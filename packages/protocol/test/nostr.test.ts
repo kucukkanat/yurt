@@ -18,7 +18,6 @@ import {
   makeRekey,
   type KeyPair,
   type WsTransport,
-  type KeyedTransport,
   type WorkspacePeerOpts,
 } from '../src';
 import { startRelay, type TestRelay } from './relay';
@@ -32,13 +31,13 @@ const C = keyFromPhrase(newRecoveryPhrase());
 const D = keyFromPhrase(newRecoveryPhrase());
 
 let relay: TestRelay;
-let transport: KeyedTransport;
+let transport: WsTransport;
 const open: WorkspacePeer[] = [];
 /** Every onError of this test; afterEach requires it empty, so tests that expect errors take theirs out. */
 let errors: string[] = [];
 
 function peer(kp: KeyPair, t: WsTransport = transport, store = memStore().store, extra: Partial<WorkspacePeerOpts> = {}) {
-  const p = new WorkspacePeer({ code: CODE, kp, selfId: kp.pub.slice(0, 20), transport: t, store, devFileServers: true, onError: (m) => errors.push(m), ...extra });
+  const p = new WorkspacePeer({ code: CODE, kp, transport: t, store, devFileServers: true, onError: (m) => errors.push(m), ...extra });
   open.push(p);
   return p;
 }
@@ -403,6 +402,16 @@ describe('files in relay workspaces', () => {
     expect(JSON.stringify(relay.stored)).not.toContain(f.blob.key);
   });
 
+  it("never follow a ref in someone else's DM, even one that sits in this device's log", async () => {
+    const f = await attach('not for C');
+    const dm = makeEvent(A, { ws: CODE, t: 'msg', ch: dmChannel(A.pub, B.pub), to: B.pub, b: { text: 'here', files: [f] } });
+    const store = memStore().store;
+    await store.save([dm]);
+    const c = await join(C, transport, store);
+    expect(c.events.has(dm.id)).toBe(true);
+    expect(await c.fetchFile(f.id)).toBeNull();
+  });
+
   it('refuse a server copy that does not match the attached file', async () => {
     const a = await join(A);
     const f = await attach('original');
@@ -431,10 +440,6 @@ describe('files in relay workspaces', () => {
 });
 
 describe('workspace peer', () => {
-  it('refuses a Trystero workspace without a WebRTC room', () => {
-    expect(() => new WorkspacePeer({ code: CODE, kp: A, selfId: 'a', store: memStore().store, onError: (m) => errors.push(m) })).toThrow('Trystero workspaces need joinRoom');
-  });
-
   it('drops forged, foreign and malformed events', async () => {
     const a = await join(A);
     const good = a.publish({ t: 'msg', ch: 'general', b: { text: 'ok' } });

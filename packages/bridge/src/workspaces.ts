@@ -1,22 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { joinRoom as joinNostr, selfId } from 'trystero';
-import { joinRoom as joinTorrent } from '@trystero-p2p/torrent';
-import { RTCPeerConnection } from 'werift';
-import {
-  WorkspacePeer,
-  agentKey,
-  agentPrefs,
-  keyFromPhrase,
-  LEGACY_TRYSTERO,
-  isLegacy,
-  signalingOf,
-  type WsTransport,
-  type PeerStore,
-  type JoinRoom,
-  type KeyPair,
-  type AgentBody,
-} from '@yurt/protocol';
+import { WorkspacePeer, agentKey, agentPrefs, keyFromPhrase, type WsTransport, type PeerStore, type KeyPair, type AgentBody } from '@yurt/protocol';
 import { WS_DIR, BLOB_DIR, saveConfig, type Config } from './config';
 import { parseStoredEvent } from './schemas';
 import type { AgentHost } from './agents';
@@ -66,9 +50,6 @@ export const storeFor = (code: string): PeerStore => {
 /** What an agent event says that members see; two equal ones need no new announcement. */
 const announced = (b: AgentBody) => JSON.stringify([b.name, b.handle, b.runtime, b.model || null, b.replyIn, b.removed === true, agentPrefs(b)]);
 
-/** The part of a transport members must share to meet: relays, or signaling (absent = Trystero's defaults). */
-const networkOf = (t: WsTransport) => (t.kind === 'nostr' ? { relays: t.relays } : { signal: t.signal ?? null });
-
 /** Headless peers: the bridge joins each workspace with the owner's key so agents answer with the browser closed. */
 export class Workspaces {
   peers = new Map<string, WorkspacePeer>();
@@ -102,20 +83,13 @@ export class Workspaces {
     const p = new WorkspacePeer({
       code,
       kp: this.kp,
-      selfId,
       isBridge: true,
       devFileServers: this.opts.devFileServers,
       transport: w.transport,
-      // Relay workspaces are Nostr-only for the bridge: files come from Blossom, and it never joins calls.
-      // Members only meet over the workspace's own signaling method, so pick the matching strategy.
-      // Absent (not undefined) unless known: the peer pins the creator, and only Trystero workspaces get a room.
-      ...compact({
-        creator: w.creator,
-        joinRoom: w.transport.kind === 'trystero' ? ((signalingOf(w.transport).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom) : undefined,
-      }),
+      // The bridge is Nostr-only: files come from Blossom, and it never joins calls (no `calls`, so no WebRTC).
+      // Absent (not undefined) unless known: the peer pins the creator.
+      ...compact({ creator: w.creator }),
       store: storeFor(code),
-      // No third-party TURN: it would see who the bridge connects to. The browser is usually on the same machine.
-      rtc: { rtcPolyfill: RTCPeerConnection },
       onState: (s, fresh) => {
         if (s.name && w.name !== s.name) {
           w.name = s.name;
@@ -130,12 +104,11 @@ export class Workspaces {
         w.creator = pub;
         saveConfig(this.cfg);
       },
-      // A key rotation (relay workspaces): keep the newest key, which opens every earlier one, so the config matches the app's.
+      // A key rotation: keep the newest key, which opens every earlier one, so the config matches the app's.
       onKey: (key) => {
         w.transport = { ...w.transport, key };
         saveConfig(this.cfg);
       },
-      onJoinError: (d) => log('warn', 'p2p', 'join error in ' + code + ': ' + JSON.stringify(d).slice(0, 300)),
       onError: (msg) => log('error', 'relay', code + ': ' + msg),
     });
     this.peers.set(code, p);
@@ -196,8 +169,7 @@ export class Workspaces {
     });
   }
 
-  /** `transport` absent: an older web app, whose workspaces are legacy Trystero ones. */
-  join(code: string, name: string, creator: string | null | undefined, agents: string[], transport: WsTransport = LEGACY_TRYSTERO) {
+  join(code: string, name: string, creator: string | null | undefined, agents: string[], transport: WsTransport) {
     clearTimeout(this.stopping.get(code));
     this.stopping.delete(code);
     let w = this.cfg.workspaces.find((x) => x.code === code);
@@ -205,13 +177,11 @@ export class Workspaces {
       w = { code, name, creator: creator || null, agents: [], transport };
       this.cfg.workspaces.push(w);
     }
-    // Kind and key are fixed once known (only filled in for workspaces joined before transports existed),
-    // but the app owns the rest: a relay list or signaling edited there needs a fresh peer on the new
-    // servers, or the bridge waits where no member ever looks. (Key rotations reach the bridge by itself.)
+    // The key is fixed once known, but the app owns the relays: a list edited there needs a fresh peer on
+    // the new relays, or the bridge waits where no member ever looks. (Key rotations reach the bridge by itself.)
     const cur = w.transport;
-    const sameIdentity = transport.kind === cur.kind && transport.key === cur.key;
-    const edited = sameIdentity && JSON.stringify(networkOf(transport)) !== JSON.stringify(networkOf(cur));
-    if ((isLegacy(cur) && !isLegacy(transport)) || edited) w.transport = transport;
+    const edited = transport.key === cur.key && JSON.stringify(transport.relays) !== JSON.stringify(cur.relays);
+    if (edited) w.transport = transport;
     w.agents = agents.filter((id) => this.cfg.agents.some((a) => a.id === id));
     if (creator && !w.creator) w.creator = creator;
     saveConfig(this.cfg);

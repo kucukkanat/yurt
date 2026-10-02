@@ -138,14 +138,14 @@ describe('message details', () => {
     await page.viewport(1280, 860);
   });
 
-  it('says when nobody else is around, and in a peer-to-peer workspace explains its invite', async () => {
-    const p2p = await useApp.getState().createWorkspace('Solo', { kind: 'trystero', signal: { kind: 'nostr', urls: ['ws://127.0.0.1:9'] } });
-    await until(() => useApp.getState().route.code === p2p);
+  it('says when nobody else is around, and explains its invite', async () => {
+    const solo = await useApp.getState().createWorkspace('Solo', { relays: ['ws://127.0.0.1:9'], blossom: [] });
+    await until(() => useApp.getState().route.code === solo);
     await page.getByTestId('ws-menu-button').click();
     await expectText(page.getByTestId('ws-online'), /No other members online/);
     await page.getByTestId('menu-settings').click();
-    await expect.element(page.getByText(/anyone with it can join and sync the history/)).toBeVisible();
-    await expect.element(page.getByText(/history then syncs back from members who are online/)).toBeVisible();
+    await expect.element(page.getByText(/anyone with it can read the whole history/)).toBeVisible();
+    await expect.element(page.getByText(/history then comes back from the relays/)).toBeVisible();
     await userEvent.keyboard('{Escape}');
   });
 });

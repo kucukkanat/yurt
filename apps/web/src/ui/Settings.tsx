@@ -1,20 +1,19 @@
 import type React from 'react';
 import { useEffect, useReducer, useState } from 'react';
 import { Dialog, Button, Input, Switch, Checkbox, Radio, Icon, Avatar, IconButton } from '@yurt/ui';
-import { fingerprint, inviteHash, parseRelays, parseServers, signalingOf, formatCode, agentPrefs, type SignalKind } from '@yurt/protocol';
+import { fingerprint, inviteHash, parseRelays, parseServers, formatCode, agentPrefs } from '@yurt/protocol';
 import { useApp, type SettingsSection, type WsRecord } from '../store';
 import { useCurrent, useMedia, prefsLine } from '../model';
 import { bridge } from '../lib/bridge';
 import type { NetSettings } from '../lib/net';
 import { Row, Section } from './Nav';
-import { ModeChip } from './Sidebar';
 import { messageOf, must } from './must';
 import { AppSection } from './AppSettings';
 import { share } from './share';
 
 /**
  * The one Settings window. "You" holds your account and this device; the workspace group (only inside
- * a workspace) holds that workspace's settings, for its own network mode only.
+ * a workspace) holds that workspace's settings.
  */
 
 /** Entries of a free-text URL list that `parse` rejects, so a typo is reported instead of silently dropped. */
@@ -76,7 +75,6 @@ export function Settings({ onClose }: { onClose: () => void }) {
       </Section>
       {inWs && rec && (
         <Section title={state?.name || rec.name}>
-          <ModeChip relayed={rec.transport.kind === 'nostr'} />
           {WORKSPACE.map((i) => (
             <Row key={i.id} active={!narrow && current.id === i.id} testId={'settings-nav-' + i.id} onClick={() => pick(i.id)}>
               <Icon name={i.icon} size={16} />
@@ -312,10 +310,10 @@ function ConnectionSection() {
   };
   return (
     <div data-testid="network-device" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      <Muted>These apply to every workspace on this device.{inWs ? ' This workspace’s own relays or signaling are under its Network section.' : ''}</Muted>
-      <SubHead>Calls in Nostr relay workspaces</SubHead>
+      <Muted>These apply to every workspace on this device.{inWs ? ' This workspace’s own relays and file servers are under its Network section.' : ''}</Muted>
+      <SubHead>Calls</SubHead>
       <CallsSwitch on={calls} onChange={setCalls} />
-      <SubHead>Direct connections (peer-to-peer workspaces and calls)</SubHead>
+      <SubHead>Direct connections in calls</SubHead>
       <TurnFields value={turn} onChange={setTurn} />
       <div>
         <Button variant="primary" data-testid="network-save" onClick={save} disabled={calls === settings.webrtc && sameTurn(turn, pickTurn(settings))}>
@@ -499,24 +497,11 @@ export function InviteBody() {
   const code = route.code;
   const t = rec?.transport;
   if (!code || !t) return null;
-  if (!t.key)
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-        <span data-testid="legacy-invite" style={{ fontSize: 14, color: 'var(--text-body)' }}>
-          This workspace was created with a short code that anyone on the network can guess, so it can’t take new members safely. Create a new workspace and invite people there.
-        </span>
-        <div>
-          <Button variant="primary" iconLeft="plus" onClick={() => useApp.getState().setDialog('workspace')}>
-            New workspace
-          </Button>
-        </div>
-      </div>
-    );
   // A rotation may have landed before the record caught up; the peer always knows the current key.
   const link =
     location.origin +
     location.pathname +
-    inviteHash({ code, transport: { ...t, key: must(peer?.inviteKey, 'a keyed workspace’s peer knows its invite key') }, ...(rec?.creator ? { creator: rec.creator } : {}) });
+    inviteHash({ code, transport: { ...t, key: must(peer, 'every workspace record has a running peer').inviteKey }, ...(rec?.creator ? { creator: rec.creator } : {}) });
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
       <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
@@ -528,11 +513,7 @@ export function InviteBody() {
         </Button>
         {'share' in navigator && <IconButton icon="share" label="Share link" variant="secondary" data-testid="invite-share" onClick={() => share(link, 'Join me on Yurt')} />}
       </div>
-      <Muted>
-        {t.kind === 'nostr'
-          ? 'The link contains the key that decrypts the workspace. Share it privately: anyone with it can read the whole history.'
-          : 'The link contains the workspace key. Share it privately: anyone with it can join and sync the history.'}
-      </Muted>
+      <Muted>The link contains the key that decrypts the workspace. Share it privately: anyone with it can read the whole history.</Muted>
     </div>
   );
 }
@@ -543,31 +524,15 @@ function GeneralSection() {
   const [leaving, setLeaving] = useState(false);
   const code = must(route.code, WS_ONLY);
   const record = must(rec, WS_ONLY);
-  const relayed = record.transport.kind === 'nostr';
   const name = state?.name || record.name;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <Fact k="Name" v={name} />
       <Fact k="Workspace id" v={formatCode(code)} />
-      <Fact
-        k="Network"
-        testId="ws-mode"
-        v={
-          <>
-            <ModeChip relayed={relayed} />{' '}
-            <span style={{ display: 'block', marginTop: 'var(--space-1)', color: 'var(--text-subtle)' }}>
-              Chosen when the workspace was created, and fixed: members on different modes can’t reach each other.
-            </span>
-          </>
-        }
-      />
       <SubHead>Invite</SubHead>
       <InviteBody />
       <DangerZone>
-        <Muted>
-          Leaving makes this device forget the workspace and its history. To come back you need an invite link;{' '}
-          {relayed ? 'history then comes back from the relays.' : 'history then syncs back from members who are online.'}
-        </Muted>
+        <Muted>Leaving makes this device forget the workspace and its history. To come back you need an invite link; history then comes back from the relays.</Muted>
         {leaving ? (
           <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
             <Button
@@ -607,18 +572,14 @@ const Fact = ({ k, v, testId }: { k: string; v: React.ReactNode; testId?: string
 );
 
 /** What's wrong with typed network settings, per field; every value undefined means they can be saved. */
-function networkErrors(
-  nostr: boolean,
-  f: { relays: string; blossom: string; sigUrls: string },
-): { relays?: string | undefined; blossom?: string | undefined; signal?: string | undefined } {
-  if (!nostr) return { signal: listError(rejected(f.sigUrls, parseRelays), 'a ws:// or wss:// server') };
+function networkErrors(f: { relays: string; blossom: string }): { relays?: string | undefined; blossom?: string | undefined } {
   return {
     relays: listError(rejected(f.relays, parseRelays), 'a ws:// or wss:// relay') ?? (parseRelays(f.relays).length ? undefined : 'Add at least one ws:// or wss:// relay.'),
     blossom: listError(rejected(f.blossom, parseServers), 'an http(s) server'),
   };
 }
 
-/** This workspace's own network, for its mode only. Device settings (TURN, calls) are under You → Connection. */
+/** This workspace's own network: relays and file servers. Device settings (TURN, calls) are under You → Connection. */
 function NetworkSection() {
   const { route, rec } = useCurrent();
   return <NetworkForm code={must(route.code, WS_ONLY)} rec={must(rec, WS_ONLY)} />;
@@ -634,62 +595,31 @@ function NetworkForm({ code, rec }: { code: string; rec: WsRecord }) {
     return () => clearInterval(t);
   }, []);
   const t = rec.transport;
-  const sig = signalingOf(t);
-  const [relays, setRelays] = useState(t.kind === 'nostr' ? t.relays.join(', ') : '');
+  const [relays, setRelays] = useState(t.relays.join(', '));
   const [blossom, setBlossom] = useState(rec.blossom?.join(', ') ?? '');
-  const [sigKind, setSigKind] = useState<SignalKind>(sig.kind);
-  const [sigUrls, setSigUrls] = useState(sig.urls.join(', '));
-  const [err, setErr] = useState<{ relays?: string | undefined; blossom?: string | undefined; signal?: string | undefined }>({});
+  const [err, setErr] = useState<{ relays?: string | undefined; blossom?: string | undefined }>({});
   const [busy, setBusy] = useState(false);
-  const nostr = t.kind === 'nostr';
   const save = async () => {
-    const errs = networkErrors(nostr, { relays, blossom, sigUrls });
+    const errs = networkErrors({ relays, blossom });
     setErr(errs);
     if (Object.values(errs).some(Boolean)) return;
     setBusy(true);
     // networkErrors already refused everything updateConnection rejects; anything else is a bug, so it surfaces.
     try {
-      await app.updateConnection(
-        code,
-        nostr ? { kind: 'nostr', relays: parseRelays(relays), blossom: parseServers(blossom) } : { kind: 'trystero', signal: { kind: sigKind, urls: parseRelays(sigUrls) } },
-      );
+      await app.updateConnection(code, { relays: parseRelays(relays), blossom: parseServers(blossom) });
     } finally {
       setBusy(false);
     }
-    app.toast({ tone: 'success', title: 'Network settings saved', description: 'Reconnected. Invite links now carry this workspace’s ' + (nostr ? 'relays.' : 'signaling.') });
+    app.toast({ tone: 'success', title: 'Network settings saved', description: 'Reconnected. Invite links now carry this workspace’s relays.' });
   };
   const toDevice = (
     <Button variant="ghost" size="sm" iconRight="arrow-right" onClick={() => app.openSettings('connection')}>
       Calls and TURN on this device
     </Button>
   );
-  const saveButton = (
-    <div>
-      <Button variant="primary" loading={busy} onClick={save} data-testid="connection-save">
-        Save and reconnect
-      </Button>
-    </div>
-  );
-  if (!nostr)
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-        <Fact k="Mode" testId="connection-kind" v="Peer-to-peer (WebRTC)" />
-        <Fact k="Connected" testId="connection-peers" v={(peer?.peers.size ?? 0) + ((peer?.peers.size ?? 0) === 1 ? ' member right now' : ' members right now')} />
-        {!t.key && <Fact k="Invite" testId="connection-legacy" v="Legacy code-only workspace: anyone who guesses its short code can find the room. It can’t take new members." />}
-        <SubHead>Signaling</SubHead>
-        <SignalFields prefix="ws" kind={sigKind} urls={sigUrls} error={err.signal} onKind={setSigKind} onUrls={setSigUrls} />
-        <Muted testId="connection-note">
-          Members only find each other over the same method and at least one shared server. New invite links carry these; members who joined earlier keep theirs until they open a
-          new link.
-        </Muted>
-        {saveButton}
-        <div>{toDevice}</div>
-      </div>
-    );
   const status = must(peer, 'every workspace record has a running peer').relayStatus();
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      <Fact k="Mode" testId="connection-kind" v="Nostr relays" />
       <ul
         data-testid="connection-relay-list"
         aria-label="Relay status"
@@ -753,7 +683,11 @@ function NetworkForm({ code, rec }: { code: string; rec: WsRecord }) {
       <Muted testId="connection-note">
         Members only reach each other through relays they share, so keep at least one relay in common. New invite links carry this list; members who joined earlier keep their own.
       </Muted>
-      {saveButton}
+      <div>
+        <Button variant="primary" loading={busy} onClick={save} data-testid="connection-save">
+          Save and reconnect
+        </Button>
+      </div>
       <div>{toDevice}</div>
     </div>
   );
@@ -851,7 +785,7 @@ function WsAgentsSection() {
 
 /* ---------- Shared fields ---------- */
 
-/** TURN is a device setting: it applies to every peer-to-peer workspace and to calls. */
+/** TURN is a device setting: it applies to calls in every workspace. */
 function TurnFields({ value: v, onChange }: { value: Turn; onChange: (t: Turn) => void }) {
   const set = (p: Partial<Turn>) => onChange({ ...pickTurn(v), ...p });
   return (
@@ -903,58 +837,6 @@ function TurnFields({ value: v, onChange }: { value: Turn; onChange: (t: Turn) =
   );
 }
 
-/** How peer-to-peer members find each other (Trystero signaling). */
-export function SignalFields({
-  prefix,
-  kind,
-  urls,
-  error,
-  onKind,
-  onUrls,
-}: {
-  prefix: string;
-  kind: SignalKind;
-  urls: string;
-  error?: string | undefined;
-  onKind: (k: SignalKind) => void;
-  onUrls: (u: string) => void;
-}) {
-  return (
-    <div data-testid={prefix + '-signal'} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      <Radio
-        name={prefix + '-signal-kind'}
-        value="nostr"
-        data-testid={prefix + '-signal-nostr'}
-        label="Nostr relays"
-        description="Connection offers travel through Nostr relays."
-        checked={kind === 'nostr'}
-        onChange={() => onKind('nostr')}
-      />
-      <Radio
-        name={prefix + '-signal-kind'}
-        value="torrent"
-        data-testid={prefix + '-signal-torrent'}
-        label="BitTorrent trackers"
-        description="Connection offers travel through WebSocket BitTorrent trackers."
-        checked={kind === 'torrent'}
-        onChange={() => onKind('torrent')}
-      />
-      <Input
-        label={kind === 'nostr' ? 'Signaling relays' : 'Trackers'}
-        optional
-        data-testid={prefix + '-signal-urls'}
-        error={error}
-        placeholder={kind === 'nostr' ? 'wss://nos.lol' : 'wss://tracker.openwebtorrent.com'}
-        hint={
-          kind === 'nostr' ? 'ws:// or wss:// URLs, separated by spaces or commas. Empty means wss://nos.lol.' : 'ws:// or wss:// URLs. Empty means the built-in public trackers.'
-        }
-        value={urls}
-        onChange={(e: React.ChangeEvent<HTMLInputElement>) => onUrls(e.target.value)}
-      />
-    </div>
-  );
-}
-
 function CallsSwitch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
   return (
     <Switch
@@ -962,7 +844,7 @@ function CallsSwitch({ on, onChange }: { on: boolean; onChange: (on: boolean) =>
       onChange={onChange}
       label="Voice and video calls"
       data-testid="webrtc-switch"
-      description="Calls are the only thing Nostr relay workspaces send over WebRTC. Off keeps this device on Nostr alone; on lets you join calls, and people in a call see each other’s IP addresses."
+      description="Calls are the only thing Yurt sends over WebRTC. On lets you join calls, and people in a call see each other’s IP addresses; off keeps this device on Nostr relays alone."
     />
   );
 }

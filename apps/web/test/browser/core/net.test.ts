@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, inject, it } from 'vitest';
-import { keyFromPhrase, newInviteCode, newNostrTransport, newRecoveryPhrase, newTrysteroTransport, type WsState } from '@yurt/protocol';
+import { keyFromPhrase, newInviteCode, newNostrTransport, newRecoveryPhrase, type WsState } from '@yurt/protocol';
 import { allPeers, connect, disconnect, getPeer, isLocalHost } from '../../../src/lib/net';
 import { DEFAULT_SETTINGS, type NetSettings } from '../../../src/lib/stored';
 import { openRemote, resetDb, until } from './harness';
@@ -12,7 +12,6 @@ const seen = {
   creators: [] as string[],
   keys: [] as string[],
   blobs: [] as string[],
-  progress: [] as number[],
   joinErrors: [] as unknown[],
   errors: [] as string[],
 };
@@ -22,7 +21,6 @@ const handlers = {
   onCreator: (_c: string, pub: string) => void seen.creators.push(pub),
   onKey: (_c: string, key: string) => void seen.keys.push(key),
   onBlob: (id: string) => void seen.blobs.push(id),
-  onBlobProgress: (_id: string, p: number) => void seen.progress.push(p),
   onJoinError: (_c: string, d: unknown) => void seen.joinErrors.push(d),
   onError: (_c: string, msg: string) => void seen.errors.push(msg),
 };
@@ -51,38 +49,34 @@ describe('workspace connections', () => {
     disconnect(code); // already gone: nothing to do
   });
 
-  it('give relay workspaces WebRTC only when calls are on, and peer-to-peer ones always', () => {
-    const relayOff = connect(newInviteCode(), kp, null, newNostrTransport([relay]), net(), handlers);
-    expect(relayOff.ensureRoom()).toBeNull();
-    const relayOn = connect(newInviteCode(), kp, null, newNostrTransport([relay]), net({ webrtc: true, turn: 'default' }), handlers);
-    expect(relayOn.ensureRoom()).not.toBeNull();
-    const nostrSignal = connect(
-      newInviteCode(),
-      kp,
-      null,
-      newTrysteroTransport({ kind: 'nostr', urls: [relay] }),
+  it('give workspaces WebRTC for calls only when calls are on, with any TURN choice', () => {
+    const off = connect(newInviteCode(), kp, null, newNostrTransport([relay]), net({ webrtc: false }), handlers);
+    expect(off.ensureRoom()).toBeNull();
+    const ons = [
+      net({ turn: 'default' }),
       net({ turn: 'custom', turnUrls: 'turn:a.example, turn:b.example', turnUser: 'u', turnPass: 'p' }),
-      handlers,
-    );
-    expect(nostrSignal.ensureRoom()).not.toBeNull();
-    const torrent = connect(newInviteCode(), kp, null, newTrysteroTransport({ kind: 'torrent', urls: ['ws://127.0.0.1:9'] }), net({ turn: 'custom', turnUrls: '  ' }), handlers);
-    expect(torrent.ensureRoom()).not.toBeNull();
-    for (const p of [relayOff, relayOn, nostrSignal, torrent]) disconnect(p.code);
+      net({ turn: 'custom', turnUrls: '  ' }),
+    ].map((n) => connect(newInviteCode(), kp, null, newNostrTransport([relay]), n, handlers));
+    for (const p of ons) expect(p.ensureRoom()).not.toBeNull();
+    for (const p of [off, ...ons]) disconnect(p.code);
   });
 });
 
 describe('connection problems', () => {
   it('report a refused handshake, e.g. a banned member trying to connect', async () => {
     const code = newInviteCode();
-    const transport = newTrysteroTransport({ kind: 'nostr', urls: [relay] });
+    const transport = newNostrTransport([relay]);
     const p = connect(code, kp, kp.pub, transport, net(), handlers);
     p.publish({ t: 'ws.create', b: { name: 'Banning' } });
     const mallory = keyFromPhrase(newRecoveryPhrase());
     p.publish({ t: 'ban', b: { target: mallory.pub, on: true } });
     await until(() => p.state.bans.has(mallory.pub), 'the ban');
     const remote = await openRemote();
-    const m = remote.makePeer({ code, transport, creator: kp.pub, kp: mallory });
+    const m = remote.makePeer({ code, transport, creator: kp.pub, kp: mallory, webrtc: true });
     await m.peer.start();
+    // A banned member's call presence doesn't open my room, so open both directly.
+    p.ensureRoom();
+    m.peer.ensureRoom();
     await until(() => seen.joinErrors.length > 0, 'the refused handshake', 30_000);
     expect(p.peers.size).toBe(0);
     m.peer.leave();

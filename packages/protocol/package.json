@@ -26,10 +26,8 @@
     "ws": "^8.22.0"
   },
   "devDependencies": {
-    "@trystero-p2p/torrent": "0.25.4",
     "@types/ws": "^8.18.2",
     "@vitest/coverage-v8": "5.0.3",
-    "bittorrent-tracker": "^11.2.3",
     "fast-check": "4.10.2",
     "trystero": "~0.25.4",
     "tsx": "^4.19.0",

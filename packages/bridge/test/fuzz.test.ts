@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import fc from 'fast-check';
 import * as v from 'valibot';
-import { keyFromPhrase, makeEvent, newRecoveryPhrase, reduce, slug, TOOL_KINDS, type AgentConfig, type Msg } from '@yurt/protocol';
+import { keyFromPhrase, makeEvent, newNostrTransport, newRecoveryPhrase, reduce, slug, TOOL_KINDS, type AgentConfig, type Msg } from '@yurt/protocol';
 import {
   AgentDraftSchema,
   ConfigFileSchema,
@@ -87,7 +87,7 @@ describe('parsers', () => {
       { t: 'hello', token: 'x' },
       { t: 'pair', code: '123456' },
       { t: 'identity', phrase: 'p', name: 'n', handle: 'h' },
-      { t: 'ws.join', code: 'AAAABBBB', name: 'W', agents: ['a'], creator: null },
+      { t: 'ws.join', code: 'AAAABBBB', name: 'W', agents: ['a'], creator: null, transport: newNostrTransport(['wss://r.example']) },
       { t: 'ws.agents', code: 'AAAABBBB', agents: [] },
       { t: 'runtime.install', id: 'copilot' },
       { t: 'startOnLogin', on: true },
@@ -205,7 +205,7 @@ describe('agents from the UI or config.json', () => {
         for (const a of c.agents) expectRunnable(a);
         for (const w of c.workspaces) {
           expect(w.code.length).toBeGreaterThan(0);
-          expect(['trystero', 'nostr']).toContain(w.transport.kind);
+          expect(w.transport.relays).toBeInstanceOf(Array);
         }
         expect(c.tokens.every((t) => typeof t === 'string')).toBe(true);
         expect(c.adminToken.length).toBeGreaterThan(0);

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { renderHook } from 'vitest-browser-react';
-import { agentDmChannel, agentKey, dmChannel, fingerprint, guestDmChannel, keyFromPhrase, newRecoveryPhrase, type WsState } from '@yurt/protocol';
+import { agentDmChannel, agentKey, dmChannel, fingerprint, guestDmChannel, keyFromPhrase, newNostrTransport, newRecoveryPhrase, type WsState } from '@yurt/protocol';
 import { CALM } from '../../../src/lib/favicon';
 import { getPeer } from '../../../src/lib/net';
 import { authorKey, channelTitle, faviconStateOf, needIdentity, othersOnline, personFor, roster, unread, useCurrent, useMedia } from '../../../src/model';
@@ -29,7 +29,7 @@ beforeAll(async () => {
   await app().init();
   await page.viewport(1200, 800);
   await app().createIdentity(phrase, 'Ada', 'ada');
-  code = await app().createWorkspace('Model', { kind: 'nostr', relays: [inject('relayUrl')], blossom: [] });
+  code = await app().createWorkspace('Model', { relays: [inject('relayUrl')], blossom: [] });
   const rec = app().workspaces.find((w) => w.code === code);
   if (!rec) throw new Error('no record');
   remote = await openRemote();
@@ -158,7 +158,7 @@ describe('the tab icon’s state', () => {
 
   it('skips a workspace that hasn’t synced yet', () => {
     const s = app();
-    const unsynced = { code: 'ZZZZZZZZ', name: 'Joining', transport: s.workspaces[0]?.transport ?? { kind: 'trystero' as const }, creator: null, lastRead: {}, muted: [] };
+    const unsynced = { code: 'ZZZZZZZZ', name: 'Joining', transport: newNostrTransport(), creator: null, lastRead: {}, muted: [] };
     expect(faviconStateOf({ ...s, workspaces: [...s.workspaces, unsynced] }, getPeer, false).mentions).toBe(faviconStateOf(s, getPeer, false).mentions);
   });
 
@@ -177,7 +177,7 @@ describe('the tab icon’s state', () => {
   });
 
   it('shows calls nearby and mine, and being offline', async () => {
-    olu.peer.setHuddle({ ch: 'general', mic: true, cam: false, screen: false }); // relay workspace without calls: no room, no news
+    olu.peer.setHuddle({ ch: 'general', mic: true, cam: false, screen: false }); // Olu has calls off: no room, no news
     expect(faviconStateOf(app(), getPeer, false).callNearby).toBe(false);
     useApp.setState({ huddle: { ...app().huddle, code, ch: 'general' } });
     expect(faviconStateOf(app(), getPeer, false).inCall).toBe(true);

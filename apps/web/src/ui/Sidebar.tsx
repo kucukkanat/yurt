@@ -153,8 +153,8 @@ function ChannelRow({ ch, label, icon, inCall }: { ch: string; label: React.Reac
   );
 }
 
-/** The workspace name, its mode chip and the menu under it. */
-function WorkspaceMenu({ name, relayed, others }: { name: string; relayed: boolean; others: number }) {
+/** The workspace name and the menu under it. */
+function WorkspaceMenu({ name, others }: { name: string; others: number }) {
   const { setDialog, openSettings } = useApp.getState();
   const [menu, setMenu] = useState(false);
   const menuId = useId();
@@ -189,7 +189,6 @@ function WorkspaceMenu({ name, relayed, others }: { name: string; relayed: boole
         </span>
         <Icon name="chevron-down" size={16} style={{ color: 'var(--text-subtle)' }} />
       </button>
-      <ModeChip relayed={relayed} onClick={() => openSettings('ws-network')} />
       {menu && (
         // biome-ignore lint/a11y/noStaticElementInteractions: closing when the pointer leaves is a pointer convenience; keyboard users close it with its toggle or by choosing an item
         <div
@@ -298,7 +297,6 @@ export function Sidebar() {
   const wsName = state?.name || rec?.name || formatCode(code);
   const daemon = bridgeStatus === 'connected' ? 'connected' : bridgeStatus === 'connecting' ? 'connecting' : 'missing';
   const nAgents = bridgeState?.agents.length;
-  const relayed = rec?.transport.kind === 'nostr';
   const others = othersOnline(peer, me);
 
   const chRow = (ch: string, label: React.ReactNode, icon: React.ReactNode) => <ChannelRow key={ch} ch={ch} label={label} icon={icon} inCall={inHuddle.get(ch) ?? 0} />;
@@ -320,7 +318,7 @@ export function Sidebar() {
         boxSizing: 'border-box',
       }}
     >
-      <WorkspaceMenu name={wsName} relayed={relayed} others={others} />
+      <WorkspaceMenu name={wsName} others={others} />
       <button
         type="button"
         onClick={() => setDialog('jump')}
@@ -346,9 +344,7 @@ export function Sidebar() {
       </button>
       <nav aria-label="Channels and messages" style={{ display: 'flex', flexDirection: 'column', gap: 16, minHeight: 0, overflow: 'auto', flex: 1 }}>
         <Section title="Channels" onAdd={() => setDialog('channel')} addLabel="New channel">
-          {!state?.channels.size && (
-            <div style={{ padding: '4px 10px', fontSize: 13, color: 'var(--text-subtle)' }}>{relayed ? 'Syncing from relays…' : 'Syncs when a member is online'}</div>
-          )}
+          {!state?.channels.size && <div style={{ padding: '4px 10px', fontSize: 13, color: 'var(--text-subtle)' }}>Syncing from relays…</div>}
           {channels.map((c) => chRow(c.id, c.name, <Icon name="hash" size={16} style={{ color: 'var(--text-subtle)' }} />))}
         </Section>
         <Section title="Direct messages" onAdd={() => setDialog('jump')} addLabel="New direct message">
@@ -446,38 +442,5 @@ export function Sidebar() {
         </span>
       </button>
     </aside>
-  );
-}
-
-/** Which network mode this workspace uses; fixed at creation. Clicking opens its network settings. */
-export function ModeChip({ relayed, onClick }: { relayed: boolean; onClick?: () => void }) {
-  const style: React.CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 'var(--space-1)',
-    alignSelf: 'flex-start',
-    margin: '2px 0 0 10px',
-    padding: '2px 8px',
-    borderRadius: 'var(--radius-pill)',
-    border: 'var(--border-width) solid var(--border-subtle)',
-    background: 'var(--surface-card)',
-    color: 'var(--text-muted)',
-    font: '500 11.5px/1.4 var(--font-body)',
-    cursor: onClick ? 'pointer' : 'default',
-  };
-  const body = (
-    <>
-      <Icon name={relayed ? 'database' : 'users'} size={12} />
-      {relayed ? 'Nostr relays' : 'Peer-to-peer'}
-    </>
-  );
-  return onClick ? (
-    <button type="button" data-testid="mode-chip" onClick={onClick} title="Network mode (set when the workspace was created)" style={style}>
-      {body}
-    </button>
-  ) : (
-    <span data-testid="mode-chip" style={style}>
-      {body}
-    </span>
   );
 }

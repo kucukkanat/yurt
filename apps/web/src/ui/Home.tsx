@@ -2,19 +2,18 @@ import type React from 'react';
 import { Button, Icon, IconButton } from '@yurt/ui';
 import { formatCode } from '@yurt/protocol';
 import { useApp } from '../store';
-import { useCurrent, othersOnline } from '../model';
+import { useCurrent } from '../model';
 import { CreateJoin } from './Dialogs';
 
 /** What a joined workspace's page says while its channels and history are still arriving. */
-function syncingText(relayed: boolean, connected: boolean, members: number): { verb: string; detail: string } {
-  if (relayed) return { verb: 'Fetching ', detail: connected ? 'Downloading encrypted history from relays.' : 'Connecting to relays. Keep this tab open; it retries on its own.' };
-  if (members) return { verb: 'Syncing ', detail: 'Pulling channels and history from ' + members + (members === 1 ? ' member' : ' members') + '.' };
-  return { verb: 'Looking for members of ', detail: 'Channels and history arrive once another member is online. Keep this tab open; it connects on its own.' };
-}
+const syncingText = (connected: boolean): { verb: string; detail: string } => ({
+  verb: 'Fetching ',
+  detail: connected ? 'Downloading encrypted history from relays.' : 'Connecting to relays. Keep this tab open; it retries on its own.',
+});
 
 function Joining({ code, menu }: { code: string; menu: React.ReactNode }) {
-  const { state, rec, peer, identity } = useCurrent();
-  const text = syncingText(peer?.transport.kind === 'nostr', !!peer?.connected, othersOnline(peer, identity.pub));
+  const { state, rec, peer } = useCurrent();
+  const text = syncingText(!!peer?.connected);
   return (
     <div
       style={{

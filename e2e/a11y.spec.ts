@@ -32,7 +32,7 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(page.getByLabel('Workspace name')).toBeVisible();
     await checkPage(page, 'home › create workspace');
 
-    await createWorkspace(page, 'A11y', 'relays');
+    await createWorkspace(page, 'A11y');
     await checkPage(page, 'channel › empty');
     const composer = page.getByRole('textbox', { name: 'Message #general' });
     await composer.fill('hello there');
@@ -98,7 +98,7 @@ test('narrow screens are accessible and valid HTML', async ({ browser }) => {
   const page = await (await browser.newContext({ viewport: { width: 420, height: 800 } })).newPage();
   await pointAtLocalRelay(page);
   await onboard(page, 'Mo', 'Start chatting');
-  await createWorkspace(page, 'Narrow', 'relays');
+  await createWorkspace(page, 'Narrow');
   await checkPage(page, 'narrow › channel');
   await page.getByRole('button', { name: 'Open sidebar' }).click();
   await checkPage(page, 'narrow › drawer');

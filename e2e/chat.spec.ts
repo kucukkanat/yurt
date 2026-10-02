@@ -1,18 +1,18 @@
 import { test, expect } from '@playwright/test';
-import { checkPage, createWorkspace, inviteLink, onboard } from './helpers';
+import { checkPage, createWorkspace, inviteLink, onboard, pointAtLocalRelay } from './helpers';
 
-test('two peers create, join, sync history and chat', async ({ browser }) => {
+test('two members create, join, get history and chat', async ({ browser }) => {
   const a = await (await browser.newContext()).newPage();
   const b = await (await browser.newContext()).newPage();
 
-  await a.goto('./');
+  await pointAtLocalRelay(a);
   await onboard(a, 'Ada', 'Start chatting');
   await createWorkspace(a, 'E2E');
   const link = await inviteLink(a);
-  // New peer-to-peer workspaces signal over wss://nos.lol by default, so the link carries that too.
-  expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/k\/[A-Za-z0-9_-]{43}\/s\/nostr%2Cwss%3A%2F%2Fnos\.lol\/o\/[0-9a-f]{64}$/); // link-only: the key lets people in; /o/ pins the creator
+  // The link carries the key that lets people in, the workspace's relays, and /o/ to pin the creator.
+  expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/k\/[A-Za-z0-9_-]{43}\/n\/ws%3A%2F%2F127\.0\.0\.1%3A7777\/o\/[0-9a-f]{64}$/);
 
-  // Written before anyone else is here: must arrive through history sync.
+  // Written before anyone else is here: must arrive from the relay's history.
   const composerA = a.getByRole('textbox', { name: 'Message #general' });
   await composerA.fill('first, before you joined');
   await composerA.press('Enter');
@@ -39,6 +39,6 @@ test('two peers create, join, sync history and chat', async ({ browser }) => {
   await thread.fill('threaded reply');
   await thread.press('Enter');
   await expect(b.getByRole('button', { name: /1 reply/ })).toBeVisible();
-  await checkPage(a, 'peer-to-peer › thread open');
-  await checkPage(b, 'peer-to-peer › channel with a reply count');
+  await checkPage(a, 'chat › thread open');
+  await checkPage(b, 'chat › channel with a reply count');
 });

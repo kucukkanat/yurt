@@ -1,6 +1,5 @@
 import * as v from 'valibot';
-import { isEventShape, isRecord, isWorkspaceKey, LEGACY_TRYSTERO, parseOr, TOOL_KINDS, type Ev, type RuntimeId } from '@yurt/protocol';
-import { compact } from './compact';
+import { isEventShape, isRecord, isWorkspaceKey, parseOr, TOOL_KINDS, type Ev, type RuntimeId } from '@yurt/protocol';
 
 /**
  * Schemas for everything the bridge reads from outside its own code: agent processes (ACP JSON-RPC on stdout),
@@ -118,16 +117,8 @@ export type AgentDraft = v.InferOutput<typeof AgentDraftSchema>;
 
 /* ---------- transports ---------- */
 
-const KeySchema = v.pipe(v.string(), v.check(isWorkspaceKey));
-const UrlListSchema = v.array(v.string());
-/** How a workspace moves events (see WsTransport in @yurt/protocol): Trystero (key absent = legacy) or Nostr relays. */
-export const TransportSchema = v.variant('kind', [
-  v.object({ kind: v.literal('nostr'), key: KeySchema, relays: UrlListSchema }),
-  v.pipe(
-    v.object({ kind: v.literal('trystero'), key: v.optional(KeySchema), signal: v.optional(v.object({ kind: v.picklist(['nostr', 'torrent']), urls: UrlListSchema })) }),
-    v.transform((t) => compact(t)),
-  ),
-]);
+/** A workspace's key and relays (see WsTransport in @yurt/protocol). */
+export const TransportSchema = v.object({ key: v.pipe(v.string(), v.check(isWorkspaceKey)), relays: v.array(v.string()) });
 
 /* ---------- browser ↔ bridge ---------- */
 
@@ -141,7 +132,7 @@ export const ToBridgeSchema = v.variant('t', [
     t: v.literal('ws.join'),
     code: codeField,
     name: v.string(),
-    transport: v.optional(TransportSchema),
+    transport: TransportSchema,
     creator: v.optional(v.nullable(v.string())),
     agents: v.array(v.string()),
   }),
@@ -225,8 +216,7 @@ const WorkspaceRecordSchema = obj({
   name: v.fallback(v.string(), ''),
   agents: listOf(v.string()),
   creator: lenient(v.nullable(v.string())),
-  // Missing or unreadable: a workspace from before transports existed, i.e. legacy Trystero.
-  transport: v.fallback(TransportSchema, LEGACY_TRYSTERO),
+  transport: TransportSchema,
 });
 
 /** config.json, possibly hand-edited or from an older bridge. Agents are checked by sanitize after this. */

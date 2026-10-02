@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
-import { inviteHash, newInviteCode, newNostrTransport, newRecoveryPhrase, newTrysteroTransport } from '@yurt/protocol';
+import { inviteHash, newInviteCode, newNostrTransport, newRecoveryPhrase } from '@yurt/protocol';
 import { blossomUrl, expectText, relayUrl, startApp, until, useApp } from '../app';
 
 describe('onboarding, then the home screen', () => {
@@ -48,36 +48,21 @@ describe('onboarding, then the home screen', () => {
     expect(useApp.getState().identity).toMatchObject({ name: 'Ada Lovelace', handle: 'ada' });
   });
 
-  it('checks the create form, opens its network settings, and switches modes', async () => {
+  it('checks the create form and opens its network settings', async () => {
     await expect.element(page.getByRole('tablist', { name: 'Create or join' })).toBeVisible();
     await page.getByRole('button', { name: 'Create workspace' }).click();
     await expect.element(page.getByText('Give it a name people will recognize.')).toBeVisible();
-    // Peer-to-peer: signaling fields, a bad URL opens the section with an error.
-    await expectText(page.getByTestId('create-net-summary'), /Signaling: Nostr relays · wss:\/\/nos\.lol/);
+    await expect.element(page.getByText(/anyone with it can read the history/)).toBeVisible();
+    await expectText(page.getByTestId('create-net-summary'), /Relays: wss:\/\/nos\.lol · Files: default servers/);
+    // Both fields validate; a bad URL opens the section with an error.
     await page.getByTestId('create-net-toggle').click();
-    await page.getByTestId('create-signal-torrent').click();
-    await page.getByTestId('create-signal-urls').fill('');
-    await expectText(page.getByTestId('create-net-summary'), /BitTorrent trackers · built-in/);
-    await page.getByTestId('create-signal-urls').fill('nope');
+    await page.getByTestId('create-relays').fill('bad');
+    await page.getByTestId('create-blossom').fill('ftp://x');
     await page.getByTestId('create-net-toggle').click(); // closed: the error reopens it
     await page.getByRole('textbox', { name: 'Workspace name' }).fill('Northwind');
     await page.getByRole('button', { name: 'Create workspace' }).click();
-    await expect.element(page.getByText('Not a ws:// or wss:// server: nope')).toBeVisible();
-    await page.getByTestId('create-signal-urls').fill('wss://tracker.example');
-    await expectText(page.getByTestId('create-net-summary'), /BitTorrent trackers · wss:\/\/tracker\.example/);
-    await page.getByTestId('create-signal-nostr').click();
-    await expectText(page.getByTestId('create-net-summary'), /Nostr relays · wss:\/\/tracker\.example/);
-    // Relays: both fields validate, then the summary lists them.
-    await page.getByTestId('transport-nostr').click();
-    await expect.element(page.getByText(/anyone with it can read the history/)).toBeVisible();
-    await expectText(page.getByTestId('create-net-summary'), /Files: default servers/);
-    await page.getByTestId('create-relays').fill('bad');
-    await page.getByTestId('create-blossom').fill('ftp://x');
-    await page.getByRole('button', { name: 'Create workspace' }).click();
     await expect.element(page.getByText('Not a ws:// or wss:// relay: bad')).toBeVisible();
     await expect.element(page.getByText('Not an http(s) server: ftp://x')).toBeVisible();
-    await page.getByTestId('transport-trystero').click();
-    await page.getByTestId('transport-nostr').click();
     await page.getByTestId('create-relays').fill(relayUrl());
     await page.getByTestId('create-blossom').fill(blossomUrl());
     await expect.element(page.getByTestId('create-net-summary')).toHaveTextContent('Relays: ' + relayUrl() + ' · Files: ' + blossomUrl());
@@ -87,9 +72,9 @@ describe('onboarding, then the home screen', () => {
     await page.getByRole('button', { name: 'Create workspace' }).click();
     await expect.element(page.getByRole('heading', { name: /general/ })).toBeVisible();
     const code = useApp.getState().route.code ?? '';
-    expect(useApp.getState().workspaces.find((w) => w.code === code)?.transport).toMatchObject({ kind: 'nostr', relays: [relayUrl()] });
+    expect(useApp.getState().workspaces.find((w) => w.code === code)?.transport).toMatchObject({ relays: [relayUrl()] });
     // The next create form starts from these settings.
-    expect(useApp.getState().settings.lastNet?.nostr).toEqual({ relays: [relayUrl()], blossom: [blossomUrl()] });
+    expect(useApp.getState().settings.lastNet).toEqual({ relays: [relayUrl()], blossom: [blossomUrl()] });
   });
 
   it('lists workspaces at home, joins by link, and explains a link that can’t be joined', async () => {
@@ -109,8 +94,6 @@ describe('onboarding, then the home screen', () => {
     await expect.element(page.getByText('Connecting to relays. Keep this tab open; it retries on its own.')).toBeVisible();
     await useApp.getState().joinWorkspace(inviteHash({ code: newInviteCode(), transport: newNostrTransport([relayUrl()]) }));
     await expect.element(page.getByText('Downloading encrypted history from relays.')).toBeVisible();
-    await useApp.getState().joinWorkspace(inviteHash({ code: newInviteCode(), transport: newTrysteroTransport({ kind: 'nostr', urls: ['ws://127.0.0.1:9'] }) }));
-    await expect.element(page.getByText(/^Looking for members of /)).toBeVisible();
     // Back home: every workspace is listed; picking one opens it.
     useApp.getState().go({});
     await page

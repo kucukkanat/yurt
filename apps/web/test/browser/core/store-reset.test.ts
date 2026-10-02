@@ -14,7 +14,7 @@ beforeAll(async () => {
   await app().init();
   await app().createIdentity(newRecoveryPhrase(), 'Ada', 'ada');
   await app().updateSettings({ theme: 'light', webrtc: true });
-  code = await app().createWorkspace('Doomed', { kind: 'nostr', relays: [inject('relayUrl')], blossom: [] });
+  code = await app().createWorkspace('Doomed', { relays: [inject('relayUrl')], blossom: [] });
   await app().send('', [new File(['bytes'], 'f.txt')]);
   await kv.set('bridgeToken', 'tok');
   const peer = getPeer(code);
@@ -51,7 +51,7 @@ describe('resetting the device', () => {
 
   it('can onboard again right away', async () => {
     await app().createIdentity(newRecoveryPhrase(), 'Bea', 'bea');
-    const again = await app().createWorkspace('Again', { kind: 'nostr', relays: [inject('relayUrl')], blossom: [] });
+    const again = await app().createWorkspace('Again', { relays: [inject('relayUrl')], blossom: [] });
     await until(() => app().states[again]?.name === 'Again', 'the new workspace');
     expect(app().workspaces.map((w) => w.name)).toEqual(['Again']);
     getPeer(again)?.leave();

@@ -32,7 +32,7 @@ async function swipe(page: Page, el: Locator, x0: number, x1: number) {
 test('long-press, swipes and the drawer on a phone', async ({ page }) => {
   await pointAtLocalRelay(page);
   await onboard(page, 'Ada', 'Start chatting');
-  await createWorkspace(page, 'Pocket', 'relays');
+  await createWorkspace(page, 'Pocket');
   const composer = page.getByRole('textbox', { name: 'Message #general' });
   await composer.fill('hello on a phone');
   await composer.press('Enter');

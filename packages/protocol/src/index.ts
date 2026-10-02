@@ -3,7 +3,6 @@ export * from './crypto';
 export * from './codes';
 export * from './events';
 export * from './reduce';
-export * from './sync';
 export * from './peer';
 export * from './bridge';
 export * from './seal';

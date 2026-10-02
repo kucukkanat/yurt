@@ -28,7 +28,7 @@ export interface WsKeys {
   readonly tag: string;
   /**
    * WebRTC room credentials, all derived from the key so the short code can't reach the room.
-   * `app` replaces the public "yurt.p2p.v1" app id: signaling topics then don't mark anyone as a Yurt user.
+   * `app` is a per-workspace app id, so signaling topics don't mark anyone as a Yurt user.
    */
   readonly app: string;
   readonly room: string;

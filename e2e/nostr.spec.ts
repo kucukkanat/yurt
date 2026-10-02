@@ -6,15 +6,15 @@ test('relay workspace keeps encrypted history for members who join after everyon
   const a = await actx.newPage();
   await pointAtLocalRelay(a);
   await onboard(a, 'Ada', 'Start chatting');
-  await createWorkspace(a, 'Relay', 'relays');
+  await createWorkspace(a, 'Relay');
   await a.getByRole('button', { name: 'Invite people' }).first().click();
   await expect(a.getByRole('button', { name: 'Copy code' })).toHaveCount(0); // relay invites are link-only
   await a.getByTestId('invite-link').press('Escape');
   const link = await inviteLink(a);
   expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/k\/[A-Za-z0-9_-]{43}\/n\//);
 
-  // Calls need the explicit WebRTC opt-in in relay workspaces.
-  await expect(a.getByTestId('huddle-button')).toBeDisabled();
+  // Calls are on by default (WebRTC is used for nothing else).
+  await expect(a.getByTestId('huddle-button')).toBeEnabled();
 
   const composer = a.getByRole('textbox', { name: 'Message #general' });
   await a.locator('input[type=file]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('file kept on blossom') });
@@ -35,21 +35,24 @@ test('relay workspace keeps encrypted history for members who join after everyon
   await expect(b).not.toHaveURL(/\/k\//); // the key doesn't linger in the address bar
 });
 
-test('the WebRTC switch enables calls in relay workspaces', async ({ browser }) => {
+test('the calls switch turns WebRTC off and on for this device', async ({ browser }) => {
   const page = await (await browser.newContext()).newPage();
   await pointAtLocalRelay(page);
   await onboard(page, 'Di', 'Start chatting');
-  await page.getByLabel('Workspace name').fill('Calls ' + Date.now());
-  await page.getByText('Encrypted on Nostr relays').click();
-  await page.getByRole('button', { name: 'Create workspace' }).click();
-  await expect(page.getByTestId('huddle-button')).toBeDisabled();
-  await page.getByTestId('settings-button').click();
-  await page.getByTestId('settings-nav-connection').click();
-  await page.getByTestId('webrtc-switch').click();
-  await page.getByTestId('network-save').click();
-  await page.getByRole('dialog').press('Escape');
+  await createWorkspace(page, 'Calls');
   await expect(page.getByTestId('huddle-button')).toBeEnabled();
-  await checkPage(page, 'relay workspace › calls enabled');
+  const toggleCalls = async () => {
+    await page.getByTestId('settings-button').click();
+    await page.getByTestId('settings-nav-connection').click();
+    await page.getByTestId('webrtc-switch').click();
+    await page.getByTestId('network-save').click();
+    await page.getByRole('dialog').press('Escape');
+  };
+  await toggleCalls();
+  await expect(page.getByTestId('huddle-button')).toBeDisabled();
+  await toggleCalls();
+  await expect(page.getByTestId('huddle-button')).toBeEnabled();
+  await checkPage(page, 'workspace › calls enabled');
 });
 
 test('bare codes and keyless links are refused', async ({ browser }) => {
@@ -63,10 +66,7 @@ test('bare codes and keyless links are refused', async ({ browser }) => {
 async function relayWorkspace(page: Page, who: string) {
   await pointAtLocalRelay(page);
   await onboard(page, who, 'Start chatting');
-  await page.getByLabel('Workspace name').fill('Relay ' + Date.now());
-  await page.getByText('Encrypted on Nostr relays').click();
-  await page.getByRole('button', { name: 'Create workspace' }).click();
-  await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
+  await createWorkspace(page, 'Relay');
 }
 
 async function openConnection(page: Page) {
@@ -99,19 +99,16 @@ test('one Settings: a single button, "you" sections outside a workspace, device 
   await expect(page.getByTestId('bridge-install')).toBeVisible(); // no bridge runs in the test
 });
 
-test('inside a workspace, Settings adds its own group for its mode, and the workspace menu jumps into it', async ({ browser }) => {
+test('inside a workspace, Settings adds its own group, and the workspace menu jumps into it', async ({ browser }) => {
   const page = await (await browser.newContext()).newPage();
   await relayWorkspace(page, 'Lu');
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(1);
-  await expect(page.getByTestId('mode-chip').first()).toHaveText('Nostr relays');
   await page.getByTestId('ws-menu-button').click();
   await page.getByTestId('menu-settings').click();
   await expect(page.getByTestId('settings-section-ws-general')).toBeVisible();
-  await expect(page.getByTestId('ws-mode')).toContainText('fixed');
   await expect(page.getByTestId('invite-link')).toHaveValue(/\/k\//);
   await page.getByTestId('settings-nav-ws-network').click();
-  await expect(page.getByTestId('connection-kind')).toHaveText('Nostr relays');
-  await expect(page.getByTestId('ws-signal')).toHaveCount(0);
+  await expect(page.getByTestId('connection-relays')).toBeVisible();
   await expect(page.getByTestId('turn-fields')).toHaveCount(0); // device settings live under "you"
   await page.getByTestId('settings-nav-ws-agents').click();
   await expect(page.getByTestId('ws-agents-nobridge')).toBeVisible();
@@ -152,8 +149,6 @@ test('a relay workspace’s network settings show live relay status and edit rel
   const page = await (await browser.newContext()).newPage();
   await relayWorkspace(page, 'Fa');
   await openConnection(page);
-  await expect(page.getByTestId('connection-kind')).toHaveText('Nostr relays');
-  await expect(page.getByTestId('ws-signal')).toHaveCount(0);
   await expect(page.getByTestId('connection-note')).toContainText('at least one relay in common');
   await expect(page.locator(`[data-testid=relay-status][data-relay="${RELAY}"]`)).toHaveAttribute('data-connected', 'true');
 
@@ -179,29 +174,6 @@ test('a relay workspace’s network settings show live relay status and edit rel
   await composer.fill('after the relay change');
   await composer.press('Enter');
   await expect(page.getByText('after the relay change')).toBeVisible();
-});
-
-test('a peer-to-peer workspace’s network settings show only WebRTC: signaling goes into the invite link', async ({ browser }) => {
-  const page = await (await browser.newContext()).newPage();
-  await pointAtLocalRelay(page);
-  await onboard(page, 'Gu', 'Start chatting');
-  await page.getByLabel('Workspace name').fill('P2P ' + Date.now());
-  await page.getByRole('button', { name: 'Create workspace' }).click();
-  await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
-  await openConnection(page);
-  await expect(page.getByTestId('connection-kind')).toHaveText('Peer-to-peer (WebRTC)');
-  await expect(page.getByTestId('connection-relay-list')).toHaveCount(0);
-  await expect(page.getByTestId('ws-signal-nostr')).toBeChecked();
-  await expect(page.getByTestId('ws-signal-urls')).toHaveValue('wss://nos.lol');
-  await expect(page.getByTestId('turn-fields')).toHaveCount(0); // device settings live under "you"
-
-  await page.getByTestId('ws-signal-torrent').click();
-  await page.getByTestId('ws-signal-urls').fill('wss://tracker.example');
-  await page.getByTestId('connection-save').click();
-  await expect(page.getByText('Network settings saved')).toBeVisible();
-  await page.getByTestId('ws-signal-urls').press('Escape');
-  await page.getByRole('button', { name: 'Invite people' }).first().click();
-  expect(decodeURIComponent(await page.getByTestId('invite-link').inputValue())).toContain('/s/torrent,wss://tracker.example');
 });
 
 test('a composer draft stays in its channel', async ({ browser }) => {
@@ -355,52 +327,31 @@ test('the tab icon shows unread messages on top of whatever favicon is set, and 
   await expect.poll(icon).toBe(custom);
 });
 
-test('the create step sets the new workspace’s own network settings for the chosen mode', async ({ browser }) => {
+test('the create step sets the new workspace’s own network settings', async ({ browser }) => {
   const page = await (await browser.newContext()).newPage();
   await pointAtLocalRelay(page);
   await onboard(page, 'Ky', 'Start chatting');
 
-  // Peer-to-peer: collapsed by default with a summary of the defaults; expand to pick trackers.
-  await page.getByLabel('Workspace name').fill('Trackers ' + Date.now());
-  await expect(page.getByTestId('create-net-summary')).toHaveText('Signaling: Nostr relays · wss://nos.lol');
-  await expect(page.getByTestId('create-signal-urls')).toHaveCount(0);
-  await page.getByTestId('create-net-toggle').click();
-  await page.getByTestId('create-signal-torrent').click();
-  await page.getByTestId('create-signal-urls').fill('not a url');
-  await page.getByRole('button', { name: 'Create workspace' }).click();
-  await expect(page.getByText('Not a ws:// or wss:// server: not')).toBeVisible();
-  await page.getByTestId('create-signal-urls').fill('wss://tracker.example');
-  await expect(page.getByTestId('create-net-summary')).toHaveText('Signaling: BitTorrent trackers · wss://tracker.example');
-  await page.getByRole('button', { name: 'Create workspace' }).click();
-  await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
-  await page.getByRole('button', { name: 'Invite people' }).first().click();
-  expect(decodeURIComponent(await page.getByTestId('invite-link').inputValue())).toContain('/s/torrent,wss://tracker.example');
-  await page.getByTestId('invite-link').press('Escape');
-  await openConnection(page);
-  await expect(page.getByTestId('ws-signal-torrent')).toBeChecked();
-  await expect(page.getByTestId('ws-signal-urls')).toHaveValue('wss://tracker.example');
-  await expect(page.getByTestId('connection-relay-list')).toHaveCount(0); // only this workspace's mode
-  await page.getByTestId('ws-signal-urls').press('Escape');
-
-  // Relay workspace: its relays and file servers come from the same step.
-  await page.getByRole('button', { name: 'Create or join a workspace' }).click();
+  // Collapsed by default with a summary; expand to edit relays and file servers.
   await page.getByLabel('Workspace name').fill('Relays ' + Date.now());
-  await page.getByText('Encrypted on Nostr relays').click();
   await expect(page.getByTestId('create-net-summary')).toHaveText(`Relays: ${RELAY} · Files: ${BLOSSOM}`);
+  await expect(page.getByTestId('create-relays')).toHaveCount(0);
   await page.getByTestId('create-net-toggle').click();
+  await page.getByTestId('create-relays').fill('not a url');
+  await page.getByRole('button', { name: 'Create workspace' }).click();
+  await expect(page.getByText('Not a ws:// or wss:// relay: not')).toBeVisible();
   await page.getByTestId('create-relays').fill(`${RELAY}, ws://127.0.0.1:7779`);
   await page.getByRole('button', { name: 'Create workspace' }).click();
   await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
+  await page.getByRole('button', { name: 'Invite people' }).first().click();
+  expect(decodeURIComponent(await page.getByTestId('invite-link').inputValue())).toContain(`/n/${RELAY},ws://127.0.0.1:7779`);
+  await page.getByTestId('invite-link').press('Escape');
   await openConnection(page);
-  await expect(page.getByTestId('connection-kind')).toHaveText('Nostr relays');
   await expect(page.getByTestId('connection-relays')).toHaveValue(`${RELAY}, ws://127.0.0.1:7779`);
   await expect(page.getByTestId('connection-blossom')).toHaveValue(BLOSSOM);
-  await expect(page.getByTestId('ws-signal')).toHaveCount(0);
   await page.getByTestId('connection-relays').press('Escape');
 
-  // The next workspace starts from what was used last in each mode.
+  // The next workspace starts from what was used last.
   await page.getByRole('button', { name: 'Create or join a workspace' }).click();
-  await expect(page.getByTestId('create-net-summary')).toHaveText('Signaling: BitTorrent trackers · wss://tracker.example');
-  await page.getByText('Encrypted on Nostr relays').click();
   await expect(page.getByTestId('create-net-summary')).toHaveText(`Relays: ${RELAY}, ws://127.0.0.1:7779 · Files: ${BLOSSOM}`);
 });

@@ -3,7 +3,7 @@ import { isWorkspaceKey } from './seal';
 
 /**
  * Schemas for everything that arrives from someone else: signed events and their bodies, presence,
- * huddle state, handshakes, sync and relay envelopes, file refs. Peers are untrusted, so input is
+ * huddle state, handshakes, relay envelopes, file refs. Peers are untrusted, so input is
  * checked here once and the rest of the code works with typed values.
  *
  * The reducer is lenient per field ("a malformed field is ignored, and no single event can abort the
@@ -39,7 +39,7 @@ const listOf = <S extends v.GenericSchema>(s: S) =>
     keep(s),
   );
 /** An object's string entries, in a null-prototype record so no key ("__proto__" included) is special. */
-const stringsOf = (o: Record<string, unknown>, ok: (k: string, val: string) => boolean = () => true): Record<string, string> => {
+const stringsOf = (o: Record<string, unknown>, ok: (k: string, val: string) => boolean): Record<string, string> => {
   const out: Record<string, string> = Object.create(null);
   for (const [k, val] of Object.entries(o)) if (typeof val === 'string' && ok(k, val)) out[k] = val;
   return out;
@@ -150,7 +150,7 @@ export const PresenceSchema = obj({
   typing: nullableText, // channel id
   agents: lenient(v.record(v.string(), obj({ working: nullableText }))), // agentId → channel it's working in
   bridge: lenient(v.boolean()),
-  /** Relay workspaces: this member is in a huddle and needs the WebRTC room, so opted-in members should join it. */
+  /** This member is in a huddle and needs the WebRTC room, so opted-in members should join it. */
   rtc: lenient(v.boolean()),
 });
 export type Presence = v.InferOutput<typeof PresenceSchema>;
@@ -165,35 +165,6 @@ export type HuddleState = v.InferOutput<typeof HuddleStateSchema>;
 
 /** A peer's WebRTC identity proof: its key and a signature over the handshake message. */
 export const HandshakeSchema = obj({ pub: v.string(), sig: v.string() });
-/** File requests and transfers over WebRTC name the file by id. */
-export const FileIdSchema = obj({ id: v.string() });
-
-/** Trystero history sync (see sync.ts): day summaries, ids per day, and requests for events. */
-export const SyncMsgSchema = v.pipe(
-  record,
-  v.variant('k', [
-    v.object({
-      k: v.literal('sum'),
-      s: v.pipe(
-        record,
-        v.transform((o) => stringsOf(o)),
-      ),
-    }),
-    v.object({
-      k: v.literal('ids'),
-      d: v.pipe(
-        record,
-        v.transform((o) => {
-          const out: Record<string, string[]> = Object.create(null);
-          for (const [day, ids] of Object.entries(o)) if (Array.isArray(ids)) out[day] = ids.filter((id): id is string => typeof id === 'string');
-          return out;
-        }),
-      ),
-    }),
-    v.object({ k: v.literal('want'), ids: v.pipe(v.array(v.unknown()), keep(v.string())) }),
-  ]),
-);
-export type SyncMsg = v.InferOutput<typeof SyncMsgSchema>;
 
 /** Nostr: a private event's outer layer names its pair, so the recipient knows which key opens `c`. */
 export const PrivateWrapperSchema = obj({ a: v.string(), to: v.string(), c: v.string() });

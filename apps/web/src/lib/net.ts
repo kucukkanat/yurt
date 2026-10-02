@@ -1,6 +1,5 @@
-import { joinRoom as joinNostr, selfId } from 'trystero';
-import { joinRoom as joinTorrent } from '@trystero-p2p/torrent';
-import { WorkspacePeer, signalingOf, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport } from '@yurt/protocol';
+import { joinRoom, selfId } from 'trystero';
+import { WorkspacePeer, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport } from '@yurt/protocol';
 import { peerStore } from './db';
 import type { NetSettings } from './stored';
 
@@ -22,7 +21,7 @@ function rtcOptions(n: NetSettings): Record<string, unknown> {
   const o: Record<string, unknown> = {};
   if (n.turn === 'default') o.turnConfig = DEFAULT_TURN;
   if (n.turn === 'custom' && n.turnUrls.trim()) o.turnConfig = [{ urls: n.turnUrls.split(/[\s,]+/).filter(Boolean), username: n.turnUser, credential: n.turnPass }];
-  // Signaling servers aren't here: they belong to each workspace (members must share them).
+  // Signaling isn't here: calls signal over each workspace's own relays.
   return o;
 }
 
@@ -32,8 +31,7 @@ export interface NetHandlers {
   onCreator(code: string, pub: string): void;
   onKey(code: string, key: string): void;
   onBlob(id: string): void;
-  onBlobProgress(id: string, p: number): void;
-  /** A member's WebRTC handshake was refused or failed (e.g. a banned member, or someone on an old key). */
+  /** A member's WebRTC handshake in a call was refused or failed (e.g. a banned member, or someone on an old key). */
   onJoinError(code: string, details: unknown): void;
   /** Something failed that the user should know about (e.g. this device couldn't save). */
   onError(code: string, msg: string): void;
@@ -47,20 +45,16 @@ export function connect(code: string, kp: KeyPair, creator: string | null, trans
   const p = new WorkspacePeer({
     code,
     kp,
-    selfId,
     creator,
     transport,
-    // No mixing: a relay workspace gets no WebRTC at all unless the user opted in. The Trystero strategy
-    // follows the workspace's signaling method, since members only meet over the same one.
-    ...(transport.kind === 'trystero' || net.webrtc ? { joinRoom: (signalingOf(transport).kind === 'torrent' ? joinTorrent : joinNostr) as unknown as JoinRoom } : {}),
+    // WebRTC is only for calls, and none at all with the user's opt-in turned off.
+    ...(net.webrtc ? { calls: { joinRoom: joinRoom as unknown as JoinRoom, selfId, rtc: rtcOptions(net) } } : {}),
     store: peerStore,
-    rtc: rtcOptions(net),
     onState: (s, fresh) => h.onState(code, s, fresh),
     onPeers: () => h.onPeers(code),
     onCreator: (pub) => h.onCreator(code, pub),
     onKey: (key) => h.onKey(code, key),
     onBlob: h.onBlob,
-    onBlobProgress: h.onBlobProgress,
     onJoinError: (d) => h.onJoinError(code, d),
     onError: (msg) => h.onError(code, msg),
     devFileServers: isLocalHost(location.hostname),

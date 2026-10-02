@@ -84,7 +84,7 @@ export async function startBridge(home: string, opts: BridgeOpts = {}) {
 
 /** A member's device: a real WorkspacePeer with an in-memory store, started and connected. */
 export async function memberPeer(kp: KeyPair, code: string, transport: WsTransport, extra: Partial<WorkspacePeerOpts> = {}) {
-  const p = new WorkspacePeer({ code, kp, selfId: kp.pub.slice(0, 20), transport, store: memoryStore().store, onError: () => {}, ...extra });
+  const p = new WorkspacePeer({ code, kp, transport, store: memoryStore().store, onError: () => {}, ...extra });
   await p.start();
   await waitUntil(() => p.connected, 8000);
   return p;

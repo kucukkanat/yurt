@@ -11,7 +11,7 @@ test('members can find and DM discoverable agents, and are told the owner can re
   const page = await (await browser.newContext()).newPage();
   await pointAtLocalRelay(page);
   await onboard(page, 'Bea');
-  await createWorkspace(page, 'Agents', 'relays');
+  await createWorkspace(page, 'Agents');
   const invite = parseInvite(await inviteLink(page));
   if (!invite) throw new Error('no invite link');
 
@@ -19,7 +19,6 @@ test('members can find and DM discoverable agents, and are told the owner can re
   const owner = new WorkspacePeer({
     code: invite.code,
     kp: olu,
-    selfId: olu.pub.slice(0, 20),
     transport: invite.transport,
     ...(invite.creator ? { creator: invite.creator } : {}),
     store: memStore().store,

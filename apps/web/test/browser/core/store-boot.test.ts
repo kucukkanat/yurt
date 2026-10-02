@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
-import { keyFromPhrase, newInviteCode, newRecoveryPhrase, newTrysteroTransport, newWorkspaceKey } from '@yurt/protocol';
+import { keyFromPhrase, newInviteCode, newNostrTransport, newRecoveryPhrase, newWorkspaceKey } from '@yurt/protocol';
 import { kv } from '../../../src/lib/db';
 import { getPeer } from '../../../src/lib/net';
 import { useApp } from '../../../src/store';
@@ -10,15 +10,15 @@ const phrase = newRecoveryPhrase();
 const relayWs = {
   code: newInviteCode(),
   name: 'Relays',
-  transport: { kind: 'nostr', key: newWorkspaceKey(), relays: [inject('relayUrl')] },
+  transport: { key: newWorkspaceKey(), relays: [inject('relayUrl')] },
   creator: null,
   lastRead: {},
   muted: [],
 };
-const p2pWs = {
+const damaged = {
   code: newInviteCode(),
-  name: 'P2P',
-  transport: newTrysteroTransport({ kind: 'nostr', urls: [inject('relayUrl')] }),
+  name: 'Damaged',
+  transport: newNostrTransport([inject('relayUrl')]),
   creator: 'x',
   lastRead: { general: 'soon' },
   muted: [1],
@@ -28,8 +28,8 @@ const stranger = newInviteCode();
 beforeAll(async () => {
   await resetDb();
   await kv.set('identity', { phrase, name: 'Ada', handle: 'ada', pub: 'stale', sec: 'stale' });
-  await kv.set('workspaces', [relayWs, null, { name: 'no code' }, p2pWs]);
-  await kv.set('settings', { theme: 'light', relays: 'wss://old.example', webrtc: 'yes' });
+  await kv.set('workspaces', [relayWs, null, { name: 'no code' }, damaged]);
+  await kv.set('settings', { theme: 'light', lastNet: { relays: ['wss://old.example'], blossom: [] }, webrtc: false, turn: 7 });
   location.hash = '#/w/' + stranger; // a pasted code-only link: no key, so it can't be joined
   await useApp.getState().init({ clockMs: 100 }); // the real interval, ticking fast
 });
@@ -43,9 +43,9 @@ describe('starting up', () => {
     const s = useApp.getState();
     expect(s.ready).toBe(true);
     expect(s.identity).toMatchObject({ ...keyFromPhrase(phrase), name: 'Ada', handle: 'ada' });
-    expect(s.workspaces.map((w) => w.code)).toEqual([relayWs.code, p2pWs.code]);
+    expect(s.workspaces.map((w) => w.code)).toEqual([relayWs.code, damaged.code]);
     expect(s.workspaces[1]).toMatchObject({ creator: null, lastRead: {}, muted: [] });
-    expect(s.settings).toMatchObject({ theme: 'light', webrtc: false, lastNet: { nostr: { relays: ['wss://old.example'] } } });
+    expect(s.settings).toMatchObject({ theme: 'light', webrtc: false, turn: 'off', lastNet: { relays: ['wss://old.example'] } });
     expect(document.documentElement.dataset.theme).toBe('light');
   });
 
@@ -53,7 +53,7 @@ describe('starting up', () => {
     const peer = getPeer(relayWs.code);
     await until(() => !!peer?.connected, 'the relay');
     await until(() => peer?.state.profiles.get(keyFromPhrase(phrase).pub)?.name === 'Ada', 'my profile in the workspace');
-    expect(getPeer(p2pWs.code)).toBeDefined();
+    expect(getPeer(damaged.code)).toBeDefined();
   });
 
   it('explains a link it can’t join, then goes home', async () => {
@@ -85,7 +85,7 @@ describe('starting up', () => {
     const peer = getPeer(relayWs.code);
     if (!peer) throw new Error('no peer');
     const { huddle } = await import('../../../src/lib/huddle');
-    await huddle.join(peer, 'general'); // a relay workspace without calls turned on
+    await huddle.join(peer, 'general'); // calls are turned off on this device
     await until(() => useApp.getState().toasts.some((t) => t.title === 'Couldn’t join the huddle'), 'the toast');
     expect(huddle.view.error).toBeUndefined();
   });
