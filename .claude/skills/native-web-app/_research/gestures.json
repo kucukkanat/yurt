@@ -1,0 +1,591 @@
+{
+ "key": "gestures",
+ "domain": "Touch, gestures, interaction feel and haptics",
+ "items": [
+  {
+   "title": "Pointer Events as the single input model; gestures only for pointerType 'touch'",
+   "what": "Handle pointerdown/move/up/cancel instead of separate mouse and touch listeners. Custom gestures (swipe, long-press) run only when pointerType === 'touch'. Mouse and pen keep native behaviour: text selection, hover menus and drag.",
+   "why": "Desktop users can still select text and use hover toolbars, so the app doesn't feel like a phone app on a Mac. Touch users get gestures. Treating pointercancel as an abort stops the 'half-swiped row stuck on screen' tell when the browser takes over to scroll.",
+   "how": "el.addEventListener('pointerdown', (e: PointerEvent) => {\n  if (e.pointerType !== 'touch' || !e.isPrimary) return; // mouse/pen: selection, hover, native DnD\n  start(e.pointerId, e.clientX, e.clientY, e.timeStamp);\n});\nel.addEventListener('pointermove', move);\nel.addEventListener('pointerup', finish);\nel.addEventListener('pointercancel', abort); // browser/OS took the gesture (scroll, zoom, back swipe): reset, never commit\n\n// Mouse drags only: keep receiving moves outside the element (touch is captured implicitly)\nhandle.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse') handle.setPointerCapture(e.pointerId); });\n\n// click is a PointerEvent now, so a tap handler knows its input ('' = keyboard)\nbtn.addEventListener('click', (e) => { const touch = e instanceof PointerEvent && e.pointerType === 'touch'; });",
+   "support": "Pointer Events: Chrome/Edge 55, Firefox 59 (Android 79), Safari 13 / iOS 13. setPointerCapture: same. click as PointerEvent (with pointerType): Chrome 92, Firefox 129, Safari 18.2. Current releases per MDN BCD 8.1.4 (2026-10-01): Chrome 154, Firefox 157, Safari 27.",
+   "gotchas": "Per the spec, touch pointers are implicitly captured to the pointerdown target. pointercancel fires as soon as the UA consumes the touch for panning (as touch-action allows) or for a system gesture; your pointerup never comes. Track by pointerId and ignore !isPrimary, or a second finger corrupts the gesture. Apple Pencil reports 'pen' and an iPad trackpad reports 'mouse'. Don't register touchstart and pointer handlers for the same gesture on one element. Safari 27 fixed a bug: preventDefault() in pointerdown now suppresses the compatibility mousedown/mouseup on iOS. Keep gesture math pure and unit-test it (Yurt: lib/gestures.ts, with ui/touch.ts as a thin adapter). Playwright's touchscreen API only taps, so dispatch synthetic pointer events with pointerType 'touch', or use CDP Input.dispatchTouchEvent, to E2E-test swipes.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/Pointer_events",
+    "https://w3c.github.io/pointerevents/",
+    "https://github.com/mdn/browser-compat-data",
+    "https://webkit.org/blog/18325/webkit-features-for-safari-27-0/",
+    "apps/web/src/ui/touch.ts",
+    "apps/web/src/lib/gestures.ts"
+   ]
+  },
+  {
+   "title": "touch-action: declare what the browser keeps (pan-y pinch-zoom on swipe rows, none on handles)",
+   "what": "touch-action tells the browser which touch gestures it handles natively, before any JS runs. Whatever is left (for example horizontal drags on a row with pan-y) reaches your pointer handlers without being cancelled.",
+   "why": "Vertical scrolling stays native, with momentum and no jank, while horizontal swipes work. You avoid preventDefault-on-touchmove hacks that make scrolling feel sticky.",
+   "how": "html { touch-action: manipulation; }            /* pan + pinch, no double-tap zoom, no tap delay */\n.swipe-row { touch-action: pan-y pinch-zoom; }  /* browser keeps vertical scroll AND pinch; horizontal drags are yours */\n.h-pager   { touch-action: pan-x pinch-zoom; }\n.drag-handle, .sketch-canvas, .zoom-viewer { touch-action: none; } /* everything is yours: keep these areas small */",
+   "support": "touch-action: Chrome 36, Firefox 52, Safari iOS 9.3 (manipulation/auto/none only), full pan-x/pan-y/pinch-zoom from iOS 13 and Safari 13. pan-left/right/up/down: Chromium 55+ only (no Firefox, no Safari).",
+   "gotchas": "touch-action is read at pointerdown and can't change mid-gesture. You can't switch to none after a long-press picks something up. The effective value is the intersection of the element and its ancestors up to the nearest scroll container. So `pan-y` alone also blocks pinch-zoom when a pinch starts on that element. Yurt's message rows and panels use plain pan-y, which makes the page unzoomable when a pinch starts on them; use `pan-y pinch-zoom`. A pinch then gives your swipe a pointercancel, which is fine. touch-action doesn't affect mouse input. `none` on large areas kills scrolling for users who start a scroll there.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/touch-action",
+    "https://w3c.github.io/pointerevents/#the-touch-action-css-property",
+    "https://github.com/mdn/browser-compat-data",
+    "apps/web/src/ui/Message.tsx"
+   ]
+  },
+  {
+   "title": "Passive listeners by default; passive:false only where you truly cancel scrolling",
+   "what": "Browsers treat touchstart, touchmove and wheel listeners on window, document and body as passive by default, so preventDefault() is ignored there. Register non-passive listeners explicitly and narrowly, only for things like custom pull-to-refresh, pinch on wheel+ctrlKey, or blocking an edge swipe.",
+   "why": "A non-passive touchmove makes every scroll wait for the main thread, and laggy scroll start is the biggest web tell. A preventDefault that silently does nothing breaks custom gestures.",
+   "how": "// Narrow, explicit, and only cancel when you own the gesture\nscroller.addEventListener('touchmove', (e: TouchEvent) => {\n  if (pulling && e.cancelable) e.preventDefault();\n}, { passive: false });\nviewer.addEventListener('wheel', (e: WheelEvent) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });\nwindow.addEventListener('scroll', onScroll, { passive: true });\n\n// React: onTouchMove/onWheel are registered passive at the root, so attach natively\nuseEffect(() => {\n  const el = ref.current; if (!el) return;\n  el.addEventListener('touchmove', onMove, { passive: false });\n  return () => el.removeEventListener('touchmove', onMove);\n}, []);",
+   "support": "Passive-by-default for touch/wheel on window/document/body: Chrome 55, Firefox 61, Safari 11.1 / iOS 11.3.",
+   "gotchas": "Once native scrolling has started, touchmove.cancelable is false, so always check e.cancelable. Prefer CSS touch-action over JS cancellation whenever the decision is static. React 17+ registers touchstart, touchmove and wheel as passive at the root, so preventDefault inside JSX handlers does nothing (facebook/react#19651). Chrome logs 'Unable to preventDefault inside passive event listener' when you get this wrong.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/EventTarget/addEventListener#using_passive_listeners",
+    "https://github.com/facebook/react/issues/19651",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Axis locking with a slop threshold: a mostly vertical drag is a scroll, never a swipe",
+   "what": "Don't interpret a gesture until the finger has moved N px (about 8-10). Then lock to the dominant axis for the rest of the gesture. Only an 'x' lock moves rows or drawers. A long-press is only possible while the axis is still undecided.",
+   "why": "Native lists never wobble sideways while you scroll. Rendering offsets before the lock makes rows jitter, and lists feel broken.",
+   "how": "export type Axis = 'x' | 'y' | null;\nconst SLOP = 10; // px (Android's touch slop is ~8dp)\nexport function lockAxis(dx: number, dy: number, axis: Axis): Axis {\n  if (axis) return axis;                              // decided once per gesture\n  if (Math.max(Math.abs(dx), Math.abs(dy)) < SLOP) return null;\n  return Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';    // bias toward 'y' with e.g. dx > dy * 1.2 if rows still twitch\n}\nexport const dragX = (dx: number, axis: Axis) => (axis === 'x' ? dx : 0);\nexport const stillHeld = (axis: Axis) => axis === null; // long-press candidate",
+   "support": "Pure logic; works everywhere Pointer Events do.",
+   "gotchas": "Yurt: LOCK_PX = 10, decided on the first move past it (lib/gestures.ts). With touch-action pan-y, a 'y' decision usually also brings a pointercancel from the browser, so handle both. Unit-test the pure functions with fixed coordinates and timestamps; no screen needed.",
+   "priority": "must",
+   "sources": [
+    "apps/web/src/lib/gestures.ts",
+    "https://developer.android.com/reference/android/view/ViewConfiguration"
+   ]
+  },
+  {
+   "title": "Swipe completion: distance OR a short fast flick, with velocity from recent samples and momentum projection",
+   "what": "A swipe commits if it travelled the full distance (about 64px), or a shorter distance (about 32px) at flick speed (\u22650.5 px/ms) in the same direction. Measure velocity over the last ~80ms, not the whole gesture. For snapping drawers and sheets, project where momentum would carry the content and snap to the nearest stop.",
+   "why": "Native UIs respond to intent, so a quick flick completes even when it's short. Averaging speed over the whole gesture misses a 'hesitate, then flick' gesture.",
+   "how": "interface Sample { x: number; t: number }\nconst WINDOW_MS = 80;\nexport function velocity(s: readonly Sample[]): number { // px/ms\n  const last = s.at(-1); if (!last) return 0;\n  const first = s.find((p) => last.t - p.t <= WINDOW_MS) ?? last;\n  return last.t === first.t ? 0 : (last.x - first.x) / (last.t - first.t);\n}\nconst SWIPE_PX = 64, SHORT_PX = 32, FLICK = 0.5;\nexport const completes = (d: number, v: number) =>\n  Math.abs(d) >= SWIPE_PX || (Math.abs(d) >= SHORT_PX && Math.abs(v) >= FLICK && Math.sign(v) === Math.sign(d));\n// Apple 'Designing Fluid Interfaces': distance momentum would add (decelerationRate 0.998 normal, 0.99 snappy)\nexport const project = (v: number, rate = 0.998) => (v * rate) / (1 - rate);\nexport const snap = (pos: number, v: number, stops: readonly number[]) =>\n  stops.reduce((a, b) => (Math.abs(b - (pos + project(v))) < Math.abs(a - (pos + project(v))) ? b : a));",
+   "support": "Pure logic. Use PointerEvent.timeStamp (high-resolution ms).",
+   "gotchas": "Yurt's swipeOf computes speed as total distance over total time, which works for clean flicks but under-reads a late flick. Keep a small ring buffer of samples per pointer. Reject flicks whose final velocity reverses the drag: the user is pulling back to cancel. Start the snap animation at the release velocity (see the release animation item).",
+   "priority": "should",
+   "sources": [
+    "https://developer.apple.com/videos/play/wwdc2018/803/",
+    "apps/web/src/lib/gestures.ts"
+   ]
+  },
+  {
+   "title": "Swipe-to-act rows (reply / archive / delete): follow the finger, resistance past the threshold, haptic tick on arming",
+   "what": "On touch, the row follows a horizontal drag 1:1 up to the commit threshold, then resists. A haptic tick fires when it arms, and it springs back on release, running the action only if still armed. An icon behind the row fades in with progress.",
+   "why": "This is the iMessage/WhatsApp/Mail idiom. The haptic plus resistance tells the user 'let go now and it happens' without any text.",
+   "how": "const T = 64;\nconst rubber = (x: number, d: number, c = 0.55) => (x * d * c) / (d + c * x);\nexport function swipeToReply(row: HTMLElement, onReply: () => void, tick: () => void) {\n  row.style.touchAction = 'pan-y pinch-zoom';\n  let id = -1, x0 = 0, y0 = 0, axis: 'x' | 'y' | null = null, off = 0, armed = false;\n  const paint = () => { row.style.transform = off ? `translateX(${off}px)` : ''; };\n  row.addEventListener('pointerdown', (e) => {\n    if (e.pointerType !== 'touch' || !e.isPrimary) return;\n    id = e.pointerId; x0 = e.clientX; y0 = e.clientY; axis = null; off = 0; armed = false;\n    row.style.transition = 'none';\n  });\n  row.addEventListener('pointermove', (e) => {\n    if (e.pointerId !== id) return;\n    const dx = e.clientX - x0, dy = e.clientY - y0;\n    axis ??= Math.max(Math.abs(dx), Math.abs(dy)) < 10 ? null : Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';\n    if (axis !== 'x') return;\n    off = dx <= 0 ? 0 : dx <= T ? dx : T + rubber(dx - T, 200);\n    if ((off >= T) !== armed) { armed = off >= T; if (armed) tick(); }\n    requestAnimationFrame(paint);\n  });\n  const end = (commit: boolean) => {\n    if (id === -1) return;\n    id = -1; off = 0;\n    row.style.transition = 'transform 220ms cubic-bezier(.2,.9,.3,1)';\n    requestAnimationFrame(paint);\n    if (commit && armed) onReply();\n  };\n  row.addEventListener('pointerup', () => end(true));\n  row.addEventListener('pointercancel', () => end(false));\n}",
+   "support": "Pointer Events + touch-action pan-y: Chrome 55, Firefox 59/79 Android, Safari/iOS 13.",
+   "gotchas": "Yurt's version clamps with min(offset, 96) and ticks once when crossing the threshold (lib/haptics.ts 'tick'). A rubber band feels softer than a hard stop. Disarming when the user drags back below the threshold is the 'I changed my mind' path; native Mail allows it. Combine with the flick rule so a fast short swipe also commits. On iOS 26.5+ no haptic is possible mid-drag (see the iOS haptics item), so the visual arming cue must work on its own. Mouse users need another path (hover action bar or menu). Swipe left/right must not fight an edge-swipe drawer: give the drawer only touches that start in the edge zone.",
+   "priority": "should",
+   "sources": [
+    "apps/web/src/ui/Message.tsx",
+    "apps/web/src/ui/touch.ts",
+    "apps/web/src/lib/haptics.ts"
+   ]
+  },
+  {
+   "title": "Rubber-band resistance instead of hard clamps",
+   "what": "When a drag passes its limit (threshold, list end, sheet top, zoom bounds), move the content by a diminishing amount, then animate back on release.",
+   "why": "A hard stop feels like a bug, while asymptotic resistance reads as 'physical' and matches iOS scroll views.",
+   "how": "/** x = overshoot past the limit (px, >= 0), d = dimension of the view (px), c = 0.55 like UIScrollView */\nexport const rubber = (x: number, d: number, c = 0.55) => (x * d * c) / (d + c * x);\nexport const clampRubber = (v: number, min: number, max: number, d: number) =>\n  v < min ? min - rubber(min - v, d) : v > max ? max + rubber(v - max, d) : v;",
+   "support": "Pure math; works everywhere.",
+   "gotchas": "The 0.55 constant and the formula, equivalent to (1 - 1/(x*c/d + 1)) * d, are community-derived from UIScrollView's behaviour, not documented by Apple. Smaller d means stiffer resistance. Always animate back to the clamped value on release, and skip the animation under prefers-reduced-motion.",
+   "priority": "should",
+   "sources": [
+    "https://developer.apple.com/videos/play/wwdc2018/803/",
+    "https://medium.com/@nathangitter/building-fluid-interfaces-ios-swift-9732bb934bf5"
+   ]
+  },
+  {
+   "title": "Native momentum via CSS scroll-snap for pagers, carousels and swipe-to-reveal actions",
+   "what": "Use a horizontal scroll container with scroll-snap for paged views (onboarding, image galleries, tab pages) and for Mail-style rows that reveal actions behind them. The browser supplies real momentum, snapping and rubber-banding. scrollend tells you where it settled.",
+   "why": "Native fling physics and 120Hz compositor scrolling come with zero JS. Hand-rolled JS carousels feel wrong because their friction never matches the OS.",
+   "how": "<div class=\"pager\"><section>1</section><section>2</section><section>3</section></div>\n<div class=\"row\"><div class=\"row-main\">Message</div><div class=\"row-actions\"><button>Archive</button><button>Delete</button></div></div>\n\n.pager { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; }\n.pager > * { flex: 0 0 100%; scroll-snap-align: center; scroll-snap-stop: always; }\n.row { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; }\n.row-main { flex: 0 0 100%; scroll-snap-align: start; }\n.row-actions { display: flex; scroll-snap-align: end; }\n\nconst settled = () => setPage(Math.round(pager.scrollLeft / pager.clientWidth));\nif ('onscrollend' in window) pager.addEventListener('scrollend', settled);\nelse { let t = 0; pager.addEventListener('scroll', () => { clearTimeout(t); t = window.setTimeout(settled, 120); }, { passive: true }); }",
+   "support": "scroll-snap-type: Chrome 69, Firefox 68, Safari 11. scroll-snap-stop: Chrome 75, Firefox 103, Safari 15. scrollend: Chrome 114, Firefox 109, Safari 26.2. scrollbar-width: Chrome 121, Firefox 64, Safari 18.2. scrollsnapchange/scrollsnapchanging: Chromium 129 only.",
+   "gotchas": "In RTL, scrollLeft is \u2264 0, so use Math.abs. `-webkit-overflow-scrolling: touch` has been obsolete since iOS 13 (all overflow scrolling has momentum), so delete it. Safari 27 fixed scrollTo() interrupting an in-progress momentum scroll on iOS. Snap rows inside a vertical list work well, but nest axes carefully: the row is pan-x and the list is pan-y. Don't animate scrollLeft from JS on every frame; use scrollTo({ left, behavior: 'smooth' }) and honour reduced motion.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-snap-type",
+    "https://developer.mozilla.org/en-US/docs/Web/API/Element/scrollend_event",
+    "https://github.com/mdn/browser-compat-data",
+    "https://webkit.org/blog/18325/webkit-features-for-safari-27-0/"
+   ]
+  },
+  {
+   "title": "Edge swipes (drawer) vs the system's back/forward gestures",
+   "what": "A left-edge swipe that opens a navigation drawer competes with the OS. Safari in a tab uses edge swipes for history back/forward. Android gesture navigation uses both edges for system Back (predictive back). Desktop trackpads use a two-finger horizontal swipe for history. Design so the system wins gracefully and your gesture still has room.",
+   "why": "Opening a drawer by edge swipe feels native. Fighting the OS, so that a back-swipe both navigates away and opens your drawer, is jarring.",
+   "how": "const EDGE = 28; // px: drawer gestures may start only this close to the left edge\nmain.addEventListener('pointerdown', (e) => {\n  if (e.pointerType !== 'touch' || e.clientX > EDGE) return;\n  beginDrawerDrag(e); // pointercancel => the OS/browser took it (back gesture): do nothing\n});\nconst inBrowserTab = matchMedia('(display-mode: browser)').matches;\n\n.carousel, .swipe-row { overscroll-behavior-x: contain; } /* don't chain into history swipes at the scroller's end */\n\n// Last resort for games/canvases only (Safari): block the nav gesture where the touch starts at an edge\ndocument.addEventListener('touchstart', (e) => {\n  const x = e.touches[0]?.pageX ?? 0;\n  if (x < 20 || x > innerWidth - 20) e.preventDefault();\n}, { passive: false });",
+   "support": "Safari iOS: edge back/forward swipe in tabs. Home-screen apps gained edge navigation gestures in iOS 12.2 (reported active only when there is history to go back to). iOS 26 added swipe-anywhere back for native apps, but Safari reportedly still uses edge-only. Android 10+ gesture nav: edges belong to system Back, and web pages cannot intercept it. display-mode media query: Chrome 42, Firefox 47, Safari iOS 12.2.",
+   "gotchas": "You can't detect or cancel the OS gesture. You just get pointercancel, so never commit on cancel. Yurt opens its drawer from touches starting within 28px of the left edge (App.tsx). In a Safari tab the first few px belong to the back swipe, so the zone must be wider than that strip; in standalone with no history the whole zone works. Better: also open the drawer with a horizontal swipe anywhere on content that has no horizontal scrollers, and always with a visible button. Calling preventDefault on touchstart also kills taps and scrolling that start there, works only in Safari (inconsistent in other iOS browsers), and should never be used in normal apps. overscroll-behavior-x is not a reliable block for browser swipe navigation (reports vary by browser); use it to stop chaining from scrollers.",
+   "priority": "must",
+   "sources": [
+    "https://pqina.nl/blog/blocking-navigation-gestures-on-ios-13-4/",
+    "https://medium.com/@firt/whats-new-on-ios-12-2-for-progressive-web-apps-75c348f8e945",
+    "https://forums.macrumors.com/threads/ios-26-tweaks-back-gesture-to-make-navigation-easier-on-bigger-iphones.2458596/",
+    "https://github.com/ionic-team/ionic-framework/issues/22299",
+    "apps/web/src/App.tsx"
+   ]
+  },
+  {
+   "title": "System Back closes the top layer; swipe right dismisses full-screen panels",
+   "what": "Every overlay (drawer, sheet, full-screen panel, lightbox) closes with Android Back, with Escape, and on narrow screens with a right swipe like iOS navigation. Use a CloseWatcher where available and a history entry otherwise. When Safari already animated a back swipe, skip your own exit animation.",
+   "why": "On Android, Back that leaves the app instead of closing a sheet is the most common PWA complaint. On iOS, users expect to swipe a pushed screen away.",
+   "how": "export function openLayer(close: () => void): () => void {\n  if ('CloseWatcher' in window) { const w = new CloseWatcher(); w.onclose = close; return () => w.destroy(); }\n  history.pushState({ layer: true }, '');\n  const onPop = () => close();\n  addEventListener('popstate', onPop, { once: true });\n  return () => {\n    removeEventListener('popstate', onPop);\n    const s: unknown = history.state;\n    if (typeof s === 'object' && s !== null && 'layer' in s) history.back();\n  };\n}\n// Route-based panels: Safari's edge swipe already showed a transition\naddEventListener('popstate', (e) => closePanel({ animate: !e.hasUAVisualTransition }));\n// Narrow screens: useSwipe({ right: closePanel }) on the full-screen panel (Yurt: Panels.tsx)",
+   "support": "CloseWatcher: Chrome/Edge 126, Firefox 149, Safari Technology Preview only (BCD). <dialog closedby>: Chrome 134, Firefox 141, Safari preview. PopStateEvent.hasUAVisualTransition: Chrome 118, Firefox 149, Safari 18. Navigation API (NavigateEvent.hasUAVisualTransition): Chrome 102/118, Firefox 147, Safari 26.2.",
+   "gotchas": "Modal <dialog> and popovers already integrate with the Android back button in Chromium through close watchers. Creating CloseWatchers without user activation is rate-limited: watchers created without a gesture get grouped, so one Back can close several. Add a `declare` for CloseWatcher if your TypeScript lib lacks it. The history approach adds entries, so pop them when the layer closes by other means, or Back becomes a no-op. A right-swipe close on a panel must start away from the left edge in a Safari tab, or it races Safari's own back swipe.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/CloseWatcher",
+    "https://developer.mozilla.org/en-US/docs/Web/API/PopStateEvent/hasUAVisualTransition",
+    "https://github.com/mdn/browser-compat-data",
+    "apps/web/src/ui/Panels.tsx"
+   ]
+  },
+  {
+   "title": "Swipe down to dismiss sheets (touch events, only when content is at the top)",
+   "what": "Bottom sheets follow a downward drag from the grabber, or from the content when it is scrolled to the top. They dismiss past ~30% of their height or on a downward flick, and otherwise spring back. Content inside scrolls normally.",
+   "why": "This is the iOS/Android sheet idiom. A sheet you can only close with an X button feels like a web modal.",
+   "how": "export function dragToDismiss(sheet: HTMLElement, body: HTMLElement, close: () => void) {\n  let y0 = 0, t0 = 0, dy = 0, decided = false, dragging = false;\n  sheet.addEventListener('touchstart', (e) => {\n    y0 = e.touches[0]?.clientY ?? 0; t0 = e.timeStamp; dy = 0; decided = false; dragging = false;\n    sheet.style.transition = 'none';\n  }, { passive: true });\n  sheet.addEventListener('touchmove', (e) => {\n    const y = e.touches[0]?.clientY ?? y0;\n    if (!decided) { decided = true; dragging = y > y0 && body.scrollTop <= 0; }\n    if (!dragging) return;\n    if (e.cancelable) e.preventDefault();\n    dy = Math.max(0, y - y0);\n    sheet.style.transform = `translateY(${dy}px)`;\n  }, { passive: false });\n  sheet.addEventListener('touchend', (e) => {\n    if (!dragging) return;\n    const v = dy / Math.max(1, e.timeStamp - t0); // use a recent-sample window in production\n    sheet.style.transition = 'transform 240ms cubic-bezier(.2,.9,.3,1)';\n    if (dy > sheet.offsetHeight * 0.3 || v > 0.5) { sheet.style.transform = 'translateY(100%)'; setTimeout(close, 240); }\n    else sheet.style.transform = '';\n  });\n}\n\n.sheet-body { overflow-y: auto; overscroll-behavior: contain; }\n.sheet-grabber { touch-action: none; }",
+   "support": "Touch events: Chrome, Firefox Android, Safari iOS 3.2+ (not desktop Safari). overscroll-behavior: Chrome 63, Firefox 59, Safari 16.",
+   "gotchas": "Pointer events don't work for drags that start on scrollable content. With pan-y, the browser consumes a downward drag at scrollTop 0 (overscroll/bounce) and sends pointercancel. Touch events keep coming, and the first move is still cancelable. Fade the backdrop with progress. Under reduced motion with 0ms transitions, transitionend never fires, so close on a timer (as here) rather than on transitionend. Also add Escape, Back (CloseWatcher/history) and backdrop tap; Yurt's drawer backdrop is a real <button> so it is accessible. Desktop needs no drag.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/Touch_events",
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/overscroll-behavior",
+    "apps/web/src/App.tsx"
+   ]
+  },
+  {
+   "title": "overscroll-behavior: no whole-app bounce, no scroll chaining, no surprise browser pull-to-refresh",
+   "what": "Stop the document itself from rubber-banding or pull-refreshing in an app shell. Let inner scrollers keep their own bounce, but stop them from chaining scroll into the page or backdrop behind them.",
+   "why": "A whole UI that bounces like a web page, a background list that scrolls under a modal, or Chrome reloading the app on a pull are all web tells.",
+   "how": "html, body { overscroll-behavior: none; }  /* set both: Safari applies the root value on html, Chrome on body */\n.scroller  { overflow-y: auto; overscroll-behavior-y: contain; } /* keeps its own bounce, never drags the page */\n.modal-body { overflow-y: auto; overscroll-behavior: contain; }\n.h-scroller { overscroll-behavior-x: contain; }",
+   "support": "overscroll-behavior: Chrome 63, Firefox 59, Safari 16 / iOS 16. Since Chrome 144 and Firefox 150 it also applies to scroll containers without scrollable overflow (a short modal still won't chain); Safari still only applies it when there is overflow.",
+   "gotchas": "Chrome on Android keeps pull-to-refresh even in installed standalone PWAs; `none` or `contain` on the root removes it, so provide your own refresh or auto-sync. iOS home-screen apps have no pull-to-refresh and no reload button at all. `contain` on inner scrollers keeps the local iOS bounce (native-looking); `none` removes it. Firefox overscroll-behavior-x/y: verify on Android. BCD lists a new `chain` value in Chrome 150 and Firefox 157 (not Safari), which you rarely need.",
+   "priority": "must",
+   "sources": [
+    "https://developer.chrome.com/blog/overscroll-behavior",
+    "https://web.dev/learn/pwa/app-design",
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/overscroll-behavior",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Custom pull-to-refresh (needed in iOS home-screen apps), or better, auto-sync",
+   "what": "A spinner that follows a downward pull at the top of a list, with rubber-band resistance, arms with a haptic tick past ~72px, and refreshes on release. Built with touch events so native scrolling still works in every other case.",
+   "why": "Installed iOS apps have no reload affordance, and users instinctively pull lists to refresh. A custom spinner that matches your design replaces the browser's (now disabled) one.",
+   "how": "export function pullToRefresh(scroller: HTMLElement, spinner: HTMLElement, refresh: () => Promise<void>, tick: () => void) {\n  const T = 72;\n  const rubber = (x: number, d: number) => (x * d * 0.55) / (d + 0.55 * x);\n  let y0 = 0, pull = 0, tracking = false, armed = false, busy = false;\n  const show = (y: number) => { spinner.style.transform = `translateY(${y}px) rotate(${y * 4}deg)`; spinner.style.opacity = String(Math.min(1, y / T)); };\n  scroller.addEventListener('touchstart', (e) => {\n    tracking = !busy && e.touches.length === 1 && scroller.scrollTop <= 0;\n    y0 = e.touches[0]?.clientY ?? 0; pull = 0; armed = false; spinner.style.transition = 'none';\n  }, { passive: true });\n  scroller.addEventListener('touchmove', (e) => {\n    if (!tracking) return;\n    const dy = (e.touches[0]?.clientY ?? y0) - y0;\n    if (dy <= 0 && pull === 0) { tracking = false; return; } // scrolling up: native\n    if (e.cancelable) e.preventDefault();\n    pull = dy > 0 ? rubber(dy, innerHeight) : 0;\n    if ((pull >= T) !== armed) { armed = pull >= T; if (armed) tick(); }\n    show(pull);\n  }, { passive: false });\n  scroller.addEventListener('touchend', () => {\n    if (!tracking) return;\n    tracking = false; spinner.style.transition = 'transform 200ms, opacity 200ms';\n    if (!armed) { show(0); return; }\n    busy = true; show(T);\n    void refresh().finally(() => { busy = false; show(0); });\n  });\n}\n/* plus: html, body { overscroll-behavior: none } and .scroller { overscroll-behavior-y: contain } */",
+   "support": "Touch events on Chrome Android, Firefox Android, Safari iOS. Root overscroll control: Chrome 63, Firefox 59, Safari 16.",
+   "gotchas": "For realtime apps (chat), refreshing automatically on visibilitychange (visible) and on 'online' often beats pull-to-refresh, because users shouldn't have to pull. Pointer events can't do this, since the browser cancels them when it starts the overscroll. Chat lists anchored at the bottom (column-reverse) need the logic mirrored at the oldest end. Desktop needs a refresh button or shortcut instead. Keep the touchmove listener on the list only, never on document.",
+   "priority": "should",
+   "sources": [
+    "https://web.dev/learn/pwa/app-design",
+    "https://developer.chrome.com/blog/overscroll-behavior",
+    "https://developer.mozilla.org/en-US/docs/Web/API/Touch_events"
+   ]
+  },
+  {
+   "title": "Long-press context menus that replace the browser's callout",
+   "what": "Holding still for about 450-500ms on a touch opens your action sheet (react, reply, copy\u2026). On touch only, this suppresses the iOS callout and link preview, the Android native context menu, and the text-selection loupe. Moving past the slop or scrolling cancels it.",
+   "why": "Long-press is the primary secondary-action gesture on phones. A browser 'Copy / Open link / Share' callout appearing over your app is a dead giveaway.",
+   "how": "const LONG_MS = 450; // iOS UILongPress 500ms; Android default 400ms\nexport function longPress(el: HTMLElement, open: (x: number, y: number) => void) {\n  let timer = 0, fired = false, x0 = 0, y0 = 0;\n  const cancel = () => clearTimeout(timer);\n  el.addEventListener('pointerdown', (e) => {\n    if (e.pointerType !== 'touch') return;\n    fired = false; x0 = e.clientX; y0 = e.clientY;\n    timer = window.setTimeout(() => { fired = true; open(x0, y0); }, LONG_MS);\n  });\n  el.addEventListener('pointermove', (e) => { if (Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel(); });\n  el.addEventListener('pointerup', cancel);\n  el.addEventListener('pointercancel', cancel); // scroll started\n  el.addEventListener('contextmenu', (e) => { if (fired) e.preventDefault(); }); // Android follows long-press with its menu\n  el.addEventListener('click', (e) => { if (fired) { e.preventDefault(); e.stopPropagation(); fired = false; } }, true);\n}\n\n@media (pointer: coarse) {\n  .pressable { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }\n}",
+   "support": "contextmenu event: Chrome/Edge, Firefox, Safari macOS; not fired for touch on iOS Safari (BCD: no iOS support), so the timer is required there. contextmenu as PointerEvent: Chrome 92, Firefox 129, Safari 18.2. -webkit-touch-callout: iOS Safari only.",
+   "gotchas": "Apply user-select:none and touch-callout:none only for coarse pointers, so desktop users can still select message text (Yurt does this per message). Because touch users lose native selection, add 'Copy text' and/or 'Select text' to your menu. Android's long-press timeout is user-adjustable in Accessibility (Touch & hold delay: 500/1000/1500ms), so consider opening on the Android contextmenu event to respect it, keeping the timer for iOS. Yurt fires a haptic tick from the timer, and on Android navigator.vibrate needs prior sticky activation, so the very first long-press of a session may be silent. iOS can't tick from a timer at all. Make the menu reachable without long-press too (desktop right-click, keyboard, a visible '\u2026' button) for accessibility.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/Element/contextmenu_event",
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/-webkit-touch-callout",
+    "https://developer.android.com/reference/android/view/ViewConfiguration",
+    "https://github.com/mdn/browser-compat-data",
+    "apps/web/src/ui/touch.ts",
+    "apps/web/src/ui/Message.tsx"
+   ]
+  },
+  {
+   "title": "Desktop: right-click menus, hover action bars and keyboard access, without stealing native menus",
+   "what": "On desktop, the same actions as the touch long-press appear in a hover toolbar (mouse), on focus-within (keyboard) and in a custom right-click menu. The native context menu stays for links, selected text and text fields.",
+   "why": "Native desktop apps have context menus and hover affordances. Hijacking every right-click (even over a selection or a spellcheck squiggle) is hostile.",
+   "how": "row.addEventListener('contextmenu', (e) => {\n  const t = e.target instanceof Element ? e.target : null;\n  if (getSelection()?.toString() || t?.closest('a[href], input, textarea, [contenteditable]')) return; // keep native\n  e.preventDefault();\n  const r = row.getBoundingClientRect();\n  const fromKeyboard = e.clientX === 0 && e.clientY === 0; // Shift+F10 / Menu key\n  openMenu(fromKeyboard ? r.left + 16 : e.clientX, fromKeyboard ? r.top + 16 : e.clientY);\n});\n\n.row .actions { opacity: 0; }\n@media (hover: hover) and (pointer: fine) { .row:hover .actions { opacity: 1; } }\n.row:focus-within .actions { opacity: 1; }",
+   "support": "contextmenu: all desktop browsers. Shift+F10 / the Menu key fire contextmenu on Windows/Linux; macOS has no standard key, so offer a visible menu button.",
+   "gotchas": "Keyboard-triggered contextmenu coordinates vary by browser; detecting 0,0 is a heuristic, so position from the element rect when in doubt. Menus need arrow-key navigation, Escape to close, and focus return. Right-click on touchpads (two-finger click) works the same. Don't show hover-only controls on touch, where they are unreachable or sticky.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/Element/contextmenu_event",
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/@media/hover"
+   ]
+  },
+  {
+   "title": "Drag & drop on touch: pointer-driven reordering with a handle (or long-press pickup), autoscroll, keyboard fallback",
+   "what": "Use pointer events with setPointerCapture on a drag handle that has touch-action:none to reorder lists, kanban cards and similar items. A lift effect and haptic mark pickup, and the list scrolls itself near its edges. Keep HTML5 DnD for desktop file drops and cross-app drags.",
+   "why": "HTML5 DnD on touch is inconsistent (long-press semantics, no autoscroll control, platform drag previews). Pointer-driven drags feel like native reorder controls.",
+   "how": "handle.style.touchAction = 'none';\nhandle.addEventListener('pointerdown', (e) => {\n  handle.setPointerCapture(e.pointerId);\n  const startY = e.clientY;\n  item.classList.add('lifted'); tick();\n  let raf = 0, y = startY;\n  const loop = () => {\n    const r = list.getBoundingClientRect();\n    if (y < r.top + 48) list.scrollBy(0, -8); else if (y > r.bottom - 48) list.scrollBy(0, 8);\n    item.style.transform = `translateY(${y - startY}px)`;\n    previewDrop(y); raf = requestAnimationFrame(loop);\n  };\n  raf = requestAnimationFrame(loop);\n  const move = (ev: PointerEvent) => { y = ev.clientY; };\n  const up = () => {\n    cancelAnimationFrame(raf); handle.removeEventListener('pointermove', move);\n    item.classList.remove('lifted'); item.style.transform = ''; commitDrop(y);\n  };\n  handle.addEventListener('pointermove', move);\n  handle.addEventListener('pointerup', up, { once: true });\n  handle.addEventListener('pointercancel', up, { once: true });\n});\n\n.drag-handle { cursor: grab; } .lifted { cursor: grabbing; box-shadow: var(--shadow-lifted); scale: 1.02; }",
+   "support": "Pointer capture: Chrome 55, Firefox 59, Safari 13. HTML DnD on touch: iOS/iPadOS 15+ (iPadOS 11+ for some drags) and Chrome Android ~96+ per community reports; BCD's iOS rows are coarse. Don't rely on it for in-app reordering.",
+   "gotchas": "touch-action is fixed at pointerdown, so dragging a whole row after a long-press needs touch events instead: start a timer on touchstart (passive), and once it fires call preventDefault() on the next cancelable touchmove (passive:false listener) to stop the scroll. Yurt's board uses a touch-action:none grab handle (DocView.tsx). Provide a non-drag path (move up/down buttons or arrow keys plus an aria-live announcement) for accessibility. Suppress the click that follows a mouse drag. Mark images inside items draggable=false so the browser's image drag doesn't start instead.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/Element/setPointerCapture",
+    "https://caniuse.com/dragndrop",
+    "https://github.com/timruffles/mobile-drag-drop",
+    "apps/web/src/ui/DocView.tsx"
+   ]
+  },
+  {
+   "title": "Pinch-zoom, pan and double-tap zoom in image viewers (touch + trackpad)",
+   "what": "A lightbox that zooms around the pinch midpoint with two pointers, pans with one finger when zoomed, and rubber-bands past its limits. It also handles desktop trackpad pinch: Chromium/Firefox send wheel with ctrlKey, Safari macOS sends gesture events.",
+   "why": "Photos in a native app pinch smoothly in place. Pinching a web image usually zooms the whole page and its UI instead.",
+   "how": "const pts = new Map<number, { x: number; y: number }>();\nlet scale = 1, start = 1, d0 = 0;\nconst clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));\nconst dist = () => { const [a, b] = [...pts.values()]; return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0; };\nviewer.style.touchAction = 'none';\nviewer.addEventListener('pointerdown', (e) => { viewer.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pts.size === 2) { d0 = dist(); start = scale; } });\nviewer.addEventListener('pointermove', (e) => {\n  const p = pts.get(e.pointerId); if (!p) return;\n  const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;\n  if (pts.size === 2 && d0 > 0) scale = clamp(start * (dist() / d0), 1, 6); else if (scale > 1) pan(dx, dy);\n  apply();\n});\nconst lift = (e: PointerEvent) => { pts.delete(e.pointerId); d0 = 0; };\nviewer.addEventListener('pointerup', lift); viewer.addEventListener('pointercancel', lift);\n// Trackpad pinch on Chromium/Firefox\nviewer.addEventListener('wheel', (e) => { if (!e.ctrlKey) return; e.preventDefault(); scale = clamp(scale * Math.exp(-e.deltaY / 100), 1, 6); apply(); }, { passive: false });\n// Safari (macOS trackpad, iOS): non-standard GestureEvent\ninterface GestureEvent extends UIEvent { readonly scale: number }\nconst isGesture = (e: Event): e is GestureEvent => 'scale' in e;\nviewer.addEventListener('gesturestart', (e) => { e.preventDefault(); start = scale; });\nviewer.addEventListener('gesturechange', (e) => { if (!isGesture(e)) return; e.preventDefault(); scale = clamp(start * e.scale, 1, 6); apply(); });",
+   "support": "Multi-pointer Pointer Events: Chrome 55, Firefox 59, Safari 13. wheel+ctrlKey for pinch: Chrome, Edge, Firefox (de facto). GestureEvent: Safari macOS 9+, iOS 2+ (non-standard, Safari only).",
+   "gotchas": "Zoom around the focal point: adjust the translation by (midpoint - origin) * (1 - newScale/oldScale), or the image drifts. Swap to a higher-resolution source when zoomed. Double-tap toggles 1x/2.5x at the tap point; implement it yourself (see the double-tap item). At scale 1, a vertical drag dismisses and a horizontal one goes to the next image. touch-action:none goes on the viewer only, never the page. Never disable page zoom globally to make this work.",
+   "priority": "should",
+   "sources": [
+    "https://danburzo.ro/dom-gestures/",
+    "https://github.com/pmndrs/use-gesture/discussions/518",
+    "https://developer.mozilla.org/en-US/docs/Web/API/GestureEvent",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "No tap delay, no double-tap zoom, no focus zoom, while keeping pinch-zoom",
+   "what": "Use a device-width viewport, touch-action:manipulation on the root, and \u226516px fields on touch. Taps fire immediately, double-taps don't zoom, and iOS doesn't zoom into focused inputs, while users can still pinch-zoom for accessibility.",
+   "why": "Laggy taps, accidental double-tap zoom on fast-tapped buttons, and the page zooming when you focus the composer are classic 'this is a website' moments.",
+   "how": "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n\nhtml { touch-action: manipulation; -webkit-text-size-adjust: 100%; }\n@media (pointer: coarse) { input, textarea, select, [contenteditable] { font-size: max(16px, 1em); } }",
+   "support": "width=device-width removed the tap delay in Chrome 32 (2014) and iOS 9.3 (2016). touch-action:manipulation: Chrome 36, Firefox 52, iOS 9.3.",
+   "gotchas": "Never use maximum-scale=1 or user-scalable=no: it fails axe/WCAG 1.4.4, and iOS has ignored user-scalable=no since iOS 10 anyway. iOS zooms into any focused field whose computed font-size is under 16px (Yurt forces 16px on coarse pointers with !important to beat inline sizes). FastClick and similar libraries are obsolete and harmful. Elements with pan-y or none touch-action also don't double-tap zoom.",
+   "priority": "must",
+   "sources": [
+    "https://webkit.org/blog/5610/more-responsive-tapping-on-ios/",
+    "https://developer.chrome.com/blog/300ms-tap-delay-gone-away",
+    "packages/ui/tokens/base.css"
+   ]
+  },
+  {
+   "title": "Remove the grey tap flash and design real pressed (:active) states",
+   "what": "Turn off the WebKit/Blink tap highlight rectangle and give every tappable element its own immediate pressed state (scale, tint or opacity). On iOS this needs a touchstart listener so :active applies.",
+   "why": "The translucent grey box on tap is unmistakably web, and buttons with no press feedback feel dead. Native controls react on touch-down.",
+   "how": "html { -webkit-tap-highlight-color: transparent; }\n.btn { transition: transform 120ms ease-out, background-color 120ms; }\n.btn:active { transform: scale(.97); background: var(--btn-press); transition-duration: 0s; }\n/* lists: delay the pressed tint a little so it doesn't flash when the touch becomes a scroll */\n.row:active { background: var(--row-press); transition: background-color 0s 60ms; }\n\n// iOS Safari only applies :active when a touchstart listener exists on the element or <body>\ndocument.body.addEventListener('touchstart', () => {}, { passive: true });",
+   "support": "-webkit-tap-highlight-color: Chrome/Chrome Android, Edge, iOS Safari (Firefox has no tap highlight). :active everywhere, but iOS applies it only with a touchstart handler (BCD note).",
+   "gotchas": "Removing the highlight without adding :active leaves no feedback at all. Frameworks may already register touchstart at their root (React does); verify on a device rather than assuming. The 60ms delay is a tuning heuristic, not a platform constant. Keep pressed styles off disabled controls. Respect prefers-reduced-motion for scale animations, though a colour change is fine.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/:active",
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/-webkit-tap-highlight-color",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Kill sticky hover on touch: wrap :hover in @media (hover: hover) and (pointer: fine)",
+   "what": "Only apply hover styles and hover-revealed UI when the primary input can actually hover.",
+   "why": "On phones, :hover sticks after a tap, so a button stays highlighted. On iOS, a :hover that reveals content turns the first tap into a 'hover' and needs a second tap to click.",
+   "how": "@media (hover: hover) and (pointer: fine) {\n  .item:hover { background: var(--hover); }\n  .card:hover .quick-actions { opacity: 1; }\n}\n/* 'is any mouse/trackpad connected at all?' (hybrids, iPad + trackpad) */\n@media (any-hover: hover) { .tooltip-hint { display: inline; } }",
+   "support": "hover/pointer media: Chrome 38/41, Firefox 64, Safari 9. any-hover/any-pointer: Chrome 41, Firefox 64, Safari 9.",
+   "gotchas": "Some Android devices (certain Samsung models) wrongly match (hover: hover) (BCD note), which is why pointer:fine is added. For behaviour rather than style, decide per event with pointerType instead of media queries, since hybrids switch inputs mid-session. JS: matchMedia('(hover: hover)') with a change listener.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/@media/hover",
+    "https://css-tricks.com/annoying-mobile-double-tap-link-issue/",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Hit targets sized by pointer type (44pt iOS / 48dp Android), with invisible hit-area expansion",
+   "what": "Interactive elements get at least 44\u00d744 CSS px on coarse pointers, and can stay denser for mouse. A pseudo-element enlarges the hit area of small icons without changing layout.",
+   "why": "Mis-taps on tiny icons are a constant web-app frustration, and native toolkits enforce minimum touch sizes.",
+   "how": ":root { --hit: 32px; }\n@media (pointer: coarse) { :root { --hit: 44px; } }\n.icon-btn { position: relative; min-width: var(--hit); min-height: var(--hit); }\n.icon-btn.compact::after { content: ''; position: absolute; inset: -8px; } /* larger hit area, same layout */\n.toolbar { gap: 8px; } /* spacing also counts against mis-taps */",
+   "support": "pointer media query: Chrome 41 (Android 50), Firefox 64, Safari 9.",
+   "gotchas": "References: Apple HIG 44\u00d744pt, Material 48\u00d748dp, WCAG 2.2 2.5.8 (AA) 24\u00d724 CSS px minimum, 2.5.5 (AAA) 44\u00d744. Overlapping expanded areas steal each other's taps, so keep 8px spacing. iPadOS Safari reports a desktop UA; use navigator.maxTouchPoints > 1 if you must tell an iPad from a Mac. Hybrid laptops may report pointer:fine while being touched, so size primary actions generously regardless.",
+   "priority": "must",
+   "sources": [
+    "https://developer.apple.com/design/human-interface-guidelines/accessibility",
+    "https://m3.material.io/foundations/designing/structure",
+    "https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html"
+   ]
+  },
+  {
+   "title": "Haptics on Android: the Vibration API behind a user setting, reduced motion and activation checks",
+   "what": "Short vibration patterns for meaningful moments: a send, a gesture arming, a long-press opening, a mention arriving while visible. Fire them only if the device can, the user hasn't disabled haptics in your settings, reduced motion isn't requested, and the page has had user activation.",
+   "why": "A tiny tick when a swipe arms or a menu opens makes touch interactions feel physical, the way native apps do.",
+   "how": "const PATTERNS = { tap: [10], tick: [15], notice: [12, 60, 12] } as const;\nexport type Haptic = keyof typeof PATTERNS;\nexport function haptic(kind: Haptic, enabledInSettings: boolean): boolean {\n  if (!enabledInSettings || !('vibrate' in navigator)) return false;\n  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return false;\n  if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return false; // Chrome would block + log\n  if (document.visibilityState !== 'visible') return false;\n  return navigator.vibrate([...PATTERNS[kind]]);\n}",
+   "support": "Chrome Android 32+ (user gesture required since Chrome 60; blocked in cross-origin iframes since 55), Samsung Internet and Edge Android. Firefox Android: API present but disabled since 79 (returns true, no vibration). Firefox desktop: removed in 129. Safari/iOS: never supported. navigator.userActivation: Chrome 72, Firefox 120, Safari 16.4.",
+   "gotchas": "A true return doesn't mean the user felt anything (Firefox Android, desktop Chrome without a motor), and you can't detect that. Some phones reportedly clip pulses under ~10ms (Yurt's 'tap' is 8ms, so test on cheap devices), and battery saver or silent mode may suppress vibration. Keep pulses short (10-20ms) so they feel like taps, not buzzes, and never fire them for a stream of incoming events. There's no prefers-reduced-haptics; reduced motion is a reasonable proxy, but also offer an explicit toggle. A 'Web Haptics API' (navigator.playHaptics(effect, intensity) plus CSS haptic declarations, effects hint/edge/tick/align) is only a WICG proposal with a Chromium intent to prototype. It hasn't shipped, so don't build on it.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/Navigator/vibrate",
+    "https://bugzilla.mozilla.org/show_bug.cgi?id=1900037",
+    "https://issues.chromium.org/issues/41361876",
+    "https://github.com/MicrosoftEdge/MSEdgeExplainers/blob/main/Haptics/explainer.md",
+    "https://github.com/WICG/web-haptics",
+    "https://github.com/mxerf/tappt/pull/5",
+    "apps/web/src/lib/haptics.ts"
+   ]
+  },
+  {
+   "title": "Haptics on iPhone: the <input type=checkbox switch> label trick (iOS 18+, real taps only since 26.5)",
+   "what": "Safari plays a Taptic Engine tick when a native switch toggles. A transparent <label> over a button, wired to a hidden switch, turns the user's real tap into a switch toggle (a tick) while your click handler runs the action.",
+   "why": "It is the only way to get haptics in Safari on iPhone, which has no Vibration API. Ticks on send, toggle and confirm make an installed app feel native.",
+   "how": "<span class=\"haptic-host\">\n  <button type=\"button\" id=\"send\">Send</button>\n  <input type=\"checkbox\" switch id=\"hx-send\" class=\"haptic-switch\" aria-hidden=\"true\" tabindex=\"-1\">\n  <label for=\"hx-send\" class=\"haptic-label\" aria-hidden=\"true\"></label>\n</span>\n\n.haptic-host { position: relative; display: inline-block; }\n.haptic-switch { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }\n.haptic-label { position: absolute; inset: 0; }\n\n// Only where there is no Vibration API on a touch device (iPhone)\nconst iosHaptics = !('vibrate' in navigator) && matchMedia('(pointer: coarse)').matches;\nlabel.addEventListener('click', () => send()); // the real tap toggled the switch (tick); run the action here",
+   "support": "Switch control: Safari 17.4+ (non-standard, WebKit only), with no haptic on 17.4. iOS 18.0-26.4: any toggle ticks, including label.click() from script within ~1s of a gesture. iOS 26.5+: only a real finger tap on the switch or its label ticks; a programmatic label.click() reaches the switch as an untrusted click and is silent (WebKit change, bug 309082 per library authors). No effect on Android, desktop, or iPad (no Taptic Engine).",
+   "gotchas": "This is a hack on non-standard behaviour that already broke once (26.5), so wrap it behind your haptic() abstraction and be ready to drop it. Since drags never produce a click, ticks at swipe thresholds, from long-press timers or after an await are impossible on 26.5+; only the first haptic inside a real tap works. The overlay covers the element's children, so attach it to leaf controls, never containers. Keep the switch out from under the finger so scrolls that start on the element still scroll. Hide the switch and label from assistive tech (aria-hidden, tabindex=-1). Keyboard activation hits the real button, with no haptic, which is fine. It honours the iOS System Haptics setting (presumably; verify). Libraries: ios-haptics, tappt. Test on real devices on every iOS release.",
+   "priority": "nice",
+   "sources": [
+    "https://webkit.org/blog/15054/an-html-switch-control/",
+    "https://github.com/ionic-team/ionic-framework/issues/29942",
+    "https://github.com/tijnjh/ios-haptics",
+    "https://github.com/mxerf/tappt/pull/5",
+    "https://github.com/beejsbj/dotfight/pull/7",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "User activation rules: on touch, gated work belongs in pointerup/click, not pointerdown",
+   "what": "Audio playback, vibrate, keyboard-opening focus, fullscreen, popups and clipboard writes need user activation. Per the HTML spec, a touch pointerdown is not an activation-triggering event; pointerup, touchend, click and keydown are.",
+   "why": "Doing the work on the wrong event makes the first tap appear to do nothing (no sound, no keyboard), which is one of the subtlest 'broken web app' feelings.",
+   "how": "// Activation-triggering (HTML): keydown (not Esc/reserved), mousedown, pointerdown ONLY if pointerType=mouse,\n// pointerup if pointerType != mouse, touchend.\nconst once = () => { unlockAudio(); };\nfor (const type of ['pointerup', 'touchend', 'click', 'keydown'] as const)\n  addEventListener(type, once, { capture: true, passive: true });\n\nif (navigator.userActivation?.isActive) { /* transient activation: may open popups / play audio now */ }\nif (navigator.userActivation?.hasBeenActive) { /* sticky: vibrate, autoplay in Chrome */ }",
+   "support": "navigator.userActivation: Chrome 72, Firefox 120, Safari 16.4. The activation-triggering event list is in the HTML Standard (User Activation v2).",
+   "gotchas": "Yurt unlocks the ringtone on pointerdown and keydown (Ringing.tsx). On phones the touch pointerdown isn't activation, so add pointerup/click. Transient activation expires (a few seconds in Chromium, about 1s reported for WebKit), and an `await` before the gated call can lose it in Safari, so call play(), focus() and vibrate() synchronously inside the handler, then do async work. Some APIs consume activation (popups), others only need sticky activation (vibrate, Chrome autoplay).",
+   "priority": "must",
+   "sources": [
+    "https://html.spec.whatwg.org/multipage/interaction.html#activation-triggering-input-event",
+    "https://webkit.org/blog/13862/the-user-activation-api/",
+    "https://developer.mozilla.org/en-US/docs/Web/API/UserActivation",
+    "apps/web/src/ui/Ringing.tsx",
+    "apps/web/src/lib/ringer.ts"
+   ]
+  },
+  {
+   "title": "Unlock audio on the first tap anywhere (ringtones, notification sounds, calls)",
+   "what": "On the first activation, resume a shared AudioContext and 'bless' any <audio> element you'll play later without a gesture (play it once inside the gesture, then pause it). Keep reusing those same objects.",
+   "why": "Incoming-call ringtones and message sounds must be able to play later without a tap. Without unlocking, the first call is silent.",
+   "how": "let ctx: AudioContext | undefined;\nconst ringtone = Object.assign(new Audio('/ringtone.m4a'), { loop: true, preload: 'auto' });\nlet unlocked = false;\nexport function unlockAudio() {\n  ctx ??= new AudioContext({ latencyHint: 'interactive' });\n  if (ctx.state !== 'running') void ctx.resume();\n  if (unlocked) return;\n  ringtone.muted = true;\n  ringtone.play().then(() => { ringtone.pause(); ringtone.currentTime = 0; ringtone.muted = false; unlocked = true; }, () => {});\n}\ndocument.addEventListener('visibilitychange', () => { if (!document.hidden && ctx && ctx.state !== 'running') void ctx.resume(); });",
+   "support": "AudioContext.resume: Chrome 41, Firefox 40, Safari 9. Autoplay: Chrome allows sound after sticky activation (plus engagement); Safari requires the specific element/context to have been started in a gesture.",
+   "gotchas": "Muted play() is often allowed without any activation, so a resolved muted play doesn't prove the element is unlocked for sound. Run the unlock from a real activation event (pointerup/click/keydown), not touch pointerdown. iOS can leave a context 'running' yet silent if it was resumed outside a valid gesture (reported), and suspends or interrupts it when backgrounded, so re-resume on visibility. A call arriving before any tap can't make sound: show it visually and use a system notification. Yurt: lib/ringer.ts unlocks the same element and plays it later, which iOS requires.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Autoplay",
+    "https://www.mattmontag.com/web/unlock-web-audio-in-safari-for-ios-and-macos",
+    "https://html.spec.whatwg.org/multipage/interaction.html#activation-triggering-input-event",
+    "apps/web/src/lib/ringer.ts"
+   ]
+  },
+  {
+   "title": "Subtle UI sounds with Web Audio and the right audio session (don't pause the user's music)",
+   "what": "Pre-decode short sounds (sent, received, error) into AudioBuffers and play them through Web Audio at low volume. On Safari, set navigator.audioSession.type so UI sounds mix with other audio and obey the silent switch.",
+   "why": "Native apps play quiet, instant UI sounds that never stop your podcast. An <audio> element per sound has latency and can interrupt background audio.",
+   "how": "type WithSession = Navigator & { audioSession: { type: string } };\nconst hasSession = (n: Navigator): n is WithSession => 'audioSession' in n;\nif (hasSession(navigator)) navigator.audioSession.type = 'ambient'; // mixes with other audio; silent switch mutes it\n\nconst buffers = new Map<string, AudioBuffer>();\nexport async function load(ctx: AudioContext, name: string, url: string) {\n  buffers.set(name, await ctx.decodeAudioData(await (await fetch(url)).arrayBuffer()));\n}\nexport function play(ctx: AudioContext, name: string, enabled: boolean) {\n  const buf = buffers.get(name);\n  if (!enabled || !buf || ctx.state !== 'running' || document.hidden) return;\n  const src = ctx.createBufferSource(); const gain = ctx.createGain();\n  gain.gain.value = 0.35; src.buffer = buf; src.connect(gain).connect(ctx.destination); src.start();\n}",
+   "support": "navigator.audioSession: Safari/iOS 16.4+ only (Firefox Nightly behind preview). Types: auto, playback, transient, transient-solo, ambient, play-and-record. Web Audio everywhere.",
+   "gotchas": "On iOS, Web Audio goes through an ambient-like session by default, which the ring/silent switch mutes on the speaker. Use 'playback' only for media or calls that must sound in silent mode; a ringtone respecting silent mode matches native behaviour. Pair every sound with an in-app 'Sounds' toggle. Don't play sounds for your own actions too often (send is fine, every keystroke is not). Declare the AudioSession types locally if your TS lib lacks them, as here.",
+   "priority": "nice",
+   "sources": [
+    "https://www.w3.org/TR/audio-session/",
+    "https://nattog.dev/blog/web-audio-ios-unmute",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Don't pop the keyboard: autofocus only with a fine pointer; focus synchronously inside taps",
+   "what": "Auto-focus text fields on mount only when the primary pointer is fine (desktop). On touch, focus only in direct response to a tap and inside that handler. After sending, refocus synchronously so the keyboard stays up.",
+   "why": "A keyboard that pops up on navigation and covers half the screen feels like a website. A keyboard that refuses to open when you tap 'Reply' feels broken.",
+   "how": "useEffect(() => {\n  if (matchMedia('(pointer: fine)').matches) composer.current?.focus({ preventScroll: true });\n}, []);\n\n// iOS opens the keyboard only for focus() inside the user's gesture: do it before any await\nfunction onReplyTap() {\n  composer.focus();\n  void loadDraft().then((d) => { composer.value = d; });\n}\n// Target doesn't exist yet? Focus a hidden proxy input synchronously, then move focus once it renders.\n\n// Send button: keep focus (and the keyboard) in the textarea\nsendBtn.addEventListener('click', () => { send(); textarea.focus(); });",
+   "support": "focus({ preventScroll }): Chrome 64, Firefox 68, Safari 15 / iOS 15.5, but BCD lists no support in Chrome Android or Firefox Android. focus({ focusVisible }): Chrome 145, Firefox 104, Safari 18.4.",
+   "gotchas": "The autofocus attribute and focus() after an await or setTimeout won't show the keyboard on iOS. Some apps preventDefault the send button's pointerdown/mousedown to keep focus in place; behaviour differs across iOS versions (Safari 27 fixed pointerdown.preventDefault suppressing compat mouse events), so test it. Chromium's VirtualKeyboard API (virtualkeyboardpolicy='manual' plus navigator.virtualKeyboard.show()/hide()) and inputmode='none' give finer control on Chromium only. Yurt: Composer autofocuses only under (pointer: fine).",
+   "priority": "must",
+   "sources": [
+    "https://gist.github.com/cathyxz/73739c1bdea7d7011abb236541dc9aaa",
+    "https://developer.mozilla.org/en-US/docs/Web/API/VirtualKeyboard_API",
+    "https://github.com/mdn/browser-compat-data",
+    "apps/web/src/ui/Composer.tsx"
+   ]
+  },
+  {
+   "title": "Show the right on-screen keyboard: type, inputmode and enterkeyhint",
+   "what": "Every field declares the keyboard it needs (numeric pad, email, URL, search) and what its Return key does (send, search, next, done, go).",
+   "why": "A 'Send' or 'Search' label on the Return key and a digits-only pad for codes are details users notice immediately in native apps.",
+   "how": "<textarea enterkeyhint=\"send\"></textarea>\n<input type=\"search\" enterkeyhint=\"search\">\n<input type=\"email\" autocomplete=\"email\" enterkeyhint=\"next\">\n<input type=\"tel\" autocomplete=\"tel\">\n<input type=\"url\" inputmode=\"url\">\n<input inputmode=\"numeric\" autocomplete=\"one-time-code\" maxlength=\"6\">\n<input inputmode=\"decimal\" enterkeyhint=\"done\">",
+   "support": "enterkeyhint: Chrome 77, Firefox 94, Safari 13.1 / iOS 13.4. inputmode: Chrome 66, Firefox 95 (Android 79), Safari 12.1 / iOS 12.2 (inputmode='none' from iOS 13).",
+   "gotchas": "enterkeyhint only changes the label, so implement the behaviour (move focus on 'next', submit on 'go'/'search', blur on 'done'). Use inputmode='numeric' rather than type=number for codes, PINs and card numbers: number adds spinners, loses leading zeros and changes on wheel. enterkeyhint values: enter, done, go, next, previous, search, send.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/HTML/Global_attributes/enterkeyhint",
+    "https://developer.mozilla.org/en-US/docs/Web/HTML/Global_attributes/inputmode",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Autofill and one-tap codes: autocomplete tokens, one-time-code and WebOTP",
+   "what": "Mark fields with precise autocomplete tokens so the OS can offer saved names, emails, passwords and SMS or email codes above the keyboard. On Chrome Android, WebOTP can read a domain-bound SMS code after one tap.",
+   "why": "One-tap code entry and filled-in credentials are some of the most 'native' moments in onboarding.",
+   "how": "<input name=\"code\" inputmode=\"numeric\" autocomplete=\"one-time-code\" maxlength=\"6\" pattern=\"[0-9]{6}\">\n<input name=\"username\" autocomplete=\"username\" autocapitalize=\"none\" spellcheck=\"false\">\n<input name=\"password\" type=\"password\" autocomplete=\"current-password\">\n\ndeclare global { interface CredentialRequestOptions { otp?: { transport: string[] } } }\nif ('OTPCredential' in window) {\n  const ac = new AbortController();\n  navigator.credentials.get({ otp: { transport: ['sms'] }, signal: ac.signal }).then((c) => {\n    if (c && 'code' in c && typeof c.code === 'string') codeInput.value = c.code;\n  }, () => {});\n}\n// SMS last line: @example.com #123456",
+   "support": "autocomplete: universal. one-time-code suggestions: iOS Safari (from Messages/Mail) and Chrome Android. WebOTP (OTPCredential): Chrome Android 84, desktop Chrome 93 (cross-device); not in Firefox or Safari.",
+   "gotchas": "Abort the WebOTP request when the form is submitted manually. Use new-password on sign-up so password managers generate one. autocomplete='off' is widely ignored for credentials, so don't fight autofill. Yurt: Settings uses inputmode='numeric' with autocomplete='one-time-code'.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/HTML/Attributes/autocomplete",
+    "https://developer.mozilla.org/en-US/docs/Web/API/WebOTP_API",
+    "https://github.com/mdn/browser-compat-data",
+    "apps/web/src/ui/Settings.tsx"
+   ]
+  },
+  {
+   "title": "Tune text correction per field: autocapitalize, autocorrect, spellcheck, writingsuggestions",
+   "what": "Turn capitalization, autocorrect, spellcheck and inline writing suggestions off for handles, codes, URLs and keys, and keep them on for prose (messages).",
+   "why": "An autocorrected username or invite code ('Yurt' becoming 'Yurtle') is a frustrating tell. Native apps configure these per field.",
+   "how": "<input name=\"handle\" autocapitalize=\"none\" autocorrect=\"off\" spellcheck=\"false\" writingsuggestions=\"false\">\n<input name=\"invite\" autocapitalize=\"characters\" autocorrect=\"off\" spellcheck=\"false\">\n<textarea name=\"message\" autocapitalize=\"sentences\" autocorrect=\"on\" spellcheck=\"true\"></textarea>",
+   "support": "autocapitalize: Chrome 43 (matters on Android), Firefox 111, iOS Safari (not macOS Safari). autocorrect: Safari 14.1 / iOS 14.5, Firefox 136, Chrome 153. spellcheck: universal (mobile Chrome 47+). writingsuggestions: Chrome 124, Safari 18; not Firefox.",
+   "gotchas": "autocapitalize has no effect on type=email/url/password (already off) or on contenteditable in iOS (WebKit bug 164538). Yurt's onboarding sets spellCheck={false} and autoCapitalize='none' on the key/name field; add autocorrect='off' there too.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/HTML/Global_attributes/autocapitalize",
+    "https://developer.mozilla.org/en-US/docs/Web/HTML/Global_attributes/autocorrect",
+    "https://developer.mozilla.org/en-US/docs/Web/HTML/Global_attributes/writingsuggestions",
+    "https://github.com/mdn/browser-compat-data",
+    "apps/web/src/ui/Onboarding.tsx"
+   ]
+  },
+  {
+   "title": "Enter-to-send done right: IME-safe, platform-appropriate, auto-growing composer",
+   "what": "On desktop, Enter sends and Shift+Enter adds a newline. On touch keyboards, either Return inserts a newline and a Send button sends (the iMessage/WhatsApp convention), or enterkeyhint='send' and Return sends; pick one and be consistent. Never send while an IME composition is being confirmed. Let the textarea grow with its content.",
+   "why": "Sending a half-typed Japanese or Chinese message, or being unable to type a newline on a phone, are bugs native chat apps don't have.",
+   "how": "function onKeyDown(e: KeyboardEvent) {\n  if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return; // Safari fires the IME-confirm Enter after compositionend\n  const touchOnly = matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;\n  if (e.shiftKey || touchOnly) return; // newline\n  e.preventDefault(); send();\n}\n\ntextarea.composer { field-sizing: content; min-height: 1lh; max-height: 8lh; }",
+   "support": "isComposing: universal. field-sizing: Chrome 123, Firefox 152, Safari 26.2 (fall back to JS measuring elsewhere).",
+   "gotchas": "keyCode is deprecated but still the only signal for WebKit's post-composition Enter. Yurt's Composer checks only e.nativeEvent.isComposing, so add keyCode 229. If touch Return inserts a newline, set enterkeyhint='enter' (or leave it unset) so the label doesn't promise 'send'. A hardware keyboard on an iPad (any-pointer: fine) should behave like desktop.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/assistant-ui/assistant-ui/issues/8319",
+    "https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/isComposing",
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/field-sizing",
+    "apps/web/src/ui/Composer.tsx"
+   ]
+  },
+  {
+   "title": "Desktop keyboard shortcuts with platform modifiers, discoverable hints and layer-aware Escape",
+   "what": "Cmd on Apple and Ctrl elsewhere for app shortcuts (jump to \u2318K, settings \u2318,, search), single-key shortcuts only outside text fields, and Escape closing the topmost layer. Shortcuts are shown in menus and tooltips and exposed with aria-keyshortcuts.",
+   "why": "Power users expect native-app shortcuts. Showing 'Ctrl' on a Mac, or shortcuts firing while typing, are web tells.",
+   "how": "const apple = /Mac|iPhone|iPad/.test(navigator.platform);\nconst mod = (e: KeyboardEvent) => (apple ? e.metaKey : e.ctrlKey);\naddEventListener('keydown', (e) => {\n  if (e.defaultPrevented || e.isComposing) return;\n  const typing = e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]:not([contenteditable=\"false\"])');\n  if (mod(e) && e.key.toLowerCase() === 'k') { e.preventDefault(); openJump(); return; }\n  if (!typing && !mod(e) && e.key === '/') { e.preventDefault(); focusSearch(); return; }\n  if (e.key === 'Escape' && !typing) closeTopLayer();\n});\n\n<button aria-keyshortcuts=\"Meta+K\">Jump to\u2026 <kbd>\u2318K</kbd></button>",
+   "support": "KeyboardEvent.key/code: universal. navigator.platform is deprecated but still works everywhere (navigator.userAgentData.platform is Chromium-only). Keyboard.getLayoutMap(): Chromium only.",
+   "gotchas": "Browser-reserved combos (Ctrl/Cmd+W, T, N, Tab) never reach a page in a tab. Override Cmd+F only if your search is genuinely better (Yurt does for in-app search). Use e.code for position-based shortcuts that must survive non-US layouts, and e.key for mnemonic letters. Skip e.repeat for toggles. Modal <dialog> handles its own Escape. iPad with a hardware keyboard sends the same events.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key",
+    "https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Attributes/aria-keyshortcuts",
+    "https://github.com/mdn/browser-compat-data",
+    "apps/web/src/App.tsx"
+   ]
+  },
+  {
+   "title": "Selection behaviour: no selecting UI chrome, selectable content, one-tap select for codes",
+   "what": "Buttons, tabs, nav, toolbars and labels are not selectable. Content (messages, docs) is, and so are fields. Codes and links select whole with one tap. Selection uses your brand colour.",
+   "why": "Double-clicking a button and highlighting its label, or long-pressing a tab and getting a text loupe, are classic web tells.",
+   "how": "button, nav, header, [role=\"tab\"], .toolbar, .chrome-label { -webkit-user-select: none; user-select: none; }\n.content, .message-body { -webkit-user-select: text; user-select: text; }\ninput, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; } /* never inherit none into fields */\n.invite-code, .hash { -webkit-user-select: all; user-select: all; }\n::selection { background: var(--selection-bg); color: var(--selection-fg); }",
+   "support": "user-select unprefixed: Chrome 54, Firefox 69. Safari stable still needs -webkit-user-select (unprefixed only in Technology Preview per BCD 8.1.4). user-select: all/none/text widely supported.",
+   "gotchas": "Always write both prefixed and unprefixed forms. Historically, -webkit-user-select:none inherited into iOS inputs made them uneditable, hence the explicit reset for fields. Don't apply none to content on desktop. On touch, if long-press opens your menu (with selection off), offer Copy and Select text actions. Safari 27 fixed touch selection handles being blocked by page touch handlers.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/user-select",
+    "https://github.com/mdn/browser-compat-data",
+    "https://webkit.org/blog/18325/webkit-features-for-safari-27-0/",
+    "apps/web/src/ui/Message.tsx"
+   ]
+  },
+  {
+   "title": "cursor: default on UI chrome; pointer only for real links; grab/grabbing for draggables",
+   "what": "Use the arrow cursor over app chrome and labels instead of an I-beam, and the hand only on links (optionally on buttons, as a design choice). Drag handles get grab/grabbing and resizers get col-resize/row-resize.",
+   "why": "An I-beam over a toolbar label, or a hand on every surface, signals 'web page'. Desktop apps show the arrow over controls.",
+   "how": ".app-chrome, .app-chrome * { cursor: default; }\na[href] { cursor: pointer; }\n.drag-handle { cursor: grab; } .dragging, .dragging * { cursor: grabbing; }\n.split-resizer { cursor: col-resize; }\n.content, input, textarea { cursor: auto; }",
+   "support": "Universal on desktop; irrelevant on touch.",
+   "gotchas": "Whether buttons get the pointer hand is a design-system decision (macOS and Windows native buttons use the arrow), but be consistent. Don't let `cursor: default` override text cursors in editable areas.",
+   "priority": "nice",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/cursor"
+   ]
+  },
+  {
+   "title": "No ghost drags or callouts on UI images and links",
+   "what": "Stop UI images (avatars, logos, icons) and app-chrome links from producing a browser drag ghost on desktop, and the save, preview or share callout on iOS long-press.",
+   "why": "Dragging an avatar and getting a translucent copy of it, or long-pressing a tab and getting a link preview, is web behaviour native apps never show.",
+   "how": "<img src=\"/avatar.png\" alt=\"\" draggable=\"false\">\n<a href=\"/settings\" draggable=\"false\">Settings</a>\n\n.ui img, .ui svg, .ui a { -webkit-user-drag: none; }\n@media (pointer: coarse) { .ui img, .ui a { -webkit-touch-callout: none; } }",
+   "support": "draggable: universal. -webkit-user-drag: Chrome/Edge, Safari (not Firefox, where draggable=false is enough). -webkit-touch-callout: iOS Safari only.",
+   "gotchas": "Leave content images (shared photos) draggable and saveable, since users expect that. On links, draggable=false also prevents dragging the link to the tab bar, which is fine for app chrome but bad for content links.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/HTML/Global_attributes/draggable",
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/-webkit-touch-callout",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Focus rings only for keyboard users (:focus-visible)",
+   "what": "Show focus outlines when focus comes from the keyboard (or a script after keyboard use), not after a tap or click.",
+   "why": "A blue ring around a button after every tap looks unpolished, and removing focus styles entirely breaks keyboard users.",
+   "how": ":focus:not(:focus-visible) { outline: none; }\n:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }\n\n// after keyboard-driven navigation, force the ring on programmatic focus\nnextItem.focus({ focusVisible: true });",
+   "support": ":focus-visible: Chrome 86, Firefox 85, Safari 15.4. focus({ focusVisible }): Firefox 104, Safari 18.4, Chrome 145.",
+   "gotchas": "Text inputs always match :focus-visible when focused, which is expected. Use box-shadow rings if outlines clip inside overflow:hidden containers. Yurt's base.css uses :focus-visible with a token ring.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/:focus-visible",
+    "https://github.com/mdn/browser-compat-data",
+    "packages/ui/tokens/base.css"
+   ]
+  },
+  {
+   "title": "Smooth drag rendering: transforms in requestAnimationFrame, coalesced events for ink",
+   "what": "During drags, write only transform/opacity, once per frame. Avoid re-rendering a framework tree on every pointermove. For drawing or handwriting, read all coalesced samples and optionally predicted ones.",
+   "why": "Content that lags behind the finger or stutters at 120Hz is the clearest 'not native' signal for gesture UIs.",
+   "how": "let raf = 0, x = 0;\nel.addEventListener('pointermove', (e) => {\n  x = e.clientX - x0;\n  if (!raf) raf = requestAnimationFrame(() => { raf = 0; el.style.transform = `translate3d(${x}px,0,0)`; });\n});\n// set will-change only while dragging\nel.style.willChange = 'transform'; /* on start */ el.style.willChange = ''; /* on end */\n\n// ink: every hardware sample, not one per frame\ncanvas.addEventListener('pointermove', (e) => {\n  for (const p of e.getCoalescedEvents?.() ?? [e]) ctx.lineTo(p.offsetX, p.offsetY);\n  ctx.stroke();\n});",
+   "support": "getCoalescedEvents: Chrome 58, Firefox 59 (Android returns empty), Safari 18.2. getPredictedEvents: Chrome 77, Firefox 89, Safari 18.2. pointerrawupdate: Chromium 77 (secure contexts since 142), Firefox 148; not Safari.",
+   "gotchas": "Yurt sets React state per move for the swipe offset, which is fine at small scale, but writing style directly and committing state on release avoids re-render jank on long lists. Never animate left/top/width while dragging. Canvas: getContext('2d', { desynchronized: true }) lowers latency in Chromium. Cancel the pending rAF on end.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/PointerEvent/getCoalescedEvents",
+    "https://github.com/mdn/browser-compat-data",
+    "apps/web/src/ui/touch.ts"
+   ]
+  },
+  {
+   "title": "Release animations that continue the finger's velocity (and respect reduced motion)",
+   "what": "When a drag ends, animate to the resting place with a duration derived from the remaining distance and release velocity, using a decelerating or spring-like curve. Under reduced motion, jump.",
+   "why": "A fixed 300ms ease after a fast flick looks like the UI 'catching' your finger. Velocity-matched settling feels physical.",
+   "how": "export function settle(el: HTMLElement, from: number, to: number, v: number /* px/ms */) {\n  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { el.style.transition = 'none'; el.style.transform = `translateX(${to}px)`; return; }\n  const ms = Math.min(400, Math.max(140, Math.abs(to - from) / Math.max(0.3, Math.abs(v))));\n  el.style.transition = `transform ${ms}ms var(--spring)`;\n  el.style.transform = `translateX(${to}px)`;\n}\n:root { --spring: linear(0, 0.45 10%, 0.85 22%, 1.02 36%, 1.005 50%, 1); }",
+   "support": "linear() easing: Chrome 113, Firefox 112, Safari 17.2. Fall back to cubic-bezier(.2,.9,.3,1).",
+   "gotchas": "transitionend doesn't fire for 0ms transitions (reduced motion), so don't hang state changes on it. Overshooting springs are fine for snaps, but avoid overshoot on destructive commits. Generate linear() spring curves with a tool rather than by hand.",
+   "priority": "nice",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/easing-function/linear",
+    "https://developer.apple.com/videos/play/wwdc2018/803/",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Custom double-tap gestures (like, zoom) without the browser's double-tap zoom",
+   "what": "Detect two touch taps within ~300ms and ~24px yourself. Use dblclick for mouse.",
+   "why": "Double-tap to like or to zoom is a native idiom. With touch-action:manipulation the browser no longer zooms, so you own the gesture.",
+   "how": "let last = 0, lx = 0, ly = 0, lastTouchUp = 0;\nel.addEventListener('pointerup', (e) => {\n  if (e.pointerType !== 'touch') return;\n  lastTouchUp = e.timeStamp;\n  if (e.timeStamp - last < 300 && Math.hypot(e.clientX - lx, e.clientY - ly) < 24) { last = 0; onDoubleTap(e.clientX, e.clientY); return; }\n  last = e.timeStamp; lx = e.clientX; ly = e.clientY;\n});\nel.addEventListener('dblclick', (e) => { if (e.timeStamp - lastTouchUp > 600) onDoubleTap(e.clientX, e.clientY); });",
+   "support": "Pointer Events everywhere. Whether dblclick fires for touch varies by browser, hence the guard.",
+   "gotchas": "If a single tap also does something, it must wait out the double-tap window, which adds lag to every tap. Prefer double-tap only on targets whose single tap is harmless (a message bubble, an image at 1x). Give the double-tap action a visible alternative (button or menu item).",
+   "priority": "nice",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/Element/dblclick_event",
+    "https://w3c.github.io/pointerevents/"
+   ]
+  },
+  {
+   "title": "Interest invokers: hover cards that also open on long-press and keyboard focus (Chromium)",
+   "what": "The interestfor attribute on a button or link shows a target popover when the user 'shows interest': hover with a mouse, focus or a hotkey with a keyboard, long-press on touch. Hover cards then need no hand-written hover or long-press logic.",
+   "why": "User and link preview cards that work for every input type, the way native previews do, with timing handled by the browser.",
+   "how": "<button interestfor=\"user-card\">@tolga</button>\n<div id=\"user-card\" popover=\"hint\">\u2026profile preview\u2026</div>\n\nconst supported = 'interestForElement' in HTMLButtonElement.prototype;\nif (!supported) { /* polyfill (mfreed7/interestfor) or keep your own hover/long-press code */ }",
+   "support": "interestfor: Chrome/Edge 142+ only (experimental in BCD). popover='hint' (current spec): Chrome 151, Firefox 153, Safari preview. Not in Safari or Firefox stable for interestfor.",
+   "gotchas": "Chromium-only today, so it is a progressive enhancement. A long-press used for interest conflicts with a long-press used for your own context menu on the same element, so pick one per element. Popovers: iOS only got tap-outside light dismiss in Safari 18.3.",
+   "priority": "nice",
+   "sources": [
+    "https://developer.chrome.com/blog/new-in-chrome-142",
+    "https://css-tricks.com/a-first-look-at-the-interest-invoker-api-for-hover-triggered-popovers/",
+    "https://github.com/mfreed7/interestfor",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  }
+ ]
+}

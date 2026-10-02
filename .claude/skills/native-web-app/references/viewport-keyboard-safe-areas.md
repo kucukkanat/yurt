@@ -59,11 +59,10 @@ One meta turns off the 980px virtual viewport, draws edge to edge, and makes And
 **Gotchas:**
 - Unknown keys are ignored, so the tag is safe on iOS; iOS still needs the [visualViewport fix](#ios-keyboard-size-and-move-the-shell-to-the-visual-viewport-only-while-a-keyboard-is-up).
 - Chrome Android 108+ and Firefox Android 132+ default to `resizes-visual`: set `resizes-content` explicitly.
-- With `resizes-content` every viewport unit shrinks with the Android keyboard, and each show/hide relayouts.
-- `overlays-content` only if you lay out around the keyboard yourself ([VirtualKeyboard](#virtualkeyboard-api-chromium-overlayscontent-geometrychange-keyboard-inset-)).
+- With `resizes-content` every viewport unit shrinks with the Android keyboard. `overlays-content` only if you lay out around the keyboard yourself.
 - Never add `maximum-scale`, `minimum-scale`, `user-scalable` or `height=device-height`.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/meta/name/viewport · https://developer.chrome.com/blog/viewport-resize-behavior · https://www.bram.us/2026/09/11/webkit-supports-interactive-widget-and-hopefully-safari-will-too/
+**Sources:** https://developer.chrome.com/blog/viewport-resize-behavior · https://www.bram.us/2026/09/11/webkit-supports-interactive-widget-and-hopefully-safari-will-too/
 
 ## Never disable zoom (no maximum-scale / user-scalable=no)
 
@@ -73,14 +72,8 @@ Keep pinch-zoom (WCAG 1.4.4, axe) and fix what people block it for with targeted
 <!-- NEVER: axe 'meta-viewport' (critical) fails maximum-scale < 2 or user-scalable=no;
      'meta-viewport-large' flags maximum-scale < 5 -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-```
-
-```css
-/* Instead, with the baseline meta: */
-html { touch-action: manipulation; } /* no double-tap zoom; pinch stays */
-@media (pointer: coarse) {
-  input, textarea, select, [contenteditable] { font-size: max(16px, 1rem) !important; } /* no focus zoom */
-}
+<!-- Instead: the baseline meta, html { touch-action: manipulation } against double-tap zoom, and 16px fields
+     on coarse pointers (next section) against focus zoom -->
 ```
 
 **Support:** iOS 10+ ignores both for user pinch, but `maximum-scale=1` still suppresses focus zoom — the trap, because it looks like a fix on iPhone. Chrome, Samsung and Firefox on Android honour them, so pinch really is blocked there.
@@ -148,7 +141,7 @@ html, body { height: 100%; }                         /* locked shell: a 100% cha
 - Field-tested: in an installed iOS app the visual viewport can be a status bar shorter than the layout (797 vs 844 px) while `100%` is exact. Default to `100%`; override only while a keyboard is up.
 - Safari 26.0 left a bottom gap under viewport-sized fixed containers; 26.1 fixed it.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/length · https://webkit.org/blog/17541/webkit-features-for-safari-26-1/
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/length
 
 ## Locked app shell with in-flow bars and inner scroll containers
 
@@ -184,7 +177,7 @@ body { height: var(--app-height, 100%); margin: 0; overflow: hidden; overscroll-
 - `overflow: hidden` doesn't stop *programmatic* scrolling of html/body (`scrollIntoView`, `focus()`, anchors) → [Focused field](#keep-the-focused-field-visible-without-moving-the-locked-shell).
 - Browsers restore only document scroll on back/forward; inner scrollers need per-entry restore ([navigation-ui-patterns.md](navigation-ui-patterns.md)).
 
-**Sources:** https://bugs.webkit.org/show_bug.cgi?id=153852 · https://web.dev/learn/pwa/app-design
+**Sources:** https://web.dev/learn/pwa/app-design
 
 ## Safe-area tokens: env(safe-area-inset-*) with fallbacks and max()
 
@@ -212,7 +205,7 @@ Expose the insets as overridable custom properties, pad content with `max(design
 - Field-tested: set `--safe-bottom: 0px` while the iOS keyboard covers the home indicator, or a gap shows above the keyboard.
 - Installed iOS app with `black-translucent`: `--safe-top` is the status bar height.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/env · https://polypane.app/blog/using-safe-area-inset-to-build-mobile-safe-layouts/
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/env
 
 ## Android edge-to-edge: safe-area-max-inset-* for stable bottom bars
 
@@ -231,7 +224,7 @@ From Chrome 135 on Android, `viewport-fit=cover` pages draw behind the gesture b
 - The 135 rollout targeted phones with gesture navigation; 3-button navigation and tablets kept the old bar.
 - A locked shell rarely retracts the chin (no document scroll); test with gesture navigation anyway.
 
-**Sources:** https://developer.chrome.com/docs/css-ui/edge-to-edge · https://developer.chrome.com/blog/edge-to-edge
+**Sources:** https://developer.chrome.com/docs/css-ui/edge-to-edge
 
 ## Know the three keyboard resize behaviors per platform
 
@@ -243,28 +236,22 @@ Every "keyboard covers my input / composer floats mid-screen / page jumped" bug 
 | `resizes-content` | Visual + layout viewport; fixed bottom bars move up | Android, via `interactive-widget` |
 | `overlays-content` | Nothing; you lay out around it | `interactive-widget` or VirtualKeyboard API (Chromium) |
 
-Setup: Android → `resizes-content` (no JS); iOS → [visualViewport shell](#ios-keyboard-size-and-move-the-shell-to-the-visual-viewport-only-while-a-keyboard-is-up); bottom UI in flow, never fixed.
+Setup: Android → `resizes-content` (no JS); iOS → [visualViewport shell](#ios-keyboard-size-and-move-the-shell-to-the-visual-viewport-only-while-a-keyboard-is-up); bottom UI in flow, never fixed. Detect a keyboard over a layout that did *not* resize for it:
 
 ```ts
 const KEYBOARD_MIN = 120; // px: taller than any browser bar that comes and goes, shorter than any keyboard
-
-/** True while a keyboard covers the bottom of a layout that did NOT resize for it. */
-export function keyboardCoversLayout(): boolean {
-  const vv = window.visualViewport;
-  return vv !== null && document.documentElement.clientHeight - vv.height * vv.scale > KEYBOARD_MIN;
-}
+export const keyboardCoversLayout = (vv = window.visualViewport): boolean =>
+  vv !== null && document.documentElement.clientHeight - vv.height * vv.scale > KEYBOARD_MIN;
 ```
 
 **Support:** `visualViewport`: Chrome 61, Safari 13, Firefox 91 (Android 68).
 
 **Gotchas:**
-- No "keyboard opened" event: `visualViewport` `resize` is the signal. iOS fires it once at the end of the animation, so layout snaps; only Chromium's `geometrychange` can follow it.
-- `focusin` fires before the keyboard is up: don't measure then.
-- iPad floating/split and hardware keyboards barely shrink the viewport; the threshold treats them as none (right).
-- Returns false on Android with `resizes-content` (the layout already fits).
+- No "keyboard opened" event: `visualViewport` `resize` is the signal, fired once on iOS at the end of the animation (layout snaps). `focusin` comes before the keyboard: don't measure then.
+- iPad floating/split and hardware keyboards barely shrink the viewport: the threshold treats them as none (right). On Android with `resizes-content` it returns false: the layout already fits.
 - `focus()` from code opens the iOS keyboard only inside a user gesture. Keyboard kind (`inputmode`, `enterkeyhint`) → [touch-gestures-input.md](touch-gestures-input.md).
 
-**Sources:** https://developer.chrome.com/blog/viewport-resize-behavior · https://developer.mozilla.org/en-US/docs/Web/API/VisualViewport
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/VisualViewport
 
 ## iOS keyboard: size and move the shell to the visual viewport, only while a keyboard is up
 
@@ -313,13 +300,11 @@ body {
 **Support:** needed in every iOS/iPadOS browser, tab and home-screen app. Inert on Android with `resizes-content` (difference stays under the threshold) and on desktop. `visualViewport.pageTop`: Safari 13+.
 
 **Gotchas:**
-- Field-tested: don't set `--app-height` from `visualViewport` all the time; an installed iOS app's visual viewport can be a status bar short (797 vs 844), leaving a band.
-- Use `pageTop` (scroll + `offsetTop`), not `offsetTop`, and listen to `scroll` too.
-- The body transform makes body the containing block for fixed descendants (intended) and a stacking context.
+- Field-tested: never set `--app-height` from `visualViewport` permanently: an installed iOS app's visual viewport can be a status bar short (797 vs 844), leaving a band.
+- Use `pageTop` (includes the layout scroll), not `offsetTop`. The transform makes body the containing block for fixed descendants (intended) and a stacking context.
 - Top-layer elements (modal `<dialog>`, `popover`) render as siblings of the root, so the transform doesn't move them: a sheet with a field needs its own placement from `--app-top`/`--app-height` (from the spec; verify on a device).
 - iOS 26.0 sometimes kept a stale `offsetTop` after the keyboard closed: re-sync on `focusout` ([next](#positionfixed--sticky-with-the-ios-keyboard-and-the-ios-26-regressions)).
-- When Safari ships `interactive-widget`, the threshold check makes this inert by itself.
-- With Vite/React: call `trackViewport()` once in the root's `useEffect` and return its cleanup.
+- If Safari ships `interactive-widget`, the threshold makes this inert by itself. With Vite/React: call `trackViewport()` once in the root's `useEffect`, returning its cleanup.
 
 **Sources:** https://developer.mozilla.org/en-US/docs/Web/API/VisualViewport · https://developer.apple.com/forums/thread/800154
 
@@ -355,7 +340,7 @@ document.addEventListener('focusout', () => requestAnimationFrame(() => {
 - The `activeElement` check skips the reset when focus moves to another field.
 - In iOS 26 Safari tabs `bottom: 0` sits relative to the area under the floating toolbar; in-flow bars in a `100%` shell avoid it.
 
-**Sources:** https://developer.apple.com/forums/thread/800125 · https://webkit.org/blog/17541/webkit-features-for-safari-26-1/
+**Sources:** https://webkit.org/blog/17541/webkit-features-for-safari-26-1/
 
 ## VirtualKeyboard API (Chromium): overlaysContent, geometrychange, keyboard-inset-*
 
@@ -381,18 +366,14 @@ if (vk) {
 .app { grid-template-rows: auto minmax(0, 1fr) auto env(keyboard-inset-height, 0px); }
 ```
 
-```html
-<div contenteditable virtualkeyboardpolicy="manual"></div> <!-- keyboard only on navigator.virtualKeyboard.show() -->
-```
-
 **Support:** Chrome/Edge 94+ on Android and touch ChromeOS/Windows, Samsung 17, WebView 94. No Safari, no Firefox. Experimental, secure contexts.
 
 **Gotchas:**
 - `overlaysContent = true` is the scripted `overlays-content`: insets become non-zero, and the browser stops keeping the focused field visible (use `scroll-padding-bottom: env(keyboard-inset-height, 0px)` or [reveal it](#keep-the-focused-field-visible-without-moving-the-locked-shell)).
-- Spec: `show()` needs sticky user activation, a focused form control or editing host with `virtualkeyboardpolicy="manual"`, and `inputmode` other than `none`; on Windows a touch or pen pointer.
+- `<div contenteditable virtualkeyboardpolicy="manual">` shows the keyboard only on `vk.show()`. Spec: `show()` needs sticky user activation, that focused form control or editing host, and `inputmode` other than `none`; on Windows a touch or pen pointer.
 - Keep the iOS `visualViewport` path.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/VirtualKeyboard_API · https://www.w3.org/TR/virtual-keyboard/
+**Sources:** https://www.w3.org/TR/virtual-keyboard/
 
 ## Keep the focused field visible without moving the locked shell
 
@@ -435,7 +416,7 @@ export function focusInPane(field: HTMLElement): void {
 - Use `block: 'nearest'`: Safari still ignores `center` (BCD).
 - The `container` option is missing from TypeScript's lib.dom.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Element/scrollIntoView · https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/focus
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/focus
 
 ## Auto-growing composer with field-sizing: content
 
@@ -510,7 +491,7 @@ export function stickToBottom(log: HTMLElement, threshold = 160): () => void {
 - One wrapper keeps reading and Tab order chronological; reversing the DOM makes screen readers read newest-first.
 - Alternative pin trick: rows `overflow-anchor: none`, a 1px last child `overflow-anchor: auto` (all engines since Safari 27).
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Element/scrollTop · https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/overflow-anchor
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/API/Element/scrollTop
 
 ## Scroll anchoring (overflow-anchor), now in every engine
 
@@ -554,12 +535,11 @@ html, body { overscroll-behavior: none; }                         /* set both: e
 **Support:** Chrome 63, Firefox 59, Safari 16 (macOS, iOS). Chrome 144 and Firefox 150 also apply it to scroll containers without overflow (`overflow: hidden`, or `auto` that fits); Safari only when the box overflows.
 
 **Gotchas:**
-- `contain` keeps the element's own bounce; `none` removes it too.
-- Chrome Android shows pull-to-refresh in installed apps too: disable it and offer refresh another way ([touch-gestures-input.md](touch-gestures-input.md), or auto-sync); content sites can keep it.
+- `contain` keeps the element's own bounce; `none` removes it. Chrome Android shows pull-to-refresh in installed apps too: disable it and offer refresh another way ([touch-gestures-input.md](touch-gestures-input.md), or auto-sync); content sites can keep it.
 - Field-tested: the root value doesn't reliably stop iOS main-frame rubber-banding (embedded WKWebViews ignore it); the [locked shell](#locked-app-shell-with-in-flow-bars-and-inner-scroll-containers) does.
 - `overscroll-behavior-x` doesn't reliably block two-finger history swipes in Chrome on Windows; no page can block OS back gestures.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/overscroll-behavior · https://developer.chrome.com/release-notes/144
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/overscroll-behavior
 
 ## Scroll lock under modals and sheets in CSS
 
@@ -637,7 +617,7 @@ export function goToPage(pager: HTMLElement, index: number): void {
 - `mandatory` with items taller than the scrollport traps users; use `proximity` for vertical lists.
 - Hidden scrollbars need prev/next buttons on `(pointer: fine)`; tab-view pagers keep real tab buttons.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Scroll_snap · https://developer.mozilla.org/en-US/docs/Web/API/Element/scrollend_event
+**Sources:** https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Scroll_snap
 
 ## Desktop scrollbars: stable gutter, thin themed bars, hidden on strips
 
@@ -728,7 +708,7 @@ export const onOrientation = (cb: (landscape: boolean) => void): void =>
 - Left/right safe-area insets swap with landscape direction.
 - Landscape phones aren't tablets: gate split views on height as well as width.
 
-**Sources:** https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/At-rules/@media/orientation · https://www.w3.org/WAI/WCAG22/Understanding/orientation.html
+**Sources:** https://www.w3.org/WAI/WCAG22/Understanding/orientation.html
 
 ## Container queries for components that adapt to their pane
 
@@ -794,14 +774,9 @@ Native foldable apps put list and detail on separate halves and never draw text 
 ```
 
 ```ts
-type ViewportLike = { readonly segments: ReadonlyArray<DOMRectReadOnly> | null };
-const win: Window & { readonly viewport?: ViewportLike } = window; // not in lib.dom; no cast
-
-/** Segment rectangles while the window spans a fold; [] on single screens and other engines. */
-export function segments(): ReadonlyArray<DOMRectReadOnly> {
-  const s = win.viewport?.segments;
-  return s && s.length > 1 ? s : [];
-}
+type ViewportLike = { readonly segments: ReadonlyArray<DOMRectReadOnly> | null }; // not in lib.dom; no cast
+const win: Window & { readonly viewport?: ViewportLike } = window;
+export const spanned = (): boolean => (win.viewport?.segments?.length ?? 1) > 1; // rects: win.viewport.segments
 ```
 
 **Support:** Chrome/Edge 138+ (Android, desktop), Samsung 30, WebView 138. No Safari, no Firefox. Experimental.
@@ -850,12 +825,12 @@ In an installed iOS app, `default`/`black` start the web view *below* an opaque 
 **Support:** iOS/iPadOS home-screen apps only; Safari tabs and other browsers ignore it. Since iOS 26, Home Screen sites open as web apps by default ("Open as Web App" can be turned off).
 
 **Gotchas:**
-- Read at install time: after a change, users must remove and re-add the app.
+- Read at install time: after a change users must re-add the app.
 - Field reports, iOS 26–27.0 (unverified against Apple docs): with `black-translucent` the standalone viewport can be a status bar (~59–60pt) short, leaving a band, and a Liquid Glass edge blur covers ~110px at the top. Several teams moved to `default`/`black`.
 - Field-tested: `black-translucent` stays gap-free with a CSS `100%` chain and `visualViewport` used only while a keyboard is up.
 - White status text is unreadable over light headers. From Safari 26, `theme-color` applies only to installed apps.
 
-**Sources:** https://developer.apple.com/library/archive/documentation/AppleApplications/Reference/SafariHTMLRef/Articles/MetaTags.html · https://www.heise.de/en/news/iOS-26-and-iPadOS-26-Changed-web-app-behaviour-on-the-home-screen-10749652.html
+**Sources:** https://www.heise.de/en/news/iOS-26-and-iPadOS-26-Changed-web-app-behaviour-on-the-home-screen-10749652.html
 
 ## Safari 26+ toolbar tinting and full-screen dims come from edge-hugging fixed/sticky elements
 

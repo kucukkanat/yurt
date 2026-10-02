@@ -1,0 +1,586 @@
+{
+ "key": "platform",
+ "domain": "Platform-specific quirks, limitations and workarounds (iOS/iPadOS Safari and Home Screen apps, Android Chrome/Samsung Internet/Firefox, desktop Chrome/Edge installed apps, macOS Safari web apps, Firefox desktop and Android), plus testing and verification of native feel. Research note: webkit.org, developer.chrome.com, web.dev, caniuse.com, playwright.dev and developer.mozilla.org were blocked by the network egress proxy, and the WebSearch budget was used up. Support data was checked instead against mdn/browser-compat-data (BCD, HEAD 2026-10-02: Chrome 154, Firefox 157, Safari/iOS 27, Samsung Internet 30), mdn/content (2026-10-01), Fyrd/caniuse JSON, the Firefox source tree (taskbartabs docs), the Lighthouse changelog, Playwright docs source and the archived developer.chrome.com repo, all fetched from GitHub. Any claim I could not check against those sources says so in its gotchas.",
+ "items": [
+  {
+   "title": "Every iOS browser is WebKit, so feature support follows the iOS version",
+   "what": "On iOS and iPadOS, Chrome, Edge, Firefox, Orion and Safari all render with the system WebKit, so web features ship with iOS updates, not browser updates. Safari's version equals the iOS version (Safari 26 is iOS 26; BCD lists Safari/iOS 27 as current since 2026-09-14).",
+   "why": "This stops the 'it works in Chrome, so it works in Chrome on iPhone' mistake. Chrome on iOS has no beforeinstallprompt, no Vibration and no Chromium-only APIs.",
+   "how": "// Detect capabilities, never browser brands (CriOS/FxiOS/EdgiOS UA tokens say nothing about the engine).\nexport const caps = () => ({\n  installPrompt: 'onbeforeinstallprompt' in window,\n  push: 'PushManager' in window && 'serviceWorker' in navigator,\n  notifications: 'Notification' in window, // undefined in an iOS tab\n  vibrate: 'vibrate' in navigator,\n  badge: 'setAppBadge' in navigator,\n  wakeLock: 'wakeLock' in navigator,\n  share: 'share' in navigator,\n});\n// iPadOS 13+ claims to be a Mac: check touch points too (pure, so it is unit-testable)\nexport const isIos = (ua: string, touchPoints: number) => /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && touchPoints > 1);",
+   "support": "iOS/iPadOS: every browser uses WebKit. EU only, iOS 17.4+: Apple allows alternative engines (BrowserEngineKit), and MDN notes those browsers then apply their own storage policies. I could not confirm whether any major browser ships a non-WebKit engine in the EU today, so treat iOS as WebKit everywhere.",
+   "gotchas": "EU DMA history: the iOS 17.4 betas turned Home Screen web apps in the EU into plain Safari bookmarks. Apple reversed this before release (March 2024), and EU web apps still run as WebKit standalone apps. New web features reach users only when they update iOS, so check what share of your users run old iOS versions. Safari Technology Preview on the Mac is not iOS. The Yurt lesson stands: isIos(ua, maxTouchPoints) exists because iPadOS reports 'Macintosh'.",
+   "priority": "must",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/browsers/safari_ios.json",
+    "https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Installing",
+    "apps/web/src/lib/pwa.ts"
+   ]
+  },
+  {
+   "title": "Install UX without beforeinstallprompt (iOS, Safari, Firefox) and with it (Chromium)",
+   "what": "Only Chromium browsers (Chrome, Edge, Samsung Internet) fire beforeinstallprompt. Everywhere else, the user installs from a browser menu, so the app has to explain how.",
+   "why": "A custom Install button, or clear platform-specific steps shown at the right moment, replaces the 'website that nags' feel with an app-like onboarding.",
+   "how": "interface BeforeInstallPromptEvent extends Event { prompt(): Promise<void>; readonly userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }> }\nconst isBip = (e: Event): e is BeforeInstallPromptEvent => 'prompt' in e && typeof e.prompt === 'function' && 'userChoice' in e;\nlet offer: BeforeInstallPromptEvent | null = null;\naddEventListener('beforeinstallprompt', (e) => { if (!isBip(e)) return; e.preventDefault(); offer = e; showInstallButton(); });\naddEventListener('appinstalled', () => { offer = null; hideInstallButton(); });\nexport async function install() { const o = offer; offer = null; if (!o) return false; await o.prompt(); return (await o.userChoice).outcome === 'accepted'; }\n\n// Pure decision: which instructions to show\nexport type InstallPath = 'installed' | 'prompt' | 'ios-share-sheet' | 'mac-safari-dock' | 'browser-menu';\nexport const installPath = (s: { installed: boolean; hasPrompt: boolean; ios: boolean; macSafari: boolean }): InstallPath =>\n  s.installed ? 'installed' : s.hasPrompt ? 'prompt' : s.ios ? 'ios-share-sheet' : s.macSafari ? 'mac-safari-dock' : 'browser-menu';\n// Copy: iOS = Share -> Add to Home Screen; macOS Safari 17+ = File -> Add to Dock; Android Firefox/others = menu -> Add to Home screen / Install",
+   "support": "beforeinstallprompt: Chrome/Edge 44+ (onbeforeinstallprompt property from 61) on desktop and Android, Samsung Internet 5.0+. Not supported in Safari or Firefox. appinstalled: Chrome 64 desktop and 57 Android. iOS/iPadOS 16.4+: install from the Share menu in Safari, Chrome, Edge, Firefox and Orion (MDN); before 16.4, Safari only. macOS 14+ Safari 17: File > Add to Dock works for any site. Web Install API (navigator.install): Chrome 154 behind #web-app-installation-api only.",
+   "gotchas": "The event fires only when the app is installable and not yet installed. Each event's prompt() can be called once, and only from a user gesture. preventDefault() suppresses Chrome Android's mini-infobar. Offer install once, after the user has seen value (Yurt: once per device, coarse pointer only, after onboarding, as a 10s toast that links to Settings > App). iOS 26: WebKit's Safari 26 announcement says every site added to the Home Screen now opens as a web app by default ('Open as Web App' toggle). I could not re-fetch webkit.org to verify this, so check it on a device. Per MDN, Chrome (desktop and Android) and macOS Safari also let users install any site as an app, even without a manifest. Find out what Safari 27 (iOS 27, current) changed before shipping. I could not research it.",
+   "priority": "must",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/BeforeInstallPromptEvent.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Navigator.json",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable",
+    "https://webkit.org/blog/17333/webkit-features-in-safari-26-0/",
+    "apps/web/src/lib/pwa.ts"
+   ]
+  },
+  {
+   "title": "Detect 'running as an installed app' robustly (iOS display-mode bug)",
+   "what": "Combine the display-mode media queries with iOS's non-standard navigator.standalone and a start_url marker. Checking only (display-mode: standalone) misses several cases.",
+   "why": "Install hints, the in-app back and refresh buttons, padding under the status bar and push opt-in all depend on knowing whether you are in a tab or in the app.",
+   "how": "declare global { interface Navigator { readonly standalone?: boolean } } // iOS-only, non-standard\nconst MODES = ['standalone', 'fullscreen', 'minimal-ui', 'window-controls-overlay'] as const;\nexport const isInstalledWindow = (mq: (q: string) => boolean = (q) => matchMedia(q).matches, iosStandalone = navigator.standalone === true) =>\n  iosStandalone || MODES.some((m) => mq(`(display-mode: ${m})`));\n// Desktop users can pop a tab out into an app window and back: listen for changes\nfor (const m of MODES) matchMedia(`(display-mode: ${m})`).addEventListener('change', refreshInstalledState);\n\n/* manifest: \"start_url\": \"/?source=pwa\"  -> store sessionStorage flag on first load */\n/* CSS */\n@media (display-mode: standalone), (display-mode: fullscreen) { .browser-only { display: none; } }",
+   "support": "display-mode: Chrome 42, Firefox 47 (standalone never true on desktop; minimal-ui true from Firefox 142 for apps pinned to the Windows taskbar), Safari 13, iOS 12.2. In Safari, minimal-ui is never true. navigator.standalone: iOS Safari only.",
+   "gotchas": "BCD: in an installed iOS web app whose manifest says display: standalone, (display-mode: standalone) is FALSE and (display-mode: fullscreen) is TRUE (WebKit bug 264218). Yurt's lib/pwa.ts isStandalone checks only standalone and may misreport on iOS, so add fullscreen and navigator.standalone. Two false-positive risks: Firefox's Full Screen UI makes (display-mode: fullscreen) true in a normal window, and so does desktop browser fullscreen. If that matters, pair the check with the start_url marker or (pointer: coarse). Keep this a pure function with injectable inputs so you can unit test it without a device.",
+   "priority": "must",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/css/at-rules/media.json",
+    "https://webkit.org/b/264218",
+    "apps/web/src/lib/pwa.ts"
+   ]
+  },
+  {
+   "title": "An installed app is a separate instance: separate login, storage and links",
+   "what": "An iOS/iPadOS Home Screen app and a macOS 'Add to Dock' app each have their own cookies and storage, separate from Safari. PWAs installed from different browsers are separate instances that share no data. Links from email or chat open in the browser, not in the installed app.",
+   "why": "Without planning for this, users install the app and land logged out, or a magic link logs them in inside Safari instead of the app. That breaks the illusion at the very first launch.",
+   "how": "// First launch inside the app may have no session even though Safari has one: guide, don't error\nif (isInstalledWindow() && !(await hasLocalIdentity())) {\n  showWelcomeBack(['Sign in with a passkey', 'Enter the 6-digit code we email you', 'Restore from backup / scan QR from another device']);\n}\n// Prefer typed one-time codes or passkeys (WebAuthn) to magic links: a tapped link opens Safari/the default browser, not the Home Screen app.",
+   "support": "iOS Home Screen apps: their own storage container, and deleting the icon deletes the app and its data (MDN). macOS Safari 17 web apps: separate storage. Chrome/Edge installed PWAs share the profile's storage with that browser's tabs. Firefox Taskbar Tabs share the profile and are tied to the container they were created in.",
+   "gotchas": "WebKit's Safari 17 material says Safari copies the site's cookies into a new Dock web app when it is created, so the user starts logged in. That is not verified for iOS, and nothing is shared after creation. iOS has no link capturing for web apps. Chrome desktop does have link capturing (user setting) and launch_handler. For local-first apps such as Yurt, provide export/import, QR pairing or invite links so a user can move an identity from a Safari tab into the installed app.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Installing",
+    "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/browser/components/taskbartabs/docs/index.md",
+    "https://webkit.org/blog/14403/updates-to-storage-policy/"
+   ]
+  },
+  {
+   "title": "Storage durability: Safari's 7-day eviction, quotas and navigator.storage.persist()",
+   "what": "With tracking prevention on, Safari deletes all script-written storage (IndexedDB, localStorage, Cache API, service worker registrations) for an origin that had no user interaction during the last 7 days of Safari use. Every browser can also evict best-effort storage under disk pressure unless the origin is persisted.",
+   "why": "A native app never loses its data. An app that comes back empty after a holiday is the biggest 'it's just a website' tell.",
+   "how": "export async function ensurePersistence(): Promise<boolean> {\n  if (!navigator.storage?.persist) return false;\n  if (await navigator.storage.persisted()) return true;\n  return navigator.storage.persist(); // Chromium/Safari decide silently; Firefox shows a prompt -> call after engagement\n}\nconst { usage = 0, quota = 0 } = await navigator.storage.estimate();\nif (quota && usage / quota > 0.8) warnStorageFull();",
+   "support": "persist(): Chrome 55, Firefox 57, Safari 15.2. Quotas (MDN): Chromium about 60% of disk per origin. Safari 17+ about 60% per origin in browser apps and Home Screen/Dock web apps, about 15% in other WKWebView apps, and an 80% overall cap. Firefox persisted origins get 50% of disk, up to 8 TiB.",
+   "gotchas": "Cookies set by the server are exempt from the 7-day rule. Home Screen web apps keep their own count of days of use, so normal use of the app does not trigger eviction (WebKit's 2020 ITP post; re-verify on current iOS). When the browser evicts, it deletes all of the origin's storage at once. Persisted origins are skipped by pressure eviction. Keep a recoverable copy of anything irreplaceable: server or relay sync, an export, or a backup of keys. In Firefox, request persistence only after the user has done something meaningful, because it prompts.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria",
+    "https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/",
+    "https://webkit.org/blog/14403/updates-to-storage-policy/",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/StorageManager.json"
+   ]
+  },
+  {
+   "title": "iOS Web Push and notifications work only in installed apps, behind a gesture",
+   "what": "On iOS/iPadOS 16.4+, Push, Notification and Badging exist only in Home Screen web apps whose manifest display is not 'browser'. In a Safari tab, window.Notification is undefined. Safari 18.4 added Declarative Web Push (window.pushManager), which shows a notification even without a service worker.",
+   "why": "Notifications, and the badge that depends on them, are what make a chat app feel installed. Calling these APIs in a tab crashes the app or silently fails.",
+   "how": "// Call from a click handler only\nexport async function enablePush(reg: ServiceWorkerRegistration, key: Uint8Array): Promise<'install-first' | 'denied' | 'ok'> {\n  if (!('Notification' in window) || !('PushManager' in window)) return 'install-first'; // iOS tab\n  if ((await Notification.requestPermission()) !== 'granted') return 'denied';\n  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });\n  await saveSubscription(sub.toJSON());\n  return 'ok';\n}\n// Optional worker methods differ: guard them (pure, unit-tested)\nexport const notifiesThroughWorker = (r: { showNotification?: unknown; getNotifications?: unknown }) =>\n  typeof r.showNotification === 'function' && typeof r.getNotifications === 'function';\n\n// Declarative Web Push payload (Safari 18.4+), sent with Content-Type application/json:\n{ \"web_push\": 8030, \"notification\": { \"title\": \"Bo in #general\", \"body\": \"hey\", \"navigate\": \"https://app.example/#/c/general\" } }",
+   "support": "PushManager and showNotification: iOS 16.4+ in Home Screen apps only (not WKWebView or SFSafariViewController). macOS Safari 16+ on Ventura, in tabs too. Chrome 42, Firefox 44. window.pushManager (declarative): Safari 18.4 on iOS and macOS only. Badging on iOS requires notification permission (MDN). Legacy 'Safari Push Notifications' (APNs website push) existed from Safari 7 to 26.3 (caniuse) and is gone now.",
+   "gotchas": "Notification.requestPermission() outside a user gesture is denied (Firefox 72+, and Safari). Every push on iOS has to show a notification (userVisibleOnly). WebKit has warned that silent pushes can get the subscription revoked. I could not verify the exact threshold. Yurt lesson: Safari in a tab registers the service worker without getNotifications(), and calling it when marking a conversation read crashed the app. Feature-check, and e2e test that path by deleting the method in addInitScript. Firefox desktop needs the browser running to receive push. Android shows notification dots instead of the Badging API.",
+   "priority": "must",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Notification.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/PushManager.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Window.json",
+    "https://github.com/Fyrd/caniuse/blob/main/features-json/push-api.json",
+    "https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/How_to/Display_badge_on_app_icon",
+    "apps/web/src/lib/swLogic.ts",
+    "e2e/pwa.spec.ts"
+   ]
+  },
+  {
+   "title": "iOS status bar, safe areas and theme-color (changed in Safari 26)",
+   "what": "In iOS standalone mode, apple-mobile-web-app-status-bar-style controls the status bar. With black-translucent, content draws under the status bar, so you pad with env(safe-area-inset-*). From Safari 26, theme-color is used only for installed web apps.",
+   "why": "A header that continues under the status bar and notch, in the app's own color, is the clearest native signal. A white strip or clipped content is a web tell.",
+   "how": "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n<meta name=\"apple-mobile-web-app-status-bar-style\" content=\"black-translucent\">\n<meta name=\"apple-mobile-web-app-title\" content=\"Yurt\">\n<meta name=\"theme-color\" media=\"(prefers-color-scheme: light)\" content=\"#ffffff\">\n<meta name=\"theme-color\" media=\"(prefers-color-scheme: dark)\" content=\"#161614\">\n\n.app-header { padding-top: env(safe-area-inset-top); }\n.app-footer { padding-bottom: env(safe-area-inset-bottom); }\n.app { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); } /* landscape notch */",
+   "support": "env(safe-area-inset-*): Safari 11, Chrome 69, Firefox 65. viewport-fit: iOS 11, Chrome Android 135, Firefox Android 79. meta theme-color: Safari 15+, but from Safari 26 only in installed web apps (BCD). Chrome desktop uses it only in installed PWAs. Chrome Android tints the status bar. Samsung Internet 6.2. Not supported in Firefox.",
+   "gotchas": "black-translucent gives white status-bar text over your content, so a light header needs a dark strip or a darker top. The other values are 'default' and 'black'. Chrome logs apple-mobile-web-app-capable as deprecated in favor of mobile-web-app-capable plus the manifest display (Yurt ships both). The safe-area insets are 0 in desktop browsers and in Playwright, so layout bugs here only show up on devices. I believe Safari 26 on iOS tints its toolbars from the page itself rather than from theme-color, but I could not verify that. Do not rely on theme-color for Safari tab chrome any more.",
+   "priority": "must",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/html/elements/meta.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/css/types/env.json",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/How_to/Customize_your_app_colors",
+    "apps/web/index.html"
+   ]
+  },
+  {
+   "title": "Home Screen icon, launch splash and first paint on iOS",
+   "what": "For the Home Screen icon, iOS prefers apple-touch-icon and uses manifest icons only when there is none and purpose is 'any'. iOS does not build a splash screen from the manifest: you need apple-touch-startup-image per device size, or users see a blank screen.",
+   "why": "An opaque, crisp icon and a launch that goes splash, then app shell, in the same color with no white flash look native. A black-cornered icon or a white flash looks like a bookmark.",
+   "how": "<link rel=\"apple-touch-icon\" href=\"/apple-touch-icon-180.png\"> <!-- 180x180, fully opaque -->\n<link rel=\"apple-touch-startup-image\" href=\"/splash/1179x2556.png\"\n  media=\"(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)\">\n<!-- inline, before any CSS bundle: first paint matches splash and manifest background_color -->\n<meta name=\"color-scheme\" content=\"dark light\">\n<style>html{background:#161614}</style>",
+   "support": "Manifest icons on iOS 15.4+ and macOS Safari 17, only without apple-touch-icon and with purpose any or unset (BCD). apple-touch-startup-image: iOS only. Android Chrome generates the splash from name, background_color and an icon.",
+   "gotchas": "A startup image needs an exact media match (device size, pixel ratio, orientation), so generate the set with a tool such as pwa-asset-generator. iOS turns transparent icon pixels black and applies its own corner mask, so do not pre-round the icon. The Home Screen name comes from apple-mobile-web-app-title, then the manifest name. iOS appears to snapshot the icon and name when the app is added, so users must re-add to see a new icon. That is my belief, not verified. Android WebAPKs pick up icon and name changes on the daily update check.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/icons.json",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/How_to/Define_app_icons",
+    "e2e/pwa.spec.ts"
+   ]
+  },
+  {
+   "title": "On-screen keyboard: iOS pans the page, Android resizes it",
+   "what": "With interactive-widget=resizes-content, Chrome and Firefox on Android shrink the layout viewport when the keyboard opens. iOS Safari ignores that setting: it keeps the layout and pans the visual viewport, so bottom composers end up behind the keyboard or off-screen. VirtualKeyboard is Chromium-only.",
+   "why": "A composer that sits right on top of the keyboard, with no gap and no jumping, is the core native-feel test for chat and form apps.",
+   "how": "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content\">\n\n// Pure + unit-tested (Yurt lib/viewport.ts)\nconst KEYBOARD_MIN = 120; // taller than any toolbar change, shorter than any keyboard\nexport function viewportVars(layoutHeight: number, vv: { height: number; scale: number; pageTop: number }) {\n  const height = vv.height * vv.scale; // x scale: pinch-zoom must not shrink the layout\n  if (layoutHeight - height < KEYBOARD_MIN) return { '--app-height': null, '--app-top': null, '--safe-bottom': null };\n  return { '--app-height': `${height}px`, '--app-top': `${vv.scale === 1 ? vv.pageTop : 0}px`, '--safe-bottom': '0px' };\n}\n// wire: visualViewport 'resize' + 'scroll' -> set/remove the vars on <html>\n/* CSS */ body, #root { height: var(--app-height, 100%); } body { transform: translateY(var(--app-top, 0px)); }\n\n// Chromium alternative: take over keyboard geometry yourself\nif ('virtualKeyboard' in navigator) { /* navigator.virtualKeyboard.overlaysContent = true; then pad with env(keyboard-inset-height) */ }",
+   "support": "interactive-widget: Chrome Android 108, Firefox Android 133. Not supported in Safari. visualViewport: Safari 13, Chrome 61, Firefox 91. VirtualKeyboard API and env(keyboard-inset-*): Chromium 94+ only.",
+   "gotchas": "Yurt's reasoning, generalized: on Android the layout already fits. On iOS, with the keyboard up, the app takes the visible height and moves to where iOS panned (pageTop), otherwise it sits above the keyboard with a gap below. Drop the bottom safe-area inset then, because the keyboard covers the home indicator. With no keyboard, clear the variables: CSS 100% is correct, including in an installed iOS app, whose visual viewport can be short by the status bar. Use a transform on body so position:fixed overlays follow. Don't move a pinch-zoomed page. An iPad hardware keyboard shows only a short bar, which stays under the threshold. Don't combine VirtualKeyboard overlaysContent with interactive-widget. Playwright has no real keyboard, so cover this with unit tests plus device checks.",
+   "priority": "must",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/html/elements/meta.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/VirtualKeyboard.json",
+    "https://developer.mozilla.org/en-US/docs/Mozilla/Firefox/Releases/133",
+    "https://developer.chrome.com/docs/web-platform/virtual-keyboard",
+    "apps/web/src/lib/viewport.ts",
+    "AGENTS.md"
+   ]
+  },
+  {
+   "title": "Don't use 100vh, and be careful with position: fixed on mobile",
+   "what": "On mobile, 100vh is the large viewport (browser toolbars retracted), so content hides under the toolbars. position: fixed is relative to the layout viewport, which iOS does not shrink for the keyboard.",
+   "why": "Bottom bars that hide under Safari's toolbar, or jump when the keyboard opens, are classic web tells.",
+   "how": "html, body { height: 100%; }\n.app { height: 100%; }               /* or 100dvh where you need viewport-relative */\n.sheet { max-height: 85svh; }        /* small viewport: never under toolbars */\n/* fixed bars: let the keyboard logic (previous item) move the whole app instead of each bar */",
+   "support": "svh/lvh/dvh: Safari 15.4, Chrome 108, Firefox 101.",
+   "gotchas": "On iOS, dvh tracks toolbar changes but not the keyboard, so keyboard handling still needs visualViewport. Avoid one-off 'bottom: 0' fixed composers. Move one transformed app root instead (Yurt). Test portrait and landscape: landscape on iPhone adds left and right insets and a much shorter height.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/css/types/length.json",
+    "apps/web/index.html"
+   ]
+  },
+  {
+   "title": "Stop sticky :hover on touch screens",
+   "what": "Touch browsers apply :hover on tap and keep it until the next tap elsewhere. Some Samsung devices wrongly match (hover: hover).",
+   "why": "Hover toolbars stuck open, or buttons that need two taps, immediately mark an app as a desktop website.",
+   "how": "@media (hover: hover) and (pointer: fine) {\n  .msg:hover .actions { opacity: 1; }\n  .btn:hover { background: var(--hover); }\n}\n/* touch: no hover bar; open the same actions from a long-press sheet */\n\nconst coarse = matchMedia('(pointer: coarse)');\ncoarse.addEventListener('change', () => setTouchUi(coarse.matches)); // 2-in-1s, iPad + trackpad",
+   "support": "hover and pointer media features: Chrome 38/41, Firefox 64, Safari 9. BCD warns that on some Android devices (certain Samsung models) (hover: hover) may match incorrectly (crbug 41445959).",
+   "gotchas": "Always pair (hover: hover) with (pointer: fine). Use any-hover/any-pointer only to add affordances, never to remove touch ones. Decide between touch UI (sheets, long-press) and pointer UI from media queries, not from user-agent sniffing.",
+   "priority": "must",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/css/at-rules/media.json"
+   ]
+  },
+  {
+   "title": "iOS zoom-on-focus: use 16px fields on touch, never maximum-scale",
+   "what": "iOS Safari zooms into any focused input whose font-size is under 16px. Locking zoom with maximum-scale or user-scalable=no blocks pinch zoom and fails accessibility checks.",
+   "why": "The page lurching into a zoomed state when a field is tapped is one of the most recognizable web tells.",
+   "how": "html { -webkit-text-size-adjust: 100%; touch-action: manipulation; } /* no double-tap zoom; pinch still works */\n@media (pointer: coarse) {\n  input, textarea, select, [contenteditable] { font-size: 16px !important; } /* beats inline component sizes */\n}\n<!-- viewport: NO maximum-scale, NO user-scalable=no -->",
+   "support": "Affects all iOS browsers (WebKit). touch-action: Safari 13 / iOS 9.3, Chrome 36, Firefox 52.",
+   "gotchas": "Yurt lesson: scope the 16px rule to coarse pointers so desktop keeps its denser type. maximum-scale=1 'fixes' the zoom but blocks pinch zoom (WCAG 1.4.4) and fails axe's meta-viewport rule, which Yurt's E2E checkPage catches. touch-action: manipulation on html also removes double-tap-to-zoom without touching pinch.",
+   "priority": "must",
+   "sources": [
+    "AGENTS.md",
+    "packages/ui/tokens/base.css",
+    "https://github.com/mdn/browser-compat-data/blob/main/css/properties/touch-action.json"
+   ]
+  },
+  {
+   "title": "Remove tap-highlight, callout and selection tells from app chrome",
+   "what": "WebKit and Blink add a gray tap flash, iOS shows a long-press callout (link preview, save image), and long-pressing UI selects its labels. Native app chrome does none of this.",
+   "why": "A gray flash on every button, or a blue text selection when someone long-presses a tab bar, gives away the browser.",
+   "how": "html { -webkit-tap-highlight-color: transparent; }\nnav, .toolbar, button, [role=button], .tab {\n  -webkit-user-select: none; user-select: none;\n  -webkit-touch-callout: none;\n}\nbutton:active { transform: scale(.97); } /* replace the flash with your own pressed state */\n:focus:not(:focus-visible) { outline: none; } /* keep focus rings for keyboards */\n\n// Own long-press menus: suppress the browser's on touch only\nel.addEventListener('contextmenu', (e) => { if (matchMedia('(pointer: coarse)').matches) e.preventDefault(); });",
+   "support": "-webkit-tap-highlight-color: Chrome 16, iOS 4 (no-op in Firefox and desktop Safari). -webkit-touch-callout: iOS only. user-select: Safari still needs -webkit-user-select (unprefixed only in Technology Preview per BCD).",
+   "gotchas": "Never disable selection or callouts on content (messages, articles, images people may save). Only do it on chrome. Implement long-press with pointer events and a timer, because iOS does not reliably fire contextmenu for touch long-press while Android Chrome does. Keep :focus-visible styles.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/css/properties/-webkit-tap-highlight-color.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/css/properties/-webkit-touch-callout.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/css/properties/user-select.json"
+   ]
+  },
+  {
+   "title": "Overscroll bounce, pull-to-refresh, and an in-app refresh/update",
+   "what": "overscroll-behavior stops scroll chaining, the root rubber-band and Chrome Android's pull-to-refresh. Standalone apps have no reload button or URL bar, so the app must offer its own refresh and update path.",
+   "why": "A whole-app rubber-band or an accidental reload breaks the app illusion. So does having no way to pick up a new version.",
+   "how": "html, body { overscroll-behavior: none; }\n.pane { overflow-y: auto; overscroll-behavior-y: contain; }\n\n// Service-worker update toast instead of relying on the browser's reload\nnavigator.serviceWorker.addEventListener('controllerchange', () => location.reload());\nfunction onUpdateFound(reg: ServiceWorkerRegistration) {\n  toast({ title: 'New version', actionLabel: 'Reload', onAction: () => reg.waiting?.postMessage({ type: 'SKIP_WAITING' }) });\n}",
+   "support": "overscroll-behavior: Chrome 63, Firefox 59, Safari 16. BCD: it had no effect on containers without scrollable overflow until Chrome 144 and Firefox 150. Safari is still partial in this respect.",
+   "gotchas": "Because of the Safari partial support, a non-scrollable iOS root can still rubber-band. Keep the shell fixed-height and do all scrolling inside panes, then test on a device. Validate SW messages (Yurt isSkipWaiting with Valibot). Only call skipWaiting when the user accepts, so an open page doesn't change underneath them.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/css/properties/overscroll-behavior.json",
+    "apps/web/src/lib/swLogic.ts",
+    "apps/web/index.html"
+   ]
+  },
+  {
+   "title": "Audio and video: autoplay rules, gesture unlock, iOS audio session",
+   "what": "Audible playback needs user activation. Inline video on iPhone needs playsinline. Web Audio contexts start suspended until a gesture. Safari 16.4+ exposes navigator.audioSession to choose playback behavior.",
+   "why": "Sounds that fail silently, or video that jumps to the native fullscreen player, feel broken. Reliable ringtones and inline video feel native.",
+   "how": "declare global { interface Navigator { audioSession?: { type: 'auto' | 'playback' | 'transient' | 'transient-solo' | 'ambient' | 'play-and-record' } } }\nconst ctx = new AudioContext();\nconst unlock = () => { void ctx.resume(); };\naddEventListener('pointerdown', unlock, { once: true, capture: true });\naddEventListener('keydown', unlock, { once: true, capture: true });\nif (navigator.audioSession) navigator.audioSession.type = 'playback'; // 'play-and-record' during calls\ndocument.addEventListener('visibilitychange', () => { if (!document.hidden && ctx.state !== 'running') void ctx.resume(); });\n\n<video autoplay muted playsinline loop src=\"/intro.mp4\"></video>",
+   "support": "AudioSession: Safari 16.4 (iOS and macOS). Not in Chromium. Firefox preview only. playsinline: Safari 10, Chrome 75. getAutoplayPolicy(): Firefox 112 only. Muted or no-audio media is exempt from autoplay blocking (MDN).",
+   "gotchas": "Catch NotAllowedError from play() and show a tap-to-play. On iOS an AudioContext can become suspended or interrupted after backgrounding, so resume it on return. Background ringing is not possible on iOS: use push. I have not verified exactly how audioSession.type interacts with the hardware silent switch or Low Power Mode, so check on a device. Yurt rule: no E2E tests that use the microphone or camera, only unit tests for the rules.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/AudioSession.json",
+    "https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Autoplay",
+    "https://github.com/mdn/browser-compat-data/blob/main/html/elements/video.json"
+   ]
+  },
+  {
+   "title": "Haptics: the Vibration API works only on Chromium Android",
+   "what": "navigator.vibrate works in Chrome and Samsung Internet on Android, after a user gesture. Safari has none. Firefox Android exposes it but never vibrates, and Firefox desktop removed it in 129.",
+   "why": "Short taps on send, on a gesture crossing its threshold, or on a long-press opening make Android feel native. Elsewhere, degrade silently.",
+   "how": "const PATTERNS = { tap: [8], tick: [14], notice: [12, 60, 12] } as const; // short = taps, not buzzes\nexport function haptic(kind: keyof typeof PATTERNS, enabled: boolean): boolean {\n  if (!enabled || !('vibrate' in navigator) || matchMedia('(prefers-reduced-motion: reduce)').matches) return false;\n  return navigator.vibrate([...PATTERNS[kind]]); // false without user activation\n}",
+   "support": "Chrome Android 32 (requires a user gesture since 60, not available in cross-origin iframes), Samsung Internet. Not supported in Safari, macOS or iOS. Firefox Android: disabled, returns true but does nothing. Firefox desktop: removed in 129. <input type=checkbox switch>: Safari 17.4+.",
+   "gotchas": "Firefox Android returns true without vibrating, so don't use the return value to decide whether to show visual feedback. iOS hack: on iOS 18+, toggling a hidden <input type=checkbox switch> through its label from a gesture is widely reported to produce a system haptic. It is undocumented, unverified here, and can break with any update, so treat it as 'nice' at most. Respect a user setting and reduced motion (Yurt lib/haptics.ts).",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Navigator.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/html/elements/input.json",
+    "apps/web/src/lib/haptics.ts"
+   ]
+  },
+  {
+   "title": "Fullscreen and orientation: iPad only, iPhone video only",
+   "what": "The Fullscreen API works on iPadOS but not iPhone, where only <video> can go fullscreen in the native player. Safari ignores manifest display: fullscreen and orientation, and Screen Orientation lock is Android-only.",
+   "why": "Games, presentations and video players need a sensible path per device, not a button that does nothing.",
+   "how": "export async function goFullscreen(el: HTMLElement, video?: HTMLVideoElement) {\n  if (document.fullscreenEnabled) return el.requestFullscreen({ navigationUI: 'hide' });\n  const native = video && Reflect.get(video, 'webkitEnterFullscreen');\n  if (video && typeof native === 'function') native.call(video); // iPhone: native video player\n}\n// Android only, inside fullscreen or installed app\nawait screen.orientation.lock?.('landscape').catch(() => {});",
+   "support": "requestFullscreen: Chrome 71, Firefox 64, Safari 16.4 (macOS). iOS 16.4: iPad only, with an overlay button that can't be hidden, and swiping down exits. Not in iOS WKWebView. ScreenOrientation.lock: Chrome Android 38, Firefox 144. Not in Safari, and desktop Chrome always throws. Manifest display fullscreen/minimal-ui: not in Safari.",
+   "gotchas": "Firefox and Safari report fullscreen inconsistently in display-mode (see the detection item). Keyboard Lock requires JS-initiated fullscreen. Never hide the only way to exit.",
+   "priority": "nice",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Element.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/ScreenOrientation.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/display.json"
+   ]
+  },
+  {
+   "title": "Background suspension: reconnect and catch up on resume",
+   "what": "iOS freezes JavaScript shortly after an app or tab goes to the background. Timers stop and WebSockets die, sometimes still reporting OPEN. Pages restored from bfcache come back with dead connections. Only Chromium fires freeze and resume events.",
+   "why": "A native app shows fresh data the moment it is reopened. A web app that shows stale messages, or 'connected' while dead, is a tell.",
+   "how": "export function onResume(reconnect: (why: 'visible' | 'bfcache' | 'online' | 'resume') => void) {\n  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reconnect('visible'); });\n  addEventListener('pageshow', (e) => { if (e.persisted) reconnect('bfcache'); });\n  addEventListener('online', () => reconnect('online'));\n  document.addEventListener('resume', () => reconnect('resume')); // Chromium only\n}\n// Don't trust ws.readyState after a resume: ping and reopen if no pong within ~3s,\n// then fetch everything since the last event id. Backoff with jitter on failure.",
+   "support": "visibilitychange: universal (Safari 14.1+ reliable; on unload use pagehide). pageshow and pagehide: universal. freeze/resume: Chrome 68+ only. Background Sync: Chromium 49. Periodic Background Sync: Chromium 80, installed apps only. Neither is in Safari or Firefox.",
+   "gotchas": "iOS has no background execution except the push handler, so missed-message alerts have to come from push. Headless browsers always report a visible page, so the 'away' path cannot be E2E-tested (Yurt keeps it to one ignored line). Chromium's CDP Page.setWebLifecycleState({state:'frozen'}) can simulate freeze. It is experimental and does not change visibility. Close sockets on freeze/pagehide so bfcache can keep the page.",
+   "priority": "must",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Document.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/SyncManager.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/PeriodicSyncManager.json",
+    "apps/web/src/lib/visibility.ts"
+   ]
+  },
+  {
+   "title": "Screen Wake Lock (fixed for iOS Home Screen apps in 18.4)",
+   "what": "navigator.wakeLock.request('screen') keeps the display on during calls, recipes, navigation or presentations. The browser releases it automatically when the page is hidden.",
+   "why": "Native call and media apps never let the phone dim mid-call.",
+   "how": "let lock: WakeLockSentinel | null = null;\nexport async function keepAwake() {\n  if (!('wakeLock' in navigator)) return;\n  try { lock = await navigator.wakeLock.request('screen'); } catch { /* hidden page, low battery, policy */ }\n}\ndocument.addEventListener('visibilitychange', () => { if (lock?.released && document.visibilityState === 'visible') void keepAwake(); });\nexport const release = () => lock?.release();",
+   "support": "Chrome 84, Firefox 126, Safari 16.4. iOS Home Screen apps: only from iOS 18.4 (broken in standalone 16.4\u201318.3, WebKit bug 254545).",
+   "gotchas": "Re-acquire after every visibility return. Hold it only while it is needed, and release it when the call ends.",
+   "priority": "nice",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/WakeLock.json",
+    "https://webkit.org/b/254545"
+   ]
+  },
+  {
+   "title": "Links that leave scope, window.open, OAuth and notification clicks",
+   "what": "In an installed app, a navigation outside the manifest scope leaves the app. iOS shows it in an in-app Safari sheet or opens Safari, Android WebAPKs show a Custom-Tab-style bar, and desktop shows an origin bar or a browser tab. Notification clicks must focus the existing window instead of opening a new one.",
+   "why": "OAuth or external links that strand users outside the app, and notification taps that open duplicate windows, are common 'it's a website' failures.",
+   "how": "// manifest: \"scope\": \"/\", \"start_url\": \"/?source=pwa\"\n<a href=\"https://docs.example.com\" target=\"_blank\" rel=\"noopener noreferrer\">Docs</a>\n\n// service worker\nself.addEventListener('notificationclick', (e) => {\n  e.notification.close();\n  e.waitUntil((async () => {\n    const url = new URL(String(e.notification.data?.url ?? '/'), self.registration.scope).href;\n    const [win] = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });\n    if (win) { await win.focus(); win.postMessage({ type: 'open', url }); return; }\n    await self.clients.openWindow(url);\n  })());\n});",
+   "support": "Scope handling: Chrome 53, Safari 17 / iOS 11.3, Firefox Android 79. clients.openWindow: on Android, since Chrome 51 it may open inside an existing standalone app (BCD). BCD notes that iOS window.open does not work when target is unset or _blank.",
+   "gotchas": "Call window.open synchronously inside the tap handler, and prefer <a target=_blank>. Cross-origin login redirects in iOS standalone can leave the user in the in-app sheet or in Safari, logged in there instead of in the app. Keep auth endpoints in scope or same-origin, and test on a device. Validate postMessage data with a schema (Yurt openOf). The SW 'type' and 'data' come from your own notification, but still parse them as unknown.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Clients.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Window.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/scope.json",
+    "apps/web/src/lib/swLogic.ts"
+   ]
+  },
+  {
+   "title": "Camera and microphone permissions in installed apps",
+   "what": "getUserMedia works in standalone apps, but permission persistence differs from Safari tabs. iOS Home Screen apps have historically asked again at each launch or session.",
+   "why": "Repeated or confusing permission prompts, and a camera indicator that stays on, feel untrustworthy compared with native apps.",
+   "how": "export async function getMedia(c: MediaStreamConstraints): Promise<MediaStream> {\n  try { return await navigator.mediaDevices.getUserMedia(c); } // only from a tap\n  catch (e) {\n    if (e instanceof DOMException && e.name === 'NotAllowedError') showHowToAllow(); // Settings path per platform\n    throw e;\n  }\n}\n// Free devices when hidden: stops the indicator and saves battery\ndocument.addEventListener('visibilitychange', () => { if (document.hidden) stream?.getTracks().forEach((t) => t.stop()); });",
+   "support": "getUserMedia: Safari 11, Chrome, Firefox. Permissions API queries for 'camera'/'microphone' are inconsistent across engines and not in TypeScript's PermissionName, so don't depend on them.",
+   "gotchas": "I could not verify whether current iOS still re-prompts on every launch of a Home Screen app, so test on a device and design copy that survives a second prompt. Ask only when the user starts a call. Yurt rule: no E2E or browser tests that use camera, mic, video or screen share. Unit test the pure rules instead (for example the video cap).",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/MediaDevices.json",
+    "AGENTS.md"
+   ]
+  },
+  {
+   "title": "Edge swipes collide with system back gestures",
+   "what": "iOS Safari uses left and right edge swipes for history back and forward, and Android 10+ gesture navigation takes back swipes from both screen edges before the page sees them. Neither can be cancelled from the web.",
+   "why": "Custom swipe gestures (drawer, swipe-to-reply) that fight the OS feel broken. Ones that start inside a guard band and declare their axis feel native.",
+   "how": "const EDGE_GUARD = 24; // px left to the OS\nconst inGuard = (x: number) => x < EDGE_GUARD || x > innerWidth - EDGE_GUARD;\nrow.addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch' && inGuard(e.clientX)) return; startSwipe(e); });\n/* let vertical scroll stay native; horizontal goes to your handler */\n.swipe-row { touch-action: pan-y; }",
+   "support": "touch-action pan-x/pan-y: universal. Pointer events: universal.",
+   "gotchas": "Yurt's phone E2E swipes the sidebar open from x=4 in Chromium emulation. That passes headless, but on a real Android phone with gesture navigation the OS takes the swipe, so check on devices and always provide a visible button too. Whether iOS standalone apps offer a swipe-back gesture is unverified. Always render an in-app back button in standalone mode. Prefer touch-action over preventDefault in touchmove (passive listeners). Keep gesture threshold math in a pure module.",
+   "priority": "should",
+   "sources": [
+    "e2e/mobile.spec.ts",
+    "apps/web/src/lib/gestures.ts",
+    "https://github.com/mdn/browser-compat-data/blob/main/css/properties/touch-action.json"
+   ]
+  },
+  {
+   "title": "Android: WebAPK minting, installability criteria, updates and TWA",
+   "what": "Chrome on Google Mobile Services (GMS) devices, and Samsung Internet on Samsung devices, mint a WebAPK: a real app entry in the launcher, switcher and Settings, with intent filters for share target and shortcuts. Every other Android browser, and Chrome without GMS, adds a browser-badged shortcut instead.",
+   "why": "A WebAPK is what makes an Android PWA indistinguishable from a store app.",
+   "how": "{\n  \"id\": \"/\",\n  \"name\": \"Yurt\", \"short_name\": \"Yurt\",\n  \"start_url\": \"/?source=pwa\", \"scope\": \"/\",\n  \"display\": \"standalone\",\n  \"background_color\": \"#161614\", \"theme_color\": \"#161614\",\n  \"description\": \"Encrypted team chat\",\n  \"icons\": [\n    { \"src\": \"/pwa-192.png\", \"sizes\": \"192x192\", \"type\": \"image/png\" },\n    { \"src\": \"/pwa-512.png\", \"sizes\": \"512x512\", \"type\": \"image/png\" },\n    { \"src\": \"/maskable-512.png\", \"sizes\": \"512x512\", \"type\": \"image/png\", \"purpose\": \"maskable\" }\n  ],\n  \"screenshots\": [{ \"src\": \"/shot-narrow.png\", \"sizes\": \"1080x1920\", \"type\": \"image/png\", \"form_factor\": \"narrow\" }]\n}",
+   "support": "Chromium criteria (MDN): name or short_name, icons including 192px and 512px, start_url, display or display_override, prefer_related_applications false or absent, and HTTPS or localhost. A service worker is no longer required (Chrome's 2024 criteria update, cited by Lighthouse). manifest id: Chrome 96, Safari 17 / iOS 16.4.",
+   "gotchas": "Set 'id' from day one, because changing it (or a start_url-derived id) creates a different app. Chrome checks WebAPK updates on launch, at most daily, when key members change (Chrome 76+). MDN says the richer install dialog with description and screenshots appears on Android only. Play Store: wrap the app as a Trusted Web Activity (Bubblewrap/PWABuilder) and prove ownership with /.well-known/assetlinks.json (Digital Asset Links), otherwise a URL bar appears. Firefox, Edge and Opera on Android create badged shortcuts (MDN).",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable",
+    "https://developer.chrome.com/blog/webapk-update-frequency",
+    "https://github.com/GoogleChrome/lighthouse/blob/main/changelog.md",
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/id.json",
+    "e2e/pwa.spec.ts"
+   ]
+  },
+  {
+   "title": "Android system bars: theme-color, edge-to-edge and splash",
+   "what": "Chrome Android tints the status bar with theme-color. From Chrome 135, viewport-fit=cover goes edge-to-edge, drawing behind the gesture or navigation bar, so pad with the safe-area insets. Android builds the launch splash from name, background_color and an icon.",
+   "why": "A status bar in the app's color and content that clears the gesture pill are what an Android app looks like. Collisions with the pill are an obvious tell.",
+   "how": "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n<meta name=\"theme-color\" content=\"#161614\">\n\n.bottom-nav { padding-bottom: max(env(safe-area-inset-bottom), 8px); }\n/* manifest background_color === first-paint background === splash */",
+   "support": "theme-color: Chrome Android 39+ (before 92 it was ignored in system dark mode unless installed or in a TWA), Samsung Internet 6.2. viewport-fit: Chrome Android 135, Firefox Android 79, iOS 11.",
+   "gotchas": "Since Chrome 135 the bottom inset is non-zero on many phones, so layouts written for iOS-only insets suddenly matter on Android too. I found no web API to color the Android navigation bar independently (unverified). Change theme-color with JS when sheets or dark headers open to match native behavior.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/html/elements/meta.json",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/How_to/Customize_your_app_colors"
+   ]
+  },
+  {
+   "title": "Maskable icons, separate from 'any' icons",
+   "what": "Android launchers crop icons to their own shape. A 'maskable' icon keeps its artwork inside the central safe zone (a circle of 40% radius, the middle 80%) with a full-bleed background.",
+   "why": "Without one, Android shows your logo shrunk inside a white circle, which looks like a web shortcut.",
+   "how": "\"icons\": [\n  { \"src\": \"/pwa-512.png\", \"sizes\": \"512x512\", \"type\": \"image/png\", \"purpose\": \"any\" },\n  { \"src\": \"/maskable-512.png\", \"sizes\": \"512x512\", \"type\": \"image/png\", \"purpose\": \"maskable\" }\n]",
+   "support": "Chromium on Android, ChromeOS and desktop launchers. iOS ignores manifest icons when apple-touch-icon exists, and uses manifest icons only with purpose any.",
+   "gotchas": "Don't use \"purpose\": \"any maskable\" on one file: it is either padded where 'any' is used or clipped where masked. Preview the result in the DevTools Manifest pane ('Show only the minimum safe area for maskable icons'). E2E-assert that each icon file is fetchable (Yurt pwa.spec.ts).",
+   "priority": "must",
+   "sources": [
+    "https://developer.chrome.com/docs/devtools/progressive-web-apps",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/How_to/Define_app_icons",
+    "e2e/pwa.spec.ts"
+   ]
+  },
+  {
+   "title": "Android back button: CloseWatcher, <dialog> and the Navigation API",
+   "what": "In a standalone Android app, the system back gesture calls history.back(), and on the first history entry it closes the app. CloseWatcher, modal <dialog> and popover let sheets consume back the way native apps do. The Navigation API makes SPA history handling sane.",
+   "why": "Back should close the open sheet first, then go up a level, then exit. That matches native expectations without trapping the user.",
+   "how": "export function watchClose(close: () => void): () => void {\n  if ('CloseWatcher' in window) { const w = new CloseWatcher(); w.addEventListener('close', close); return () => w.destroy(); }\n  history.pushState({ sheet: true }, '');                  // fallback: a history entry for the sheet\n  const onPop = () => close();\n  addEventListener('popstate', onPop, { once: true });\n  return () => { removeEventListener('popstate', onPop); if (history.state?.sheet) history.back(); };\n}\n// Prefer <dialog>.showModal(): Esc / Android back closes it in Chromium.\n// SPA routing where available: navigation.addEventListener('navigate', (e) => e.intercept({ handler: render }))",
+   "support": "CloseWatcher: Chrome 126, Firefox 149, Safari Technology Preview only. Navigation API: Chrome 102, Firefox 147, Safari 26.2. dialog closedby: Chrome 134, Firefox 141. requestClose: Chrome 134, Firefox 139, Safari 18.4.",
+   "gotchas": "TypeScript's DOM lib may lack CloseWatcher and navigation typings, so add declarations instead of casting. Close watchers created without user activation are grouped, so one back press may close several. Never pile up invisible history entries: back-button traps are hostile, and Chromium skips entries added without user activation. Feature-detect, and keep the history fallback for Safari.",
+   "priority": "must",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/CloseWatcher.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Navigation.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/html/elements/dialog.json"
+   ]
+  },
+  {
+   "title": "App shortcuts (long-press icon, jump lists, Dock menu)",
+   "what": "The manifest 'shortcuts' member adds actions to the app icon's long-press menu (Android), Windows jump list, and macOS Dock or app menu.",
+   "why": "Long-pressing an icon to get 'New message' is a native affordance users try first.",
+   "how": "\"shortcuts\": [\n  { \"name\": \"New message\", \"short_name\": \"New\", \"url\": \"/?action=compose\",\n    \"icons\": [{ \"src\": \"/icons/compose-96.png\", \"sizes\": \"96x96\", \"type\": \"image/png\" }] },\n  { \"name\": \"Mentions\", \"url\": \"/#/mentions\" }\n]\n// on startup: const action = new URL(location.href).searchParams.get('action');",
+   "support": "Chrome Android 84 (WebAPK). Chrome desktop 96 (85\u201395 Windows only). Edge. Safari macOS 17.4 (Dock web apps). Not supported on iOS or in Firefox.",
+   "gotchas": "Shortcuts appear only after install. Launchers show only the first few (often 4; I have not verified the exact limit). On Android, changes arrive with the next WebAPK update. URLs must be inside scope.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/shortcuts.json",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/How_to/Expose_common_actions_as_shortcuts"
+   ]
+  },
+  {
+   "title": "Share target (sharing in) and Web Share (sharing out)",
+   "what": "The share_target manifest member puts an installed app in the OS share sheet. navigator.share opens the OS share sheet from the app.",
+   "why": "Sharing photos into a chat app, and a native share sheet instead of 'copy link', are core native-app behaviors.",
+   "how": "\"share_target\": { \"action\": \"/share\", \"method\": \"POST\", \"enctype\": \"multipart/form-data\",\n  \"params\": { \"title\": \"title\", \"text\": \"text\", \"url\": \"url\", \"files\": [{ \"name\": \"files\", \"accept\": [\"image/*\"] }] } }\n\n// service worker\nself.addEventListener('fetch', (e) => {\n  const u = new URL(e.request.url);\n  if (e.request.method !== 'POST' || u.pathname !== '/share') return;\n  e.respondWith((async () => { await stashShared(await e.request.formData()); return Response.redirect('/?shared=1', 303); })());\n});\n\n// page\nexport async function share(data: ShareData) {\n  if (!navigator.canShare?.(data)) return copyLink(data.url);\n  try { await navigator.share(data); } catch (e) { if (!(e instanceof DOMException && e.name === 'AbortError')) throw e; }\n}",
+   "support": "share_target: Chrome Android 76 (installed WebAPK), Chrome desktop 89 per BCD (ChromeOS in practice; check Windows and macOS). Not in Safari or Firefox (Firefox Android parses it, with no effect). navigator.share: Safari 12.1, Chrome Android 61, Chrome desktop 128 on all OSes (89\u2013127 Windows and ChromeOS only), Edge 93. Firefox desktop: behind a flag. Firefox Android 79.",
+   "gotchas": "share() needs transient user activation, and AbortError just means the user cancelled. iOS web apps cannot be share targets, so offer paste, upload or drag-and-drop instead. Yurt lesson: never press a Share button in headless tests, because navigator.share brings headless Chromium down on macOS. Test the canShare guard and the fallback instead.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/share_target.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Navigator.json",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/How_to/Share_data_between_apps",
+    "AGENTS.md"
+   ]
+  },
+  {
+   "title": "Samsung Internet differences",
+   "what": "Samsung Internet (v30, May 2026) is Chromium-based but lags Chrome's engine. It mints WebAPKs on Samsung devices, supports beforeinstallprompt and push, and has its own UI features: a dark mode, content blockers and 'Add page to'.",
+   "why": "Samsung Internet has a large share of Android users, and its quirks (forced dark styling, hover misreporting) can undo careful native polish.",
+   "how": "<meta name=\"color-scheme\" content=\"light dark\">\n@media (prefers-color-scheme: dark) { :root { --surface-page: #161614; } }\n@media (hover: hover) and (pointer: fine) { /* hover-only UI */ }",
+   "support": "WebAPK on Samsung devices (MDN). beforeinstallprompt 5.0+ (the onbeforeinstallprompt property from 8.0). theme-color 6.2. Notifications only through the service worker. Current version 30.0 (BCD, 2026-05-11).",
+   "gotchas": "Its dark mode may restyle pages that don't declare dark support (current behavior unverified), so ship a real dark theme and declare color-scheme. (hover: hover) misreports on some Samsung devices. Check its Chromium version before using new Chromium APIs, and feature-detect. Test on a real Samsung device at least once per release.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/browsers/samsunginternet_android.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/BeforeInstallPromptEvent.json",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable"
+   ]
+  },
+  {
+   "title": "Desktop: Window Controls Overlay for a native title bar",
+   "what": "With display_override ['window-controls-overlay'], a desktop Chrome or Edge app draws its own content in the title bar area. Only the OS window buttons stay. env(titlebar-area-*) and navigator.windowControlsOverlay give the geometry.",
+   "why": "A tall browser-style title bar above your own toolbar is the desktop PWA tell. WCO gives the compact, single-bar look native apps have.",
+   "how": "\"display_override\": [\"window-controls-overlay\"], \"display\": \"standalone\"\n\n.titlebar {\n  position: fixed; left: env(titlebar-area-x, 0); top: env(titlebar-area-y, 0);\n  width: env(titlebar-area-width, 100%); height: env(titlebar-area-height, 40px);\n  -webkit-app-region: drag;\n}\n.titlebar button, .titlebar input { -webkit-app-region: no-drag; }\n\nconst wco = Reflect.get(navigator, 'windowControlsOverlay');\nif (wco instanceof EventTarget) wco.addEventListener('geometrychange', relayout);",
+   "support": "Chrome/Edge 105 desktop (Windows, macOS, Linux; titlebar env() from 93). Not on Android, Safari or Firefox. display-mode: window-controls-overlay: Chrome 105.",
+   "gotchas": "Users can toggle the overlay off, so read windowControlsOverlay.visible and listen to geometrychange. Window buttons are on the right on Windows and on the left on macOS, so use the env() values and don't hard-code. Drag regions swallow clicks, so mark interactive elements no-drag. theme_color colors the controls area.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/WindowControlsOverlay.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/display_override.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/css/types/env.json"
+   ]
+  },
+  {
+   "title": "Desktop: single instance (launch_handler), file and protocol handlers, tabbed mode",
+   "what": "launch_handler controls whether a launch focuses the existing window or opens a new one. file_handlers and protocol_handlers register the app with the OS. 'tabbed' gives an app window with its own tabs.",
+   "why": "Double-clicking a file opens it in your app, web+app: links route into it, and relaunching focuses the open window. That is OS integration, not a website.",
+   "how": "\"launch_handler\": { \"client_mode\": [\"focus-existing\", \"auto\"] },\n\"file_handlers\": [{ \"action\": \"/open\", \"accept\": { \"text/markdown\": [\".md\"] } }],\n\"protocol_handlers\": [{ \"protocol\": \"web+yurt\", \"url\": \"/join?link=%s\" }],\n\"display_override\": [\"tabbed\", \"standalone\"]\n\n// focus-existing does NOT navigate: consume the launch yourself\nconst lq = Reflect.get(window, 'launchQueue');\nif (lq && typeof lq.setConsumer === 'function') lq.setConsumer(async (p: { targetURL?: string; files: FileSystemFileHandle[] }) => {\n  if (p.targetURL) route(new URL(p.targetURL));\n  for (const h of p.files) openFile(await h.getFile());\n});",
+   "support": "launch_handler: Chrome 110 (desktop). file_handlers and LaunchQueue: Chrome 102 desktop, not Android. protocol_handlers: Chrome 96 desktop, not Android. tabbed: Chrome 126 per BCD (ChromeOS-first; check each OS). None of these work in Safari or Firefox.",
+   "gotchas": "Validate launch params as unknown (Valibot) before use. For chat apps, focus-existing avoids five windows each holding its own socket. File handling asks permission on first use. Custom schemes must be 'web+' prefixed or on the safelist. Handlers update with the manifest, not instantly.",
+   "priority": "should",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/launch_handler.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/file_handlers.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/protocol_handlers.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/LaunchQueue.json"
+   ]
+  },
+  {
+   "title": "Desktop: badges, run on login, and newer install APIs",
+   "what": "Set an unread badge on the Dock or taskbar icon. Users can make Chromium apps start at OS login. New manifest members cover multi-origin apps and migration, and an in-page install API is experimental.",
+   "why": "An unread count on the Dock icon, and an app already open after login, are what desktop chat apps do.",
+   "how": "export function setBadge(n: number) {\n  const asked = n ? navigator.setAppBadge?.(n) : navigator.clearAppBadge?.();\n  asked?.catch(() => { /* not installed: no icon to badge */ });\n}\n// \"scope_extensions\": [{ \"type\": \"origin\", \"origin\": \"https://app.example.org\" }]  (Chrome 138)\n// \"migrate_from\" (Chrome 149) to move users from an old app identity\n// navigator.install(): Chrome 154 behind #web-app-installation-api only",
+   "support": "Badging: Chrome 81 on Windows and macOS, ChromeOS 91, Safari 17 (macOS Dock apps), iOS 16.4 (Home Screen apps). Not on Android or Linux, and not in Firefox. scope_extensions: Chrome 138. migrate_from: Chrome 149. note_taking: ChromeOS only.",
+   "gotchas": "Passing 0 to setAppBadge clears the badge instead of showing a dot. As far as I know there is no web API for run-on-login: it is a user toggle in the browser's app settings (UI location unverified). Don't ship features that depend on flagged APIs.",
+   "priority": "nice",
+   "sources": [
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Navigator.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/scope_extensions.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/migrate_from.json",
+    "apps/web/src/lib/pwa.ts"
+   ]
+  },
+  {
+   "title": "Desktop keyboard shortcuts and window sizing",
+   "what": "Browser-reserved shortcuts cannot be overridden in tabs, and some still go to the browser in app windows. The Keyboard Lock API works only in JS-initiated fullscreen. The browser remembers each app window's size and position.",
+   "why": "Platform-correct shortcuts (Cmd on Mac, Ctrl elsewhere) that don't clash, and layouts that work in narrow windows, feel like a desktop app.",
+   "how": "const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);\naddEventListener('keydown', (e) => {\n  const mod = isMac ? e.metaKey : e.ctrlKey;\n  if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); openQuickSwitcher(); } // Cmd/Ctrl+K is free\n});\n// Games/remote desktop only:\nawait document.documentElement.requestFullscreen();\nawait Reflect.get(navigator, 'keyboard')?.lock?.(['KeyW', 'Escape']);",
+   "support": "Keyboard Lock: Chrome 68+, fullscreen only. Window Management (getScreenDetails): Chrome 100. Firefox lets resizeTo/moveTo work only on windows created by window.open.",
+   "gotchas": "Avoid Cmd/Ctrl+W, Q, N, T, Tab, Shift+T, L and R. Alt combos on Windows can open menus, and Option on macOS types characters. Use e.code for physical-position shortcuts and e.key for letter shortcuts. Show shortcuts with platform glyphs. Design for windows down to about 320px wide, and set sensible minimum widths.",
+   "priority": "should",
+   "sources": [
+    "https://developer.chrome.com/docs/capabilities/web-apis/keyboard-lock",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Keyboard.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Window.json"
+   ]
+  },
+  {
+   "title": "macOS Safari web apps (Add to Dock)",
+   "what": "Since macOS 14 Sonoma and Safari 17, any site can be added to the Dock (File > Add to Dock). It gets its own window, storage, notifications and badge, and Safari honors manifest display, scope, start_url, theme_color and icons.",
+   "why": "Mac users without Chrome get a real app window. A hint at the right moment makes it discoverable, because Safari never prompts.",
+   "how": "const macSafari = /Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints === 0 && 'safari' in window === false && /Version\\/\\d+.*Safari/.test(navigator.userAgent);\nif (macSafari && !isInstalledWindow()) showHint('File \u2192 Add to Dock to use this as an app');",
+   "support": "Safari 17+ on macOS 14+: manifest display, scope, start_url, theme_color, icons and id. Shortcuts from 17.4. Badging from 17. Push since Safari 16 on Ventura. minimal-ui is never true, and fullscreen isn't reported in browser windows.",
+   "gotchas": "Storage is separate from Safari (cookies copied at creation per WebKit, unverified here). Web apps have no tabs, and out-of-scope links open in the default browser. The UA check above is a hint heuristic only: feature-detect real capabilities. 'Desktop Safari' also covers iPads that report Macintosh, which is why maxTouchPoints is checked.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable",
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/display.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/manifests/webapp/shortcuts.json",
+    "https://github.com/mdn/browser-compat-data/blob/main/api/Navigator.json"
+   ]
+  },
+  {
+   "title": "Firefox: desktop 'Web apps' (Taskbar Tabs) and Firefox Android",
+   "what": "Firefox desktop doesn't install manifest PWAs. Its 'Web apps' (Taskbar Tabs) feature pins a simplified, site-styled window to the Windows taskbar, reading the manifest for icon and start URL. Firefox Android installs manifest apps as badged home-screen shortcuts that honor display: standalone.",
+   "why": "Firefox users can still get an app-like window. Detect it so they don't see 'install' prompts that can't work.",
+   "how": "// No beforeinstallprompt in Firefox: show instructions instead\nconst firefoxPinnedApp = matchMedia('(display-mode: minimal-ui)').matches; // Windows taskbar web app, Firefox 142+\n// Android: menu -> Add to Home screen / Install; standalone detection via (display-mode: standalone) (Firefox Android 116+)",
+   "support": "Firefox desktop Taskbar Tabs: Windows on by default, Linux off by default, macOS not supported (Firefox source docs). BCD: (display-mode: minimal-ui) is true for apps pinned to the Windows taskbar from Firefox 142. Firefox Android: display standalone (47), display-mode (116), push, interactive-widget (133). Vibrate is a no-op. No beforeinstallprompt, no share_target, no WebAPK.",
+   "gotchas": "Taskbar Tabs share the profile, extensions and cookies, are tied to the container they were created in, and aren't restored with the session. MDN still says Firefox doesn't install PWAs via manifest, which is consistent with this. Exact first release (142 or 143) unverified. Firefox desktop navigator.share is behind a flag. Firefox requires a user gesture for Notification.requestPermission and prompts for storage.persist().",
+   "priority": "should",
+   "sources": [
+    "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/browser/components/taskbartabs/docs/index.md",
+    "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/browser/components/taskbartabs/docs/architecture.md",
+    "https://github.com/mdn/browser-compat-data/blob/main/css/at-rules/media.json",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable"
+   ]
+  },
+  {
+   "title": "Debug installability with DevTools, chrome://inspect and real phones (Lighthouse no longer has a PWA category)",
+   "what": "Chrome DevTools' Application panel is the reference for manifest, installability, service worker, storage and background services. Remote debugging connects a real Android phone. Lighthouse 12 removed the PWA category.",
+   "why": "Most 'doesn't feel native' bugs are invisible on desktop: wrong icons, an uninstallable manifest, a stale worker or a quota problem.",
+   "how": "1. Application > Manifest: Installability errors, Identity/Presentation, Icons (toggle 'minimum safe area for maskable icons'), Shortcuts, Screenshots, 'Test protocol' for protocol_handlers.\n2. Application > Service workers: Update on reload, Bypass for network, Offline, send test Push/Sync/Periodic sync events.\n3. Application > Storage: usage, 'Clear site data', simulate a custom storage quota. Background services: record Push/Notifications/Background sync.\n4. Android: enable USB debugging -> chrome://inspect/#devices -> Port forwarding 4173 -> localhost:4173 so the phone loads your local production build as a secure context (SW + install work).\n5. chrome://webapks (on the phone) shows minted WebAPKs and their update state.",
+   "support": "Chrome/Edge DevTools on every desktop OS. Lighthouse 12 (2024) removed the PWA category after Chrome's installability criteria update. Use the Manifest pane, your own E2E assertions, or PWABuilder's report instead.",
+   "gotchas": "DevTools Device Mode does not emulate install on mobile (the install button stays desktop), safe areas, the on-screen keyboard or standalone display. chrome://web-app-internals exists in recent Chrome for desktop app diagnostics (unverified). Never judge PWA quality by Lighthouse's PWA badge: it is gone.",
+   "priority": "must",
+   "sources": [
+    "https://developer.chrome.com/docs/devtools/progressive-web-apps",
+    "https://github.com/GoogleChrome/lighthouse/blob/main/changelog.md",
+    "https://github.com/GoogleChrome/lighthouse/pull/15455"
+   ]
+  },
+  {
+   "title": "Playwright: desktop and phone projects, real touch, and the emulation limits",
+   "what": "Run desktop and phone (isMobile, hasTouch, viewport, deviceScaleFactor) projects. Drive real touch with CDP Input.dispatchTouchEvent, and use full Chromium (new headless) when service workers must show notifications. Know what emulation cannot do.",
+   "why": "These projects catch hover-only UI, touch gestures, coarse-pointer layouts and SW wiring in CI. Knowing the gaps tells you which checks still need devices.",
+   "how": "// playwright.config.ts\nprojects: [\n  { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /(mobile|pwa)\\.spec/ },\n  { name: 'pwa', use: { ...devices['Desktop Chrome'], channel: 'chromium' }, testMatch: /pwa\\.spec/ }, // full browser: SW notifications work\n  { name: 'phone', use: { ...devices['Pixel 7'] }, testMatch: /mobile\\.spec/ }, // isMobile + hasTouch + coarse pointer\n]\n// Real finger: the browser decides scroll vs swipe vs long-press\nconst cdp = await page.context().newCDPSession(page);\nawait cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });\nawait cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + 200, y }] });\nawait cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });",
+   "support": "isMobile honors the meta viewport and enables touch events. hasTouch, deviceScaleFactor, colorScheme, reducedMotion, forcedColors, contrast, offline and permissions are context options. serviceWorkers: 'allow' (default) or 'block'.",
+   "gotchas": "Limits: no on-screen keyboard or visualViewport panning, env(safe-area-inset-*) is 0, display-mode can't be emulated with emulateMedia, headless pages are always visible (no 'away' tests), WebKit projects are desktop WebKit, not iOS Safari, and the Pixel descriptor isn't Samsung Internet or a WebAPK. Never press navigator.share in headless (crashes Chromium on macOS). Gestures from x under 24px pass in emulation but belong to the OS on real phones. Fake platform states via injected inputs to pure functions, not by monkey-patching globals, except to reproduce a real platform shape such as a missing getNotifications.",
+   "priority": "must",
+   "sources": [
+    "https://playwright.dev/docs/emulation",
+    "https://github.com/microsoft/playwright/blob/main/docs/src/api/params.md",
+    "playwright.config.ts",
+    "e2e/mobile.spec.ts",
+    "AGENTS.md"
+   ]
+  },
+  {
+   "title": "E2E against the production build: manifest, icons, service worker, offline, notifications, a11y",
+   "what": "The service worker and manifest exist only in the built app, so E2E runs against the production build (vite preview with the real base path). It asserts the install surface and offline start, and runs axe and html-validate on every page.",
+   "why": "An installed app that won't start offline, has a 404 icon, or ships a regressed service worker is broken for every installed user at once. Dev-server tests never see it.",
+   "how": "// webServer: { command: 'vite build && vite preview --base /app/ --port 4173 --strictPort', reuseExistingServer: false } // never test an old build\ntest('is installable', async ({ page }) => {\n  await page.goto('./');\n  const href = await page.locator('link[rel=manifest]').getAttribute('href');\n  const res = await page.request.get(new URL(href ?? '', page.url()).href);\n  expect(await res.json()).toMatchObject({ display: 'standalone', icons: expect.arrayContaining([expect.objectContaining({ sizes: '512x512', purpose: 'maskable' })]) });\n});\ntest('starts offline', async ({ page, context }) => {\n  await page.goto('./');\n  await page.evaluate(() => navigator.serviceWorker.ready);\n  await page.reload();\n  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);\n  await context.setOffline(true); await page.reload();\n  await expect(page.getByRole('main')).toBeVisible();\n});\n// every screen: await checkPage(page, 'phone \u203a message actions') // axe + html-validate",
+   "support": "Chromium projects support SW, notifications (full browser channel), offline and permissions. Notifications need context.grantPermissions(['notifications']).",
+   "gotchas": "Reload once after registration so the worker controls the page before going offline. Assert notifications via registration.getNotifications(). Also test the 'no getNotifications' path that Safari tabs have (Yurt regression). axe's meta-viewport rule fails maximum-scale or user-scalable=no. Keep unit/integration and E2E as separate commands.",
+   "priority": "must",
+   "sources": [
+    "e2e/pwa.spec.ts",
+    "playwright.config.ts",
+    "e2e/helpers.ts",
+    "AGENTS.md"
+   ]
+  },
+  {
+   "title": "Keep platform decisions in pure, unit-tested functions",
+   "what": "Put every decision that depends on device state (keyboard viewport math, gesture thresholds, which install path to show, whether the worker can notify, standalone detection, iPadOS detection) in pure functions with injected inputs. Wire them to events in thin glue code.",
+   "why": "Keyboards, safe areas, visibility and iOS standalone mode can't be reproduced in CI. Pure functions let you test the exact edge cases (pinch zoom, a hardware keyboard bar, missing APIs) on every commit.",
+   "how": "// viewport.test.ts\nimport { viewportVars } from './viewport';\ntest('iOS keyboard up: fit and follow the pan', () => {\n  expect(viewportVars(844, { height: 500, scale: 1, pageTop: 120 })).toEqual({ '--app-height': '500px', '--app-top': '120px', '--safe-bottom': '0px' });\n});\ntest('toolbar change is not a keyboard', () => {\n  expect(viewportVars(844, { height: 790, scale: 1, pageTop: 0 })['--app-height']).toBeNull();\n});\ntest('pinch-zoomed page is not moved', () => {\n  expect(viewportVars(844, { height: 250, scale: 2, pageTop: 300 })['--app-top']).toBe('0px');\n});\ntest('Safari tab registration cannot notify', () => {\n  expect(notifiesThroughWorker({ showNotification: () => {} })).toBe(false);\n});\ntest('iPadOS reports a Mac', () => { expect(isIos('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 5)).toBe(true); });",
+   "support": "Any unit runner (Vitest, Jest). For gesture math, property tests (fast-check with a fixed seed) catch threshold edge cases reproducibly.",
+   "gotchas": "Don't 'test' platform behavior by faking document.hidden or matchMedia globally: that tests the fake (Yurt keeps the untestable visibility branch to one ignored line with a reason). The glue that stays untested must be tiny, and covered by the device checklist. The service worker (sw.ts) only wires swLogic.ts decisions to events.",
+   "priority": "must",
+   "sources": [
+    "apps/web/src/lib/viewport.ts",
+    "apps/web/src/lib/swLogic.ts",
+    "apps/web/src/lib/visibility.ts",
+    "apps/web/src/lib/pwa.ts",
+    "AGENTS.md"
+   ]
+  },
+  {
+   "title": "iOS Simulator, Safari Web Inspector and a real-device checklist",
+   "what": "Use the Xcode iOS Simulator and real devices with Safari Web Inspector (including Home Screen apps), plus Android phones over chrome://inspect, for what emulation can't reach. Run a fixed real-device checklist before each release.",
+   "why": "The keyboard, safe areas, standalone mode, push, splash and edge gestures exist only on real systems, and they are exactly what users judge 'native feel' by.",
+   "how": "# Simulator (macOS + Xcode): localhost is a secure context, so SW/install work\nxcrun simctl openurl booted http://localhost:4173/app/\n# Safari > Develop > <Simulator|iPhone> > page (also lists Home Screen web apps)\n# iPhone: Settings > Apps > Safari > Advanced > Web Inspector ON; connect by cable/Wi-Fi\n# LAN device testing needs HTTPS: a tunnel or a locally trusted cert installed on the device\n\nChecklist per release (iPhone, iPad, Pixel/GMS Android, Samsung + Samsung Internet, Windows Chrome/Edge, macOS Safari Dock app, Firefox):\n- install from each browser; icon, name, splash, first paint without a white flash\n- status bar/notch/home indicator/gesture pill in light & dark, portrait & landscape\n- focus composer: no zoom, sits on the keyboard, no gap, fixed overlays follow\n- background 5+ min, reopen: reconnects, catches up, no stale 'connected'\n- push with the app closed; tap opens the right conversation in the existing window; badge count\n- long-press, swipes, Android back closes sheets first, edge swipes vs system\n- links leaving scope and OAuth return; share in/out; offline cold start; update toast -> reload\n- VoiceOver/TalkBack pass; pinch zoom still works",
+   "support": "Simulator needs macOS with Xcode. Web Inspector covers iOS Safari tabs and Home Screen apps on a connected Mac. Push on the Simulator: unverified, so use a real device for push.",
+   "gotchas": "The Simulator doesn't reproduce every real-device behavior (performance, some permissions, possibly push). Test the oldest iOS you support as well as the newest (Safari 27 at the moment). Keep the checklist in the repo, and record which items each release actually ran.",
+   "priority": "must",
+   "sources": [
+    "https://developer.chrome.com/docs/devtools/progressive-web-apps",
+    "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable",
+    "AGENTS.md"
+   ]
+  }
+ ]
+}

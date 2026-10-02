@@ -1,0 +1,580 @@
+{
+ "key": "motion",
+ "domain": "Motion, transitions, rendering performance and perceived speed",
+ "items": [
+  {
+   "title": "Same-document View Transitions around every visible state change",
+   "what": "document.startViewTransition() takes a snapshot of the current DOM, runs your update, then animates from the old state to the new one through ::view-transition-* pseudo-elements. By default the root cross-fades over 250ms and each named element morphs.",
+   "why": "Content that blinks straight to its new state is the most obvious sign that an app is a web page. Native toolkits animate every navigation and state change. View Transitions give you that continuity with one wrapper function and no animation library, and the browser handles the position and size morphing (FLIP) for you.",
+   "how": "// motion.ts\nconst reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');\nconst vtTypes = 'ViewTransition' in window && 'types' in ViewTransition.prototype;\n\n/** Runs a DOM update as a view transition when it can. Resolves once the DOM is updated, not when the animation ends. */\nexport function withTransition(update: () => void | Promise<void>, types: string[] = []): Promise<void> {\n  if (!('startViewTransition' in document) || reduceMotion.matches || document.visibilityState === 'hidden') {\n    return Promise.resolve().then(update);\n  }\n  const vt = vtTypes ? document.startViewTransition({ update, types }) : document.startViewTransition(update);\n  vt.ready.catch(() => {}); // a skipped transition rejects `ready`, but the update still runs\n  return vt.updateCallbackDone;\n}\n\n/* CSS */\n::view-transition-group(*) { animation-duration: 250ms; animation-timing-function: cubic-bezier(.2, 0, 0, 1); }\n/* A `*, *::before, *::after` reset does NOT match these pseudo-elements, so they need their own reduced-motion rule */\n@media (prefers-reduced-motion: reduce) {\n  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }\n}\n\n// React: document.startViewTransition(() => flushSync(() => setState(next))), or the <ViewTransition> component (stable in React 19.3)",
+   "support": "Same-document VT: Chrome/Edge 111+ (Android too), Safari 18.0+ on macOS and iOS (both the browser tab and a home-screen app), Firefox 144+ (Oct 2025). Baseline. The options object {update, types}, ViewTransition.types and :active-view-transition-type(): Chrome 125, Safari 18.2, Firefox 147. document.activeViewTransition: Chrome 142, Safari 26.2, Firefox 147. ViewTransition.waitUntil(): Chrome 144 only (experimental). Data: MDN browser-compat-data snapshot of 2026-10-02 (current releases: Chrome 154, Safari 27, Firefox 157).",
+   "gotchas": "While a document-level transition runs, the ::view-transition overlay takes every hit, so the page cannot be used. Keep transitions to about 400ms or less. Calling startViewTransition again skips the transition already running. Its update callback still runs, but its `ready` promise rejects, so attach a catch to avoid unhandled-rejection noise. A hidden document, or two elements with the same view-transition-name, skips the transition (InvalidStateError). Snapshots are images, so text inside a morphing element stretches; see the shared-element item for the fix. TS 6's lib.dom always declares startViewTransition, so feature-detect with `'startViewTransition' in document` and not with a truthiness check. Older engines (Chrome 111-124, Safari 18.0/18.1, Firefox 144-146) accept only a callback, not an options object, so branch on `'types' in ViewTransition.prototype`. In React, a state update that is not flushed synchronously inside the callback gets captured after the snapshot, and the animation shows nothing.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/API/Document/startViewTransition",
+    "https://developer.chrome.com/docs/web-platform/view-transitions/same-document",
+    "https://drafts.csswg.org/css-view-transitions-2/",
+    "https://developer.mozilla.org/en-US/docs/Mozilla/Firefox/Releases/147",
+    "https://react.dev/blog/2026/09/09/react-19-3",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Native push/pop navigation with transition types and the Navigation API",
+   "what": "Tag each transition with a type ('push' or 'pop'), worked out from the navigation direction, and style each type with :active-view-transition-type(). Forward navigation slides the new screen in from the trailing edge while the old one parallaxes out. Back reverses it.",
+   "why": "This copies UINavigationController and Android's stack navigation. Direction-aware motion tells users where they are in the hierarchy, and a cross-fade on every route change looks like a website.",
+   "how": "/* Only the routed content slides. The tab bar has its own snapshot, so it stays still. */\nmain.screen { view-transition-name: screen; }\nnav.tabbar { view-transition-name: tabbar; }\n:root { --ease-push: cubic-bezier(.32, .72, 0, 1); }\n@keyframes in-from-right { from { translate: 100% 0; } }\n@keyframes out-to-left { to { translate: -30% 0; opacity: .7; } }\n@keyframes in-from-left { from { translate: -30% 0; opacity: .7; } }\n@keyframes out-to-right { to { translate: 100% 0; } }\nhtml:active-view-transition-type(push) {\n  &::view-transition-old(screen) { animation: 400ms var(--ease-push) both out-to-left; }\n  &::view-transition-new(screen) { animation: 400ms var(--ease-push) both in-from-right; }\n}\nhtml:active-view-transition-type(pop) {\n  &::view-transition-old(screen) { animation: 350ms var(--ease-push) both out-to-right; z-index: 1; }\n  &::view-transition-new(screen) { animation: 350ms var(--ease-push) both in-from-left; }\n}\n\n// router.ts (Navigation API: Chrome 102+, Safari 26.2+, Firefox 147+)\nnavigation.addEventListener('navigate', (e) => {\n  if (!e.canIntercept || e.hashChange || e.downloadRequest !== null) return;\n  const from = navigation.currentEntry?.index ?? -1;\n  const back = e.navigationType === 'traverse' && e.destination.index < from;\n  const type = e.navigationType === 'push' || e.navigationType === 'traverse' ? (back ? 'pop' : 'push') : null;\n  const url = new URL(e.destination.url);\n  e.intercept({\n    async handler() {\n      // The iOS edge swipe or Android predictive back already animated this navigation, so don't animate it twice\n      if (e.hasUAVisualTransition || type === null) { await render(url); return; }\n      await withTransition(() => render(url), [type]);\n    },\n  });\n});",
+   "support": "Types: Chrome 125, Safari 18.2, Firefox 147. Navigation API (navigate event, intercept, NavigationTransition): Chrome 102, Safari 26.2, Firefox 147, so it is Baseline as of Jan 2026. NavigateEvent.hasUAVisualTransition: Chrome 118, Safari 26.2, Firefox 147. PopStateEvent.hasUAVisualTransition: Chrome 118, Safari 18.0, Firefox 149. CSS nesting (&) is Baseline 2023.",
+   "gotchas": "Without the skip, iOS Safari's edge-swipe back plays its own snapshot animation and then yours runs on top: a double animation. Astro, TanStack Router and Nuxt have all shipped fixes for this. On a router without the Navigation API, read `event.hasUAVisualTransition` in popstate and keep a history index in history.state to tell back from forward. Switching tabs is not a push. iOS switches tabs instantly, so use no animation or a short cross-fade there. Modal presentation slides up from the bottom. Flip the directions under :dir(rtl). Named elements are snapshotted separately, so a fixed header or tab bar without a name gets swept along in the root snapshot. The easing cubic-bezier(.32,.72,0,1) is a widely copied 'iOS-like' curve (Ionic and Vaul use it), not an Apple constant. A spring through linear() is closer to the real thing. Inputs are dead until the transition finishes, so keep pushes at about 400ms or less.",
+   "priority": "must",
+   "sources": [
+    "https://developer.chrome.com/docs/web-platform/view-transitions/same-document",
+    "https://developer.mozilla.org/docs/Web/API/NavigateEvent/hasUAVisualTransition",
+    "https://developer.mozilla.org/docs/Web/API/Navigation",
+    "https://github.com/withastro/astro/pull/16025",
+    "https://github.com/TanStack/router/issues/6754",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Shared-element (hero) morphs with view-transition-name, match-element and view-transition-class",
+   "what": "When an element has the same view-transition-name before and after the update, the browser morphs its position, size and content: a thumbnail grows into a detail header, or a list row moves to its new slot. match-element gives each element an automatic name based on its identity, and view-transition-class styles a whole group with one rule.",
+   "why": "Continuity between the tapped item and the screen it opens is how Photos, App Store and Material container transforms work. It also animates list reorders, inserts and deletes for free.",
+   "how": "// Name the tapped thumbnail just in time, and hand the name to the detail hero inside the update\nasync function openDetail(card: HTMLElement, id: string) {\n  card.style.viewTransitionName = 'hero';\n  await withTransition(() => {\n    card.style.viewTransitionName = '';\n    renderDetail(id); // renders <img class=\"detail-hero\" style=\"view-transition-name: hero\">\n  }, ['push']);\n}\n\n/* CSS */\n::view-transition-group(hero) { animation-duration: 450ms; animation-timing-function: var(--spring-smooth); }\n/* When the aspect ratio changes, keep the snapshot filling the box instead of stretching */\n::view-transition-old(hero), ::view-transition-new(hero) { height: 100%; object-fit: cover; overflow: clip; }\n\n/* Lists: unique names from element identity, plus one class to style all rows */\n.message { view-transition-name: match-element; view-transition-class: message; }\n::view-transition-group(.message) { animation-duration: 200ms; }",
+   "support": "view-transition-name: Chrome 111, Safari 18.0, Firefox 144. match-element: Chrome 137, Safari 18.4, Firefox 144. view-transition-class: Chrome 125, Safari 18.2, Firefox 144. Safari also accepts view-transition-name: auto (18.2+). Chrome does not, so prefer match-element.",
+   "gotchas": "Every name must be unique in each snapshot, and one duplicate skips the whole transition. Giving every card a name all the time costs a snapshot per named element, even off-screen ones, so name only the elements involved and only just in time. match-element works in same-document transitions only and pairs DOM nodes by identity. If the framework remounts the node (unstable React key, conditional wrapper), there is no pairing and you get a fade instead of a move. During the transition the old and new images are flat bitmaps: no live text reflow, no interaction, and a box-shadow is captured as part of the image. Nested groups (view-transition-group property, Chrome 140) keep children clipped by their parent but are Chrome-only.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/view-transition-name",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/view-transition-class",
+    "https://developer.chrome.com/docs/web-platform/view-transitions/same-document",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Cross-document View Transitions for multi-page apps (@view-transition)",
+   "what": "Opt both pages in with `@view-transition { navigation: auto; }`. Same-origin navigations then animate with no JavaScript. Use the pageswap/pagereveal events to set transition types, and `<link rel=expect blocking=render>` to make sure the incoming page has the element you morph to.",
+   "why": "It gives a server-rendered or multi-page PWA app-like navigation without turning it into an SPA. Combined with prerendering, a page change can feel as instant as a native push.",
+   "how": "/* On both pages */\n@view-transition { navigation: auto; }\n\n<!-- In the incoming page's <head>: don't render the first frame until #main has been parsed -->\n<link rel=\"expect\" href=\"#main\" blocking=\"render\">\n<script>\n  // Must be a classic, render-blocking script in <head>. A deferred module misses the event.\n  addEventListener('pagereveal', (e) => {\n    const act = 'navigation' in window ? navigation.activation : null;\n    if (!e.viewTransition || !act || !act.from) return;\n    const back = act.navigationType === 'traverse' && act.entry.index < act.from.index;\n    e.viewTransition.types.add(back ? 'pop' : 'push');\n  });\n</script>",
+   "support": "@view-transition: Chrome 126, Safari 18.2 (macOS/iOS), Firefox not shipped (same-document only; cross-document is behind a Nightly flag and is an Interop 2026 focus area). pagereveal: Chrome 123, Safari 18.2. pageswap: Chrome 124, Safari 18.2 (partial). rel=expect: Chrome 124, Safari 18.2. blocking=render: Chrome 105, Safari 18.2. No Firefox support for any of these.",
+   "gotchas": "Only same-origin navigations started by the user or a link animate. Reloads don't. Both documents must opt in. If the new page takes too long (Chrome gives up after about 4s), the transition is skipped. For an SPA PWA this does nothing for in-app routes; use the same-document API there. navigation.activation needs the Navigation API (Safari 26.2+), so guard `navigation` before you use it, or Safari 18.2-26.1 throws a ReferenceError. `blocking=render` on a large script delays first paint: keep the expected element early in the HTML.",
+   "priority": "nice",
+   "sources": [
+    "https://developer.chrome.com/docs/web-platform/view-transitions/cross-document",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@view-transition",
+    "https://css-tricks.com/what-on-earth-is-the-types-descriptor-in-view-transitions/",
+    "https://webkit.org/blog/17818/announcing-interop-2026/",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Element-scoped view transitions for panels that animate while the rest stays live",
+   "what": "element.startViewTransition() limits a view transition to one subtree. The pseudo-elements live inside that element, so ancestor clipping and transforms apply, several transitions can run at once, and the rest of the page stays interactive.",
+   "why": "A document-level transition freezes the whole app. Native apps animate a sidebar or thread pane on its own while you keep typing in the composer.",
+   "how": "declare global { interface Element { startViewTransition?(update: () => void | Promise<void>): ViewTransition } }\n\nexport function transitionWithin(el: Element, update: () => void): Promise<void> {\n  if (typeof el.startViewTransition === 'function') return el.startViewTransition(update).updateCallbackDone;\n  return withTransition(update); // falls back to a document-level transition (or an instant update)\n}",
+   "support": "Chrome 147+ only (Apr 2026, marked experimental in MDN compat data). Not in Safari or Firefox. TS 6 lib.dom has no type for it yet, hence the augmentation.",
+   "gotchas": "This is progressive enhancement only. The fallback is a document-level transition that blocks input, so keep it short, or skip the animation in the fallback. Spec work is still moving (view-transition-scope and transitionRoot are also Chrome 147, experimental).",
+   "priority": "nice",
+   "sources": [
+    "https://developer.chrome.com/blog/element-scoped-view-transitions",
+    "https://developer.mozilla.org/docs/Web/API/Element/startViewTransition",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Spring physics in plain CSS with linear() easing",
+   "what": "The linear() easing function accepts many stops. Sample a damped spring into those stops and you get spring motion (with optional overshoot) from ordinary CSS transitions, keyframes, view transitions and WAAPI, with no JS animation loop.",
+   "why": "iOS and modern Android drive almost everything with springs. A cubic-bezier can't overshoot and settle naturally, which is why web motion feels mechanical next to native motion.",
+   "how": "// spring.ts: use at build time or run once at startup\nexport function spring(stiffness = 300, damping = 30, mass = 1, points = 40) {\n  const w0 = Math.sqrt(stiffness / mass);\n  const z = damping / (2 * Math.sqrt(stiffness * mass));\n  const wd = w0 * Math.sqrt(Math.max(0, 1 - z * z));\n  const x = (t: number) =>\n    z < 1\n      ? 1 - Math.exp(-z * w0 * t) * (Math.cos(wd * t) + ((z * w0) / wd) * Math.sin(wd * t))\n      : 1 - Math.exp(-w0 * t) * (1 + w0 * t);\n  let settle = 0;\n  for (let t = 0; t < 10; t += 0.001) if (Math.abs(1 - x(t)) > 0.001) settle = t;\n  const stops = Array.from({ length: points + 1 }, (_, i) => (i === points ? 1 : +x((i / points) * settle).toFixed(3)));\n  return { easing: `linear(${stops.join(', ')})`, duration: Math.round(settle * 1000) };\n}\n\n/* Generated by the function above */\n:root {\n  /* stiffness 300, damping 30: no visible bounce, use 500ms */\n  --spring-smooth: linear(0, 0.074, 0.231, 0.406, 0.567, 0.699, 0.801, 0.875, 0.926, 0.96, 0.981, 0.993, 1, 1.003, 1.004, 1.004, 1.004, 1.003, 1.002, 1.001, 1);\n  /* stiffness 260, damping 18: playful overshoot, use 780ms */\n  --spring-bouncy: linear(0, 0.111, 0.353, 0.619, 0.844, 1.002, 1.089, 1.12, 1.113, 1.086, 1.054, 1.025, 1.004, 0.991, 0.986, 0.986, 0.989, 0.993, 0.996, 0.999, 1.001, 1.002, 1.002, 1.001, 1);\n}\n.sheet[open] { transition: translate 500ms var(--spring-smooth); }",
+   "support": "linear() easing: Chrome 113, Safari 17.2, Firefox 112. Baseline since Dec 2023. It works everywhere an easing is accepted: transition, animation, WAAPI `easing`, and view-transition pseudo-elements.",
+   "gotchas": "A spring's duration comes from physics, so always pair the easing with the duration it was generated for. Stretching a 500ms curve to 250ms makes it stiffer. Use the bouncy curve only for playful moments (badge pop, like button) and never for overshoot on large surfaces such as a sheet or a pushed page. Overshoot past 100% on translate can expose the edge of the screen, so clip it or use the smooth variant. A spring can't pick up the finger's velocity at release. For velocity-matched handoff, compute the curve at runtime or drive the motion from JS. Unsupported browsers drop the whole declaration, so declare a cubic-bezier fallback first if you still support pre-2023 engines. Jake Archibald's linear-easing-generator does the same conversion visually.",
+   "priority": "must",
+   "sources": [
+    "https://developer.chrome.com/docs/css-ui/css-linear-easing-function",
+    "https://linear-easing-generator.netlify.app/",
+    "https://www.joshwcomeau.com/animation/linear-timing-function/",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Values/easing-function/linear"
+   ]
+  },
+  {
+   "title": "Motion tokens: native durations, asymmetric enter and exit, and a small set of keyframes",
+   "what": "Define every duration and easing as a design token, plus a small shared set of presentation keyframes (sheet-in, dialog-in, toast-in, pop, rise). Entrances decelerate and run longer. Exits accelerate and run shorter. The tokens collapse in one place under reduced motion.",
+   "why": "Native platforms feel coherent because every transition comes from the same small set of curves and timings. Ad-hoc 300ms ease everywhere reads as web. A single source also makes reduced motion a one-line change.",
+   "how": ":root {\n  --dur-press: 100ms;   /* press feedback */\n  --dur-small: 200ms;   /* toggles, fades, tooltips */\n  --dur-medium: 300ms;  /* dialogs and sheets coming in */\n  --dur-large: 450ms;   /* full-screen push */\n  --dur-exit: 200ms;    /* exits are quicker than entrances */\n  --ease-standard: cubic-bezier(.2, 0, 0, 1);\n  --ease-enter: cubic-bezier(.05, .7, .1, 1);   /* decelerate: arriving */\n  --ease-exit: cubic-bezier(.3, 0, .8, .15);    /* accelerate: leaving */\n}\n@media (prefers-reduced-motion: reduce) {\n  :root { --dur-small: 1ms; --dur-medium: 1ms; --dur-large: 1ms; --dur-exit: 1ms; }\n}\n/* Presentation keyframes (Yurt's set, generalized) */\n@keyframes sheet-in { from { transform: translateY(100%); } }\n@keyframes dialog-in { from { transform: translateY(12px) scale(.97); opacity: 0; } }\n@keyframes toast-in { from { transform: translateY(16px) scale(.96); opacity: 0; } }\n@keyframes pop { 0% { transform: scale(.6); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }\n.toast { animation: toast-in var(--dur-medium) var(--ease-enter) both; }",
+   "support": "Plain CSS custom properties and keyframes work everywhere. The curves are Material 3's standard, emphasized-decelerate and emphasized-accelerate easings.",
+   "gotchas": "Scale duration with distance and screen size. Desktop and tablet UIs should run faster (150-250ms) than phone full-screen moves. Don't animate what the user didn't cause: content already on screen at app launch should simply appear, not rise in. When reducing motion, prefer 1ms (or 0.01ms) over 0ms. A transition whose combined duration and delay is 0 never starts, so code waiting for `transitionend` hangs. Yurt's tokens used 0ms and swapped the spring easings to linear under reduce. Keyframes without a `to` block animate back to the element's own style, which keeps them reusable.",
+   "priority": "must",
+   "sources": [
+    "https://m3.material.io/styles/motion/easing-and-duration/tokens-specs",
+    "https://developer.apple.com/design/human-interface-guidelines/motion",
+    "https://drafts.csswg.org/css-transitions/#starting"
+   ]
+  },
+  {
+   "title": "Entry and exit animations for dialog, popover and top-layer UI (@starting-style + allow-discrete)",
+   "what": "@starting-style supplies the 'before' style for an element's first frame, so it can transition in from display:none. `transition-behavior: allow-discrete` on display and overlay keeps the element rendered, and in the top layer, until its exit transition finishes.",
+   "why": "A native modal, menu or popover never pops in or vanishes. Before these features, animating <dialog> and [popover] meant JS timers and class juggling, and most web apps simply skipped it.",
+   "how": "dialog, [popover] {\n  opacity: 0; scale: .96;\n  /* Closed state = exit timing (a transition uses the destination state's transition property) */\n  transition: opacity var(--dur-exit) var(--ease-exit), scale var(--dur-exit) var(--ease-exit),\n              display var(--dur-exit) allow-discrete, overlay var(--dur-exit) allow-discrete;\n}\ndialog[open], [popover]:popover-open {\n  opacity: 1; scale: 1;\n  transition-duration: var(--dur-medium); transition-timing-function: var(--ease-enter);\n}\n@starting-style { dialog[open], [popover]:popover-open { opacity: 0; scale: .96; } }\n\ndialog::backdrop { background: rgb(0 0 0 / 0); transition: background-color var(--dur-exit), display var(--dur-exit) allow-discrete, overlay var(--dur-exit) allow-discrete; }\ndialog[open]::backdrop { background: rgb(0 0 0 / .35); }\n@starting-style { dialog[open]::backdrop { background: rgb(0 0 0 / 0); } }\n\n// Firefox can't transition `display`, so animate the exit with WAAPI there (works everywhere)\nexport async function closeAnimated(d: HTMLDialogElement) {\n  const a = d.animate({ opacity: [1, 0], scale: [1, 0.96] }, { duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 160, easing: 'cubic-bezier(.3,0,.8,.15)', fill: 'forwards' });\n  await a.finished.catch(() => {});\n  d.close();\n  a.cancel();\n}\ndialog.addEventListener('cancel', (e) => { e.preventDefault(); void closeAnimated(dialog); }); // Esc and Android back",
+   "support": "@starting-style: Chrome 117, Safari 17.5, Firefox 129. transition-behavior: allow-discrete: Chrome 117, Safari 17.4, Firefox 129. Transitioning display: Chrome 117, Safari 18.0, Firefox NO (bug 1882408). The overlay property: Chrome 117 only. requestClose(): Chrome 134, Safari 18.4, Firefox 139. closedby=\"any\" light dismiss: Chrome 134, Firefox 141, Safari only in Technology Preview.",
+   "gotchas": "In Firefox, CSS.supports() reports allow-discrete as supported, yet display still flips instantly. The entry animation works and the exit does not, so feature detection gives a false positive. That's why the WAAPI exit is the portable path. Without `overlay ... allow-discrete` (Chrome), the element leaves the top layer immediately and the exit plays underneath other content. A dialog's `cancel` event can't be prevented without a user activation since it opened (the CloseWatcher anti-abuse rule), and in that case the dialog closes instantly. That's acceptable. Use `d.requestClose()` for your own close buttons so they take the same animated path. Don't put both a CSS exit transition and a WAAPI exit on the same property: it animates twice.",
+   "priority": "must",
+   "sources": [
+    "https://developer.chrome.com/blog/entry-exit-animations",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@starting-style",
+    "https://github.com/mdn/browser-compat-data/issues/26155",
+    "https://developer.mozilla.org/docs/Web/API/HTMLDialogElement/requestClose",
+    "https://web.dev/blog/baseline-entry-animations"
+   ]
+  },
+  {
+   "title": "Bottom sheets that slide up on a spring and drag down to dismiss",
+   "what": "A modal <dialog> pinned to the bottom edge. It springs up from translate 0 100% on open, follows the finger while the grabber is dragged, and on release either snaps back or animates out from wherever it is.",
+   "why": "The sheet is the default way phone apps present things (iOS UISheetPresentationController, Material bottom sheets). A centered desktop-style modal on a phone is a web tell. A sheet that can't be dragged feels fake.",
+   "how": "<dialog class=\"sheet\" aria-labelledby=\"sheet-title\"><div class=\"grabber\" aria-hidden=\"true\"></div>...</dialog>\n\n.sheet {\n  margin: auto auto 0; width: min(100%, 640px); max-width: 100%; max-height: 92dvh;\n  border: 0; border-radius: 16px 16px 0 0; padding: 8px 16px calc(16px + env(safe-area-inset-bottom));\n  overscroll-behavior: contain;\n  translate: 0 100%;                               /* closed: the exit is done in JS (below) */\n}\n.sheet[open] { translate: 0 0; transition: translate 500ms var(--spring-smooth); }\n@starting-style { .sheet[open] { translate: 0 100%; } }\n.sheet.dragging { transition: none; }\n.grabber { touch-action: none; inline-size: 36px; block-size: 5px; margin: 0 auto 8px; border-radius: 3px; background: var(--border-strong); }\n\nconst reduce = matchMedia('(prefers-reduced-motion: reduce)');\nexport async function closeSheet(d: HTMLDialogElement) {\n  const from = getComputedStyle(d).translate;      // starts from the current drag offset, so no jump\n  d.classList.remove('dragging'); d.style.translate = '';\n  const a = d.animate({ translate: [from, '0 100%'] }, { duration: reduce.matches ? 0 : 220, easing: 'cubic-bezier(.3,0,.8,.15)', fill: 'forwards' });\n  await a.finished.catch(() => {});\n  d.close(); a.cancel();\n}\nexport function draggable(d: HTMLDialogElement, handle: HTMLElement) {\n  let y0 = 0, dy = 0, lastY = 0, lastT = 0, v = 0;\n  d.addEventListener('cancel', (e) => { e.preventDefault(); void closeSheet(d); });\n  handle.addEventListener('pointerdown', (e) => { handle.setPointerCapture(e.pointerId); y0 = lastY = e.clientY; lastT = e.timeStamp; dy = v = 0; d.classList.add('dragging'); });\n  handle.addEventListener('pointermove', (e) => {\n    if (!handle.hasPointerCapture(e.pointerId)) return;\n    const raw = e.clientY - y0;\n    dy = raw > 0 ? raw : raw / 4;                 // rubber-band when dragged upward\n    v = (e.clientY - lastY) / Math.max(1, e.timeStamp - lastT); lastY = e.clientY; lastT = e.timeStamp; // recent px/ms\n    d.style.translate = `0 ${dy}px`;\n  });\n  const end = () => {\n    if (dy > d.offsetHeight * 0.3 || v > 0.5) { void closeSheet(d); return; }\n    d.classList.remove('dragging'); d.style.translate = '';   // the [open] spring snaps it back\n  };\n  handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);\n}\n// open: d.showModal(); draggable(d, d.querySelector('.grabber')!) -- or query safely in strict code",
+   "support": "Everything used here is Baseline: dialog.showModal (Safari 15.4+), @starting-style (Chrome 117 / Safari 17.5 / Firefox 129), linear() (Safari 17.2+), WAAPI translate keyframes, pointer capture (Safari 13+), dvh units (Safari 15.4+). The exit runs in JS, so it works in Firefox too.",
+   "gotchas": "This is a Yurt lesson: a plain `sheet-in` keyframe (translateY(100%) to none) gets the entrance right, but without drag-to-dismiss and an animated exit it still feels like a web overlay. Use the velocity from the last move or two, not the gesture average, so a quick flick dismisses. Give the grabber, not the whole sheet, `touch-action: none`. Dragging the sheet body down when its inner scroller is at scrollTop 0 (the iOS behaviour) needs extra logic: only start the drag when the scroller is at the top and the movement is downward. Detents (half or full height) are easiest with CSS scroll-snap on a full-height scroller, which is out of scope here. Keep the backdrop tappable to close (closedby=any where supported, or a click handler on the dialog element). Apply max-height in dvh, not vh, so the iOS toolbar doesn't cover the sheet.",
+   "priority": "must",
+   "sources": [
+    "https://developer.chrome.com/blog/entry-exit-animations",
+    "https://developer.mozilla.org/docs/Web/API/Element/setPointerCapture",
+    "https://developer.apple.com/design/human-interface-guidelines/sheets",
+    "https://m3.material.io/components/bottom-sheets/overview"
+   ]
+  },
+  {
+   "title": "Direct manipulation: panels follow the finger 1:1, lock to an axis, and finish on release",
+   "what": "Pointer events move an element with translate exactly as far as the finger has moved. The gesture commits to an axis after a few pixels so vertical scrolling still works, and on release it completes or snaps back based on distance or flick speed.",
+   "why": "On native, content tracks the finger with no lag and gestures can be cancelled halfway. A swipe that only fires after the finger lifts (a 'swipe event') feels dead. Following the finger is what makes swipe-back, swipe-to-reply and swipe-to-dismiss feel physical.",
+   "how": "// Yurt's thresholds: axis lock at 10px; a swipe is 64px, or 32px when faster than 0.5 px/ms (a flick)\nconst LOCK = 10, DISTANCE = 64, FLICK_DIST = 32, FLICK_SPEED = 0.5;\nconst reduce = matchMedia('(prefers-reduced-motion: reduce)');\nexport function swipeToClose(el: HTMLElement, onClose: () => void) {\n  el.style.touchAction = 'pan-y';               // the browser keeps vertical panning; horizontal moves come to us\n  let x0 = 0, y0 = 0, t0 = 0, dx = 0, axis: 'x' | 'y' | null = null;\n  el.addEventListener('pointerdown', (e) => { x0 = e.clientX; y0 = e.clientY; t0 = e.timeStamp; dx = 0; axis = null; });\n  el.addEventListener('pointermove', (e) => {\n    if (e.pointerType === 'mouse' && e.buttons === 0) return;\n    const mx = e.clientX - x0, my = e.clientY - y0;\n    axis ??= Math.max(Math.abs(mx), Math.abs(my)) >= LOCK ? (Math.abs(mx) > Math.abs(my) ? 'x' : 'y') : null;\n    if (axis !== 'x') return;\n    if (!el.hasPointerCapture(e.pointerId)) el.setPointerCapture(e.pointerId);\n    dx = Math.max(0, mx);\n    el.style.translate = `${dx}px 0`;            // a write only, no layout read: cheap per event\n  });\n  const end = (e: PointerEvent) => {\n    if (axis !== 'x') return;\n    axis = null;\n    const speed = dx / Math.max(1, e.timeStamp - t0);\n    const done = dx >= DISTANCE || (dx >= FLICK_DIST && speed >= FLICK_SPEED);\n    const a = el.animate({ translate: [`${dx}px 0`, done ? '100% 0' : '0 0'] }, { duration: reduce.matches ? 0 : 220, easing: 'cubic-bezier(.2,0,0,1)', fill: done ? 'forwards' : 'none' });\n    el.style.translate = '';\n    if (done) void a.finished.then(onClose, () => {});\n  };\n  el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);\n}",
+   "support": "Pointer Events, setPointerCapture and touch-action are Baseline (iOS Safari 13+). Individual `translate`: Chrome 104, Safari 14.1, Firefox 72. getCoalescedEvents(): Chrome 58, Safari 18.2, Firefox 59. getPredictedEvents(): Chrome 77, Safari 18.2, Firefox 89 (for drawing and ink, rarely needed for drags).",
+   "gotchas": "These come from Yurt's lib/gestures.ts, where pure functions own the thresholds so they can be unit tested without a screen. Turn off any CSS transition on the dragged property while dragging, or the element trails behind the finger. Browsers already deliver pointermove about once per frame (aligned with requestAnimationFrame), so writing the transform straight from the handler is fine. Batch into rAF only if the handler also reads layout. Average speed over the whole gesture is fine for the threshold test. For a velocity-matched handoff, use the last ~50-100ms of movement. iOS Safari's own back swipe starts at the left edge and wins over your gesture, so don't start swipe-right gestures within about 20px of the left edge. `pointercancel` fires when the browser takes over (vertical pan, system gesture): always snap back on it. A long-press candidate is a gesture that hasn't locked an axis yet.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/API/Element/setPointerCapture",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/touch-action",
+    "https://developer.mozilla.org/docs/Web/API/PointerEvent/getCoalescedEvents",
+    "https://w3c.github.io/pointerevents/"
+   ]
+  },
+  {
+   "title": "Interruptible motion: transitions for reversible state, WAAPI that starts from the current value",
+   "what": "For state that can flip mid-animation (drawer open/closed, toggles), use CSS transitions, because they retarget from the current on-screen value. Use keyframe animations only for one-shot effects. In JS, the Web Animations API (el.animate) lets you cancel, reverse and await an animation, and start a new one from getComputedStyle.",
+   "why": "Native animations can be interrupted: tap 'close' while a drawer is still opening and it turns around smoothly. CSS keyframe animations restart from frame 0, which produces a visible jump.",
+   "how": "/* Reversible: a transition retargets from wherever it is right now */\n.drawer { translate: -100% 0; transition: translate 300ms var(--ease-standard); }\n.drawer.open { translate: 0 0; }\n\n// WAAPI: animate from the current visual value to a new target, and keep the final state in style, not in fill: forwards\nexport function animateTo(el: HTMLElement, translate: string, options: KeyframeAnimationOptions): Animation {\n  const from = getComputedStyle(el).translate;     // includes any running animation's current value\n  el.getAnimations().forEach((a) => a.cancel());\n  el.style.translate = translate;\n  return el.animate({ translate: [from, translate] }, options);\n}\n\n// Or commit an animation's end state and drop it, so animations with fill don't pile up\nconst a = el.animate({ opacity: [0, 1] }, { duration: 200, fill: 'forwards' });\nawait a.finished; a.commitStyles(); a.cancel();",
+   "support": "Element.animate: Chrome 36, Safari 13.1, Firefox 48. Animation.finished, commitStyles() and persist(): Chrome 84, Safari 13.1, Firefox 63/75. getAnimations(): Chrome 84, Safari 14, Firefox 75. Animation.overallProgress: Chrome 133, Safari 26.2, Firefox 142.",
+   "gotchas": "Many `fill: 'forwards'` animations stack up and override later style changes (they're auto-removed only once replaced). Use commitStyles() plus cancel(), or set the final style yourself. commitStyles() throws on an element that isn't rendered (display:none). WAAPI ignores the CSS reduced-motion override, so check matchMedia yourself. Chrome and Firefox shorten a reversed transition in proportion to how far it got (the 'reversing shortening factor'), which is correct and matches native. Keep animated properties compositor-only (transform, translate, scale, rotate, opacity) so they stay off the main thread.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/API/Element/animate",
+    "https://developer.mozilla.org/docs/Web/API/Animation/commitStyles",
+    "https://drafts.csswg.org/web-animations-1/"
+   ]
+  },
+  {
+   "title": "Scroll-driven animations: collapsing large titles, progress bars and reveals without JS",
+   "what": "animation-timeline: scroll() or view(), or a named scroll-timeline, drives a CSS animation from scroll position instead of time. Examples: an iOS-style large title that shrinks into the nav bar, a reading progress bar, or cards that fade in as they enter the viewport.",
+   "why": "Native nav bars respond continuously to scroll. JS scroll listeners run on the main thread, stutter under load and ruin INP. These animations run on the compositor (Chrome, and Safari 26.4+), so they stay smooth at 120Hz.",
+   "how": "@supports (animation-timeline: scroll()) {\n  .page { scroll-timeline: --page block; }   /* the scroller */\n  .app { timeline-scope: --page; }            /* lets the header, outside the scroller, see the timeline */\n  .large-title {\n    animation: title-collapse linear both;\n    animation-timeline: --page;                /* must come AFTER the `animation` shorthand, which resets it */\n    animation-range: 0 56px;\n  }\n  .bar-title { animation: fade-in linear both; animation-timeline: --page; animation-range: 40px 64px; }\n  .bar-hairline { animation: fade-in linear both; animation-timeline: --page; animation-range: 0 8px; }\n  .read-progress { transform-origin: 0 50%; animation: grow linear both; animation-timeline: scroll(root block); }\n  @media (prefers-reduced-motion: no-preference) {\n    .card { animation: fade-in linear both; animation-timeline: view(); animation-range: entry 0% entry 60%; }\n  }\n}\n@keyframes title-collapse { to { opacity: 0; scale: .9; translate: 0 -8px; } }\n@keyframes fade-in { from { opacity: 0; } }\n@keyframes grow { from { scale: 0 1; } }",
+   "support": "Chrome 115+, Safari 26.0+ (macOS and iOS; compositor-threaded since 26.4, many fixes in 26.5). Firefox: Nightly only (pref), not in release; an Interop 2026 focus area. timeline-scope: Chrome 116, Safari 26. ScrollTimeline/ViewTimeline JS classes: same support.",
+   "gotchas": "Always put animation-timeline after the `animation` shorthand. This is the most common reason 'nothing happens'. Without @supports, Firefox shows the animation's static base style, so make the no-timeline state correct: title fully visible, bar title hidden. For a JS fallback, an IntersectionObserver on a sentinel can toggle a class. Collapsing changes no layout, only transform and opacity, so content doesn't jump. If the title collapse changes real height, use position: sticky plus negative margin instead. Decorative scroll effects are motion: gate them behind prefers-reduced-motion: no-preference. Effects that are pure feedback, such as the hairline and progress bar, can stay.",
+   "priority": "should",
+   "sources": [
+    "https://webkit.org/blog/17101/a-guide-to-scroll-driven-animations-with-just-css/",
+    "https://webkit.org/blog/17862/webkit-features-for-safari-26-4/",
+    "https://developer.chrome.com/docs/css-ui/scroll-driven-animations",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/animation-timeline",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Bars that react to scroll state: hairline or shadow only when stuck or scrolled (scroll-state queries)",
+   "what": "container-type: scroll-state plus @container scroll-state(stuck: top | scrollable | scrolled) styles a sticky bar's contents depending on whether it is stuck or content is scrolled under it.",
+   "why": "iOS and Android bars are flat at rest and only show a separator or tint once content scrolls underneath. A permanent border-bottom is a small web tell.",
+   "how": ".topbar { position: sticky; top: 0; container-type: scroll-state; }\n.topbar > .inner { transition: box-shadow 150ms, background-color 150ms; }\n@container scroll-state(stuck: top) {\n  .topbar > .inner { box-shadow: 0 0.5px 0 rgb(0 0 0 / .18); background: var(--surface-bar); }\n}\n/* In Safari 26+ and Chrome, a scroll-driven fade of the hairline (previous item) gives the same effect */",
+   "support": "Chrome 133+ (stuck, snapped, scrollable). `scrolled`: Chrome 144. Not supported in Safari or Firefox (MDN marks it experimental). Use the scroll-driven-animation version for Safari 26+, and an IntersectionObserver sentinel elsewhere.",
+   "gotchas": "Container queries style the container's descendants, never the container itself, hence the .inner wrapper. This is progressive enhancement only: design the default as the 'not stuck' look.",
+   "priority": "nice",
+   "sources": [
+    "https://developer.chrome.com/blog/css-scroll-state-queries",
+    "https://drafts.csswg.org/css-conditional-5/#scroll-state-container",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Animate to and from height: auto (interpolate-size, calc-size, ::details-content, with a grid fallback)",
+   "what": "`interpolate-size: allow-keywords` on :root lets height and width transition to and from auto, min-content and fit-content. calc-size() does it per property. ::details-content targets the expanding part of a <details>. The grid-template-rows 0fr-to-1fr trick works in every engine.",
+   "why": "Accordions, expanding replies and 'show more' sections that snap open are a web tell. Native disclosure groups animate their height.",
+   "how": ":root { interpolate-size: allow-keywords; }            /* Chromium; inherited, so set it once */\ndetails::details-content {\n  block-size: 0; overflow: clip;\n  transition: block-size var(--dur-small) var(--ease-standard), content-visibility var(--dur-small) allow-discrete;\n}\ndetails[open]::details-content { block-size: auto; }\n\n/* Works everywhere: grid track interpolation */\n.collapse { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-small) var(--ease-standard); }\n.collapse.open { grid-template-rows: 1fr; }\n.collapse > * { overflow: hidden; min-block-size: 0; }",
+   "support": "interpolate-size and calc-size(): Chrome 129+ only (not Safari 27 or Firefox 157). ::details-content: Chrome 131, Safari 18.4, Firefox 143. Transitioning content-visibility: Chrome 117, Safari 18, not Firefox. grid-template-rows animation: Chrome 107, Safari 16, Firefox 66 (Baseline).",
+   "gotchas": "Without interpolate-size the details example just snaps open, which is a safe fallback. Height animation runs layout every frame. That's fine for a small panel, but not for tall lists or many items at once. There, animate transform or clip-path, or use a View Transition. Content inside a collapsed `.collapse` is still focusable and in the accessibility tree, so add `inert` or `hidden` when it's closed.",
+   "priority": "should",
+   "sources": [
+    "https://developer.chrome.com/docs/css-ui/animate-to-height-auto",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/interpolate-size",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Selectors/::details-content",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Staggered list entrances with sibling-index()",
+   "what": "sibling-index() returns an element's position among its siblings, so a cascading entrance delay needs no inline --i variables set from JS.",
+   "why": "A short, capped stagger when a screen first fills gives the 'content settling in' feel of native lists, and a natural reading order.",
+   "how": "@media (prefers-reduced-motion: no-preference) {\n  .list.entering > li {\n    animation: rise var(--dur-medium) var(--ease-enter) both;\n    animation-delay: calc(min(sibling-index(), 8) * 30ms);   /* cap it: the last row shouldn't wait */\n  }\n}\n@keyframes rise { from { translate: 0 8px; opacity: 0; } }\n/* Fallback for older engines: li.style.setProperty('--i', String(i)) and calc(var(--i, 0) * 30ms) */",
+   "support": "sibling-index() and sibling-count(): Chrome 138, Safari 26.2, Firefox 154 (Aug 2026), so newly Baseline in 2026. Engines without support drop the declaration, so items just appear without a delay.",
+   "gotchas": "Stagger only the first fill of a screen (hence the .entering class, removed afterwards). Never stagger on every re-render, filter or new chat message, because it becomes noise and adds latency. Keep the total stagger at or under about 250ms.",
+   "priority": "nice",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Values/sibling-index",
+    "https://drafts.csswg.org/css-values-5/#funcdef-sibling-index",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Animate only compositor-friendly properties; never `transition: all`",
+   "what": "Animate transform (or the individual translate, scale and rotate properties) and opacity, which the compositor can run without layout or paint. Fake the rest: fade the opacity of a pre-painted shadow on a pseudo-element, and use scale or FLIP instead of width and height.",
+   "why": "Animating top, left, width, height, margin or box-shadow forces layout or paint every frame. That drops frames on phones, especially at 120Hz, which is the first thing that makes motion feel 'webby'.",
+   "how": ".pressable { transition: scale 120ms var(--ease-standard), opacity 120ms; }   /* list properties explicitly */\n.pressable:active { scale: .97; }\n\n/* Shadow lift without animating box-shadow */\n.card { position: relative; }\n.card::after {\n  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;\n  box-shadow: var(--shadow-lg); opacity: 0; transition: opacity var(--dur-small);\n}\n.card:hover::after { opacity: 1; }\n\n/* Individual transforms compose: a gesture can set `translate` while :active sets `scale` */",
+   "support": "translate, scale and rotate properties: Chrome 104, Safari 14.1, Firefox 72. Transform and opacity animations are composited in all engines.",
+   "gotchas": "`transition: all` also animates properties you change later for layout (padding, width, colors on theme switch). It costs performance and causes odd effects. filter and backdrop-filter animations can be composited, but they're expensive. Whether clip-path or background-color animations are composited varies by engine and version. Check the DevTools Performance panel, or Lighthouse's 'Avoid non-composited animations' audit, rather than assuming. Animating a custom property registered with @property repaints every frame.",
+   "priority": "must",
+   "sources": [
+    "https://web.dev/articles/animations-guide",
+    "https://web.dev/articles/stick-to-compositor-only-properties-and-manage-layer-count",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/translate"
+   ]
+  },
+  {
+   "title": "will-change only around the gesture or animation, never as a blanket style",
+   "what": "will-change: transform (or translate, or opacity) promotes an element to its own GPU layer ahead of time. Set it when a gesture or animation starts and remove it when it ends.",
+   "why": "Pre-promoting the element under the finger avoids a first-frame hitch when a drag starts. Promoting everything uses up GPU memory, and mobile Safari reloads or crashes the tab, which is far worse than one hitch.",
+   "how": "handle.addEventListener('pointerdown', () => { sheet.style.willChange = 'translate'; });\nconst clear = () => { sheet.style.willChange = ''; };\nhandle.addEventListener('pointerup', clear);\nhandle.addEventListener('pointercancel', clear);",
+   "support": "will-change: Chrome 36, Safari 9.1, Firefox 36.",
+   "gotchas": "Browsers already promote elements while a transform or opacity animation is running, so most CSS animations don't need it. Each layer costs about width \u00d7 height \u00d7 4 bytes of GPU memory. Never put it on list rows or in a global stylesheet. A promoted layer that is later scaled up can look blurry, because it's rasterized at its original size. will-change: transform also creates a stacking context and a containing block for position: fixed descendants, which breaks menus that are fixed inside it. The translateZ(0) and backface-visibility: hidden hacks are obsolete; use will-change deliberately.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/will-change",
+    "https://web.dev/articles/stick-to-compositor-only-properties-and-manage-layer-count"
+   ]
+  },
+  {
+   "title": "content-visibility: auto with contain-intrinsic-size for long feeds",
+   "what": "content-visibility: auto skips layout and paint for off-screen children until they come near the viewport. contain-intrinsic-size: auto <estimate> reserves a placeholder size and then remembers the real size once the element has rendered. content-visibility: hidden keeps a subtree's rendering state warm while it is hidden.",
+   "why": "Long chat histories and feeds render, scroll and resize much faster. Unlike virtualization, everything stays in the DOM, so find-in-page, anchors and screen readers keep working.",
+   "how": ".message { content-visibility: auto; contain-intrinsic-size: auto 72px; }\n/* Safari < 27 has no scroll anchoring: rows resizing from 72px to their real height above the viewport shove the reader */\n@supports not (overflow-anchor: auto) { .message { content-visibility: visible; } }\n\n// Pause expensive work (video, timers) in rows that are being skipped\nrow.addEventListener('contentvisibilityautostatechange', (e) => { if (e.skipped) pause(); else resume(); });",
+   "support": "content-visibility: Chrome 85, Firefox 125, Safari 18.0 (Baseline Sept 2024). contain-intrinsic-size: Chrome 83, Safari 17, Firefox 107 (the auto keyword is supported in the same versions). contentvisibilityautostatechange: Chrome 108, Safari 18, Firefox 130. Scroll anchoring (overflow-anchor): Chrome 56, Firefox 66, Safari 27 (Sept 2026).",
+   "gotchas": "`auto` always applies layout, style and paint containment, so anything overflowing the row is clipped: absolutely positioned reaction pickers, menus, focus rings that extend outside. Put popups in the top layer (popover or dialog) instead. A poor size estimate makes the scrollbar thumb jump. The `auto` in contain-intrinsic-size fixes this for rows that have already been seen. The @supports test is a feature check, not a user-agent check, so Safari 27 gets the optimization back automatically. One field report found WebKit's anchoring detection unreliable, so verify on a device. It gains little for small lists (under ~100 simple rows).",
+   "priority": "should",
+   "sources": [
+    "https://web.dev/articles/content-visibility",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/content-visibility",
+    "https://github.com/mdn/browser-compat-data",
+    "https://github.com/mdennis281/dispatch/pull/277"
+   ]
+  },
+  {
+   "title": "Virtualize truly huge lists (keep the DOM to about 3 screens of rows)",
+   "what": "Windowing renders only the rows near the viewport and positions them absolutely inside a spacer with the full height. Dynamic row heights are measured as rows mount.",
+   "why": "With thousands of complex rows (logs, contact lists, years of chat), even content-visibility leaves too much DOM and memory. Native table views reuse cells, and virtualization is the web equivalent.",
+   "how": "// TanStack Virtual (framework-agnostic core; React adapter shown)\nimport { useVirtualizer } from '@tanstack/react-virtual';\nconst v = useVirtualizer({ count: rows.length, getScrollElement: () => scrollRef.current, estimateSize: () => 72, overscan: 8 });\nreturn (\n  <div ref={scrollRef} style={{ overflowY: 'auto', height: '100%', contain: 'strict' }}>\n    <div style={{ height: v.getTotalSize(), position: 'relative' }}>\n      {v.getVirtualItems().map((it) => {\n        const row = rows[it.index];\n        return row && (\n          <div key={it.key} data-index={it.index} ref={v.measureElement} aria-setsize={rows.length} aria-posinset={it.index + 1}\n               style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${it.start}px)` }}>\n            <Row row={row} />\n          </div>\n        );\n      })}\n    </div>\n  </div>\n);",
+   "support": "Library code using standard APIs (ResizeObserver: Chrome 64, Safari 13.1, Firefox 69). Works in every current engine.",
+   "gotchas": "Use content-visibility first, and switch to virtualization only when profiling shows DOM size or memory is the problem (roughly beyond 1-2k rich rows). Windowing breaks find-in-page, anchor links, text selection across rows and screen-reader browsing (mitigate with aria-setsize and aria-posinset). Reverse chat lists need special handling: start at the bottom, keep the view stable when older rows are prepended, measure dynamic heights. Fast iOS momentum flings can outrun rendering and show blank space, so increase overscan. Keep the row component cheap and memoized.",
+   "priority": "nice",
+   "sources": [
+    "https://tanstack.com/virtual/latest",
+    "https://web.dev/articles/virtualize-long-lists-react-window",
+    "https://web.dev/articles/dom-size-and-interactivity"
+   ]
+  },
+  {
+   "title": "No layout thrash: batch reads before writes, observe instead of polling, passive listeners",
+   "what": "Reading geometry (offsetHeight, getBoundingClientRect, scrollTop) right after changing styles forces a synchronous layout, and doing it in a loop repeats the layout for every item. Group all reads, then all writes. Let ResizeObserver and IntersectionObserver report geometry, and register scroll and touch listeners as passive.",
+   "why": "Forced synchronous layouts are the classic cause of janky scrolling and slow taps. Native frameworks lay out once per frame, and this matches that.",
+   "how": "// Bad: one forced layout per item\nfor (const el of items) el.style.height = `${el.scrollHeight}px`;\n// Good: all reads, then all writes (a single layout)\nconst heights = items.map((el) => el.scrollHeight);\nitems.forEach((el, i) => { el.style.height = `${heights[i] ?? 0}px`; });\n\n// Observe instead of measuring in scroll handlers\nnew ResizeObserver(([entry]) => { if (entry) setHeaderHeight(entry.contentRect.height); }).observe(header);\nnew IntersectionObserver(([e]) => { if (e?.isIntersecting) void loadOlder(); }, { root: list, rootMargin: '800px 0px 0px 0px' }).observe(topSentinel);\naddEventListener('scroll', onScroll, { passive: true });\nlist.addEventListener('touchmove', onTouchMove, { passive: true });",
+   "support": "ResizeObserver: Chrome 64, Safari 13.1, Firefox 69. IntersectionObserver: Chrome 51, Safari 12.1, Firefox 55. Passive listeners: Baseline.",
+   "gotchas": "Properties that force layout include offset*/client*/scroll* and getBoundingClientRect, plus getComputedStyle for layout-dependent values, innerText, focus() and scrollIntoView(). Chrome DevTools flags 'Forced reflow' in Performance traces, and Long Animation Frames entries report forcedStyleAndLayoutDuration. Chrome and Firefox already treat touch and wheel listeners on window, document and body as passive, but be explicit (Safari, element-level listeners). A non-passive touchmove that calls preventDefault blocks scrolling until it returns.",
+   "priority": "must",
+   "sources": [
+    "https://web.dev/articles/avoid-large-complex-layouts-and-layout-thrashing",
+    "https://developer.chrome.com/docs/web-platform/long-animation-frames",
+    "https://developer.mozilla.org/docs/Web/API/ResizeObserver"
+   ]
+  },
+  {
+   "title": "INP: show a visible response in the next frame, do the work afterwards, and measure it in the field",
+   "what": "Interaction to Next Paint (INP) is the delay from a tap, click or key press to the next frame painted after it. It adds up input delay, event-handler processing and presentation delay. Good is at or under 200ms at the 75th percentile, and poor is over 500ms. Native apps respond within one frame.",
+   "why": "A tap that shows nothing for 300ms is exactly what makes a web app feel slow even when the network is fast. Painting cheap feedback first (pressed state, optimistic row, pending spinner) and then running the heavy work is the main fix.",
+   "how": "import { onINP } from 'web-vitals/attribution';\n\nsaveButton.addEventListener('click', async () => {\n  saveButton.dataset.state = 'saving';   // cheap DOM write: this is what the next paint (INP) shows\n  await yieldToMain();                   // let the browser paint it now (see the yielding item)\n  await save();                          // heavy work no longer delays the feedback\n});\n\n// Field measurement: every engine now exposes Event Timing\nonINP(({ value, rating, attribution }) => {\n  navigator.sendBeacon('/rum', JSON.stringify({\n    value, rating, target: attribution.interactionTarget, type: attribution.interactionType,\n    inputDelay: attribution.inputDelay, processing: attribution.processingDuration, presentation: attribution.presentationDelay,\n  }));\n});",
+   "support": "Event Timing with interactionId (what INP needs): Chrome 96, Firefox 144, Safari 26.2 (Dec 2025), so INP has been measurable in all engines since 26.2. LCP API: Chrome 77, Firefox 122, Safari 26.2. Long Animation Frames (LoAF) attribution: Chrome 123 only.",
+   "gotchas": "For a native feel, aim well under the 'good' threshold: about 100ms for anything perceptible, the next frame for presses. In React, wrap non-urgent re-renders in startTransition, use useDeferredValue for typeahead filtering, and avoid re-rendering the whole tree on every keystroke. A large DOM inflates presentation delay even with fast handlers. Test with 4-6x CPU throttling and on a real low-end Android phone. Work after the yield doesn't count toward INP, but the user still waits for its result, so keep it fast or optimistic.",
+   "priority": "must",
+   "sources": [
+    "https://web.dev/articles/inp",
+    "https://web.dev/articles/optimize-inp",
+    "https://web.dev/blog/lcp-and-inp-are-now-baseline-newly-available",
+    "https://github.com/GoogleChrome/web-vitals",
+    "https://developer.chrome.com/docs/web-platform/long-animation-frames"
+   ]
+  },
+  {
+   "title": "Break up long tasks with scheduler.yield(), and use scheduler.postTask() for priorities",
+   "what": "scheduler.yield() pauses an async function so input and paint can run, then resumes it at the front of the queue. scheduler.postTask() queues work with a priority of 'user-blocking', 'user-visible' or 'background', which a TaskController can change or abort.",
+   "why": "Any task over 50ms (a long task) delays the next tap. Chunking parsing, decryption, indexing or big renders keeps the UI responsive while the work continues. This matches native apps that move work off the UI thread.",
+   "how": "export const yieldToMain = (): Promise<void> =>\n  'scheduler' in globalThis && 'yield' in scheduler ? scheduler.yield() : new Promise((r) => setTimeout(r, 0));\n\nexport async function processInChunks<T>(items: readonly T[], work: (item: T) => void, budgetMs = 8): Promise<void> {\n  let deadline = performance.now() + budgetMs;\n  for (const item of items) {\n    work(item);\n    if (performance.now() > deadline) { await yieldToMain(); deadline = performance.now() + budgetMs; }\n  }\n}\n\n// Low-priority background work that can be cancelled\nif ('TaskController' in globalThis) {\n  const ctl = new TaskController({ priority: 'background' });\n  scheduler.postTask(buildSearchIndex, { signal: ctl.signal }).catch(() => {}); // rejects on abort\n} else {\n  setTimeout(buildSearchIndex, 0);\n}",
+   "support": "scheduler.yield(): Chrome 129, Firefox 142, Safari NO. scheduler.postTask() and TaskController: Chrome 94, Firefox 142, Safari NO. requestIdleCallback: Chrome 47, Firefox 55, Safari only behind a feature flag (not on by default even in 27). navigator.scheduling.isInputPending(): Chromium-only and experimental, superseded by scheduler.yield(), so don't use it.",
+   "gotchas": "TS 6's lib.dom declares `scheduler` as a global that always exists, but referencing it in Safari throws a ReferenceError. Always guard with `'scheduler' in globalThis`. The setTimeout fallback sends the continuation to the back of the queue, and nested timeouts are clamped to 4ms or more after 5 levels. GoogleChromeLabs/scheduler-polyfill handles fallbacks. Yielding doesn't make work faster, only interruptible. Very heavy CPU work (crypto, parsing megabytes) belongs in a Worker. The 8ms budget assumes about 60Hz. At 120Hz, yield more often during animations.",
+   "priority": "must",
+   "sources": [
+    "https://developer.chrome.com/blog/use-scheduler-yield",
+    "https://web.dev/articles/optimize-long-tasks",
+    "https://developer.mozilla.org/docs/Web/API/Scheduler/yield",
+    "https://github.com/GoogleChromeLabs/scheduler-polyfill",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Move heavy CPU work off the main thread into Web Workers",
+   "what": "Module workers run parsing, search indexing, markdown rendering, image processing, diffing and CRDT merges on another thread. Large binary data is transferred, not copied. OffscreenCanvas lets canvas rendering run in the worker too.",
+   "why": "The UI thread on native stays free for input and animation. In a browser, any CPU-heavy work on the main thread blocks gestures and taps, however much you yield.",
+   "how": "// main.ts\nconst worker = new Worker(new URL('./search.worker.ts', import.meta.url), { type: 'module' });\nworker.postMessage({ kind: 'index', bytes }, [bytes.buffer]);   // transfer the ArrayBuffer: zero-copy\nworker.addEventListener('message', (e: MessageEvent<unknown>) => { const r = parseResult(e.data); if (r) show(r); });\n\n// search.worker.ts\nself.addEventListener('message', (e: MessageEvent<unknown>) => {\n  const req = parseRequest(e.data);              // validate: messages are untrusted input\n  if (req) self.postMessage(runIndex(req));\n});",
+   "support": "Module workers ({ type: 'module' }): Chrome 80, Safari 15, Firefox 114. OffscreenCanvas: Chrome 69, Safari 16.4, Firefox 105. Transferable ArrayBuffers: Baseline.",
+   "gotchas": "postMessage structured-clones its argument, and cloning huge object graphs can cost more than the work itself. Send compact data or transfer buffers. Workers have no DOM. Bundlers (Vite, webpack 5) recognize the `new URL(..., import.meta.url)` form. Comlink can turn the messages into async function calls. Web Crypto's subtle methods are already async but may still run on the main thread in some engines, so profile before moving them.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/API/Worker/Worker",
+    "https://web.dev/articles/off-main-thread",
+    "https://github.com/GoogleChromeLabs/comlink"
+   ]
+  },
+  {
+   "title": "Optimistic UI: apply the result immediately, reconcile later, and use undo instead of confirmation",
+   "what": "Render the outcome of a user action (sent message, toggled like, deleted row) before the server or network confirms it. Mark it as pending, reconcile when the acknowledgment arrives, and keep the item with a retry option if it fails. For destructive actions, hide the item immediately and send the delete only after an undo window closes.",
+   "why": "Native apps feel instant because they don't wait for the network before updating what's on screen. Spinners after every tap are the biggest web tell in perceived speed.",
+   "how": "async function send(text: string) {\n  const temp = { id: crypto.randomUUID(), text, status: 'sending' as const, at: Date.now() };\n  store.add(temp);                                         // visible in the same frame as the tap\n  try {\n    const saved = await api.send(temp);                    // the client id doubles as the idempotency key\n    store.replace(temp.id, { ...saved, status: 'sent' });\n  } catch {\n    store.patch(temp.id, { status: 'failed' });            // keep it and show 'Tap to retry'; never drop it silently\n  }\n}\n\n// Yurt: the delete is only published when the toast goes away, so Undo always wins while it's visible\nfunction deleteWithUndo(id: string) {\n  let undone = false;\n  hidden.add(id); render();\n  toast({ title: 'Message deleted', actionLabel: 'Undo', duration: 5000,\n    onAction: () => { undone = true; hidden.delete(id); render(); },\n    onDismiss: () => { if (!undone) { hidden.delete(id); publishDelete(id); } } });\n}",
+   "support": "Pattern only; works everywhere. React 19's useOptimistic provides the same reconcile and rollback logic for actions.",
+   "gotchas": "Generate ids on the client so retries and acknowledgments can't create duplicates, and order by server time once acknowledged. Show pending state subtly (a dimmed clock icon or reduced opacity), not with a spinner. Don't be optimistic about things the user can't undo and the server often rejects, such as payments or permission changes. If the app can close during the undo window, flush pending deletes on pagehide or visibilitychange, or persist them.",
+   "priority": "must",
+   "sources": [
+    "https://react.dev/reference/react/useOptimistic",
+    "https://www.nngroup.com/articles/response-times-3-important-limits/"
+   ]
+  },
+  {
+   "title": "Skeletons instead of spinners for content, and loaders that only appear after a delay",
+   "what": "When loading content whose layout is known, show a skeleton that matches the final layout. Delay every loading indicator by roughly 300-500ms with a CSS animation delay, so fast loads never flash a loader. Keep stale content on screen while revalidating.",
+   "why": "Spinners draw attention to waiting. Skeletons show the shape of what's coming and make the screen feel ready (native apps show placeholder rows). A loader that blinks for 80ms makes a fast app look slow.",
+   "how": "/* Invisible for the first 400ms, then fades in: no JS timers */\n.loader { animation: appear 200ms 400ms both; }\n@keyframes appear { from { opacity: 0; } }\n\n.skeleton {\n  border-radius: 6px;\n  background: linear-gradient(90deg, var(--sk) 25%, var(--sk-hi) 50%, var(--sk) 75%) 0 0 / 200% 100%;\n  animation: shimmer 1.4s linear infinite;\n}\n@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }\n@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }\n\n<!-- Mark the busy region for assistive tech -->\n<section aria-busy=\"true\" aria-label=\"Messages\"><div class=\"skeleton\" style=\"height:56px\"></div>...</section>",
+   "support": "Plain CSS; works everywhere.",
+   "gotchas": "Rough timing rules (NN/g): under 100ms needs no indicator. Up to about 1s, keep the old content or a skeleton. Longer actions get progress, and anything over about 10s needs a determinate bar. A skeleton that doesn't match the final layout causes layout shift when the content arrives. Use spinners only inside the control that triggered an action (a button), never for the whole screen. Animating background-position repaints every frame. That's fine for a few blocks, but for many, animate the translate of a gradient on a pseudo-element. With stale-while-revalidate, cached content is shown at once and the skeleton appears only on a true cold start. Yurt ships an ag-shimmer keyframe for this.",
+   "priority": "must",
+   "sources": [
+    "https://www.nngroup.com/articles/skeleton-screens/",
+    "https://www.nngroup.com/articles/response-times-3-important-limits/",
+    "https://web.dev/articles/stale-while-revalidate"
+   ]
+  },
+  {
+   "title": "Instant tap feedback: :active that works on iOS, no grey flash, no sticky hover",
+   "what": "Give every tappable element a pressed state that appears instantly on touch and fades on release. Enable :active on iOS (which needs a touch listener). Remove the default tap-highlight rectangle. Apply hover styles only on devices that really hover.",
+   "why": "Native controls highlight the moment a finger lands. The web defaults are no :active on iOS, a grey rectangle flash, and hover states that stay 'stuck' after a tap. All three give away a web view.",
+   "how": "a, button, [role='button'] { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }\n.pressable { transition: scale 120ms var(--ease-standard), background-color 120ms; }\n.pressable:active { scale: .97; background: var(--surface-pressed); transition-duration: 0s; } /* press: instant, release: eased */\n@media (hover: hover) and (pointer: fine) {\n  .pressable:hover { background: var(--surface-hover); }\n}\n\n// iOS Safari only applies :active when a touch listener exists on the element or an ancestor\ndocument.addEventListener('touchstart', () => {}, { passive: true });",
+   "support": ":active and hover/pointer media queries: Baseline. -webkit-tap-highlight-color: Safari iOS and Chromium (non-standard). touch-action: manipulation: Baseline (it removes double-tap-to-zoom handling; the old 300ms delay is gone with width=device-width).",
+   "gotchas": "The iOS :active quirk is long-standing WebKit behaviour. Verify on a device that a document-level listener is enough for your tree, and if not, attach it to the scroll container. Removing the tap highlight without adding :active leaves no feedback at all. Inside scrollers, iOS delays the pressed state slightly to tell a tap from a scroll, which matches native. Run actions on click, not pointerdown, so users can cancel by sliding off or scrolling. Tabs and segmented controls on desktop are the exception. Keep :focus-visible styles for keyboard users. This is a Yurt rule: touch-action: manipulation and 16px form fields on coarse pointers, never maximum-scale in the viewport meta.",
+   "priority": "must",
+   "sources": [
+    "https://css-tricks.com/forums/topic/input-active-pseudo-class-not-working-in-ios-safari-chrome-etc/",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@media/hover",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/touch-action"
+   ]
+  },
+  {
+   "title": "App shell instant start: the first frame comes from HTML and the cache, not from JS",
+   "what": "Ship a static shell (bars plus skeleton) and its critical CSS inline in index.html, so the first paint looks like the app before any JS runs. Serve that shell from the service worker cache. Set color-scheme and theme-color early so there's never a white flash. Show the last-known data from IndexedDB before the network answers.",
+   "why": "A native app opens straight into its UI. A white screen followed by a spinner during JS boot, or a white flash in dark mode, is the most obvious 'it's a website' moment of a PWA launch.",
+   "how": "<head>\n  <meta name=\"color-scheme\" content=\"light dark\">\n  <meta name=\"theme-color\" content=\"#ffffff\" media=\"(prefers-color-scheme: light)\">\n  <meta name=\"theme-color\" content=\"#111111\" media=\"(prefers-color-scheme: dark)\">\n  <link rel=\"preconnect\" href=\"https://api.example.com\" crossorigin>\n  <style>/* inline critical CSS: tokens, shell layout, skeleton; body has an explicit background */</style>\n  <script type=\"module\" src=\"/assets/app.js\"></script>\n</head>\n<body><div id=\"app\"><header class=\"bar\"></header><main class=\"skeleton-list\" aria-busy=\"true\"></main></div></body>\n\n// sw.ts: always answer navigations with the cached shell (SPA)\n/// <reference lib=\"webworker\" />\ndeclare const self: ServiceWorkerGlobalScope;\nself.addEventListener('fetch', (e) => {\n  if (e.request.mode !== 'navigate') return;\n  e.respondWith(caches.match('/index.html').then((r) => r ?? fetch(e.request)));\n});",
+   "support": "Service workers and Cache Storage: Baseline (iOS 11.3+). color-scheme meta: Baseline. theme-color with media: Chrome and Safari 15+ (Firefox ignores theme-color on desktop). Navigation preload: Chrome 59, Safari 15.4, Firefox 99. blocking=render: Chrome 105, Safari 18.2, not Firefox.",
+   "gotchas": "Navigation preload only helps network-first navigation (multi-page apps). When the shell comes from cache, leave it off, or the preloaded response goes unused. Hash every asset and precache them with the shell, or an updated shell can reference chunks that no longer exist. The manifest's background_color sets the splash and launch color on Android, so match it to the shell. Hydrate from local data first (stale-while-revalidate) so the first real frame shows content, not a skeleton. In Yurt the service-worker decisions live in a unit-tested pure module (swLogic.ts) with only thin wiring in the worker. Avoid large inline scripts in head, which delay first paint.",
+   "priority": "must",
+   "sources": [
+    "https://web.dev/articles/app-shell",
+    "https://developer.mozilla.org/docs/Web/API/ServiceWorkerRegistration/navigationPreload",
+    "https://web.dev/articles/stale-while-revalidate",
+    "https://developer.mozilla.org/docs/Web/HTML/Reference/Elements/meta/name/theme-color"
+   ]
+  },
+  {
+   "title": "Keep previous screens alive and restore their scroll position on back",
+   "what": "Instead of unmounting the previous screen on push, keep it in the DOM, inert and with rendering skipped (content-visibility: hidden, or React's <Activity mode=\"hidden\">). On back it reappears exactly where it was. Turn off the browser's own scroll restoration and restore app scrollers per history entry.",
+   "why": "Native navigation stacks keep earlier screens in memory. Going back is instant and lands on the same scroll position. SPAs that re-mount, re-fetch and jump to the top on back are a strong web tell.",
+   "how": "/* Screens stacked in one grid cell; hidden ones keep DOM, state and layout but cost nothing to render */\n.stack { display: grid; }\n.stack > .screen { grid-area: 1 / 1; min-block-size: 0; }\n.stack > .screen[inert] { content-visibility: hidden; }\n\nhistory.scrollRestoration = 'manual';\nconst scrollByEntry = new Map<string, number>();\nnavigation.addEventListener('navigate', () => {\n  const key = navigation.currentEntry?.key;\n  if (key) scrollByEntry.set(key, scroller.scrollTop);   // save before leaving\n});\n// after rendering the destination:\n// scroller.scrollTop = scrollByEntry.get(navigation.currentEntry?.key ?? '') ?? 0;",
+   "support": "content-visibility: hidden: Chrome 85, Safari 18, Firefox 125. inert: Chrome 102, Safari 15.5, Firefox 112. history.scrollRestoration: Baseline. React <Activity>: stable since React 19.2.",
+   "gotchas": "React's Activity hides with display: none, and display: none resets the scroll position of inner scrollers in most engines. Save and restore scrollTop yourself, and verify that content-visibility: hidden keeps it in your target browsers. Cap how deep the stack stays alive (for example, 5 screens) to bound memory. Hidden screens should pause timers, subscriptions and video. Don't make hidden screens display:none or visibility:hidden if they're about to be used as a view-transition source.",
+   "priority": "should",
+   "sources": [
+    "https://web.dev/articles/content-visibility",
+    "https://react.dev/reference/react/Activity",
+    "https://developer.mozilla.org/docs/Web/API/History/scrollRestoration",
+    "https://developer.mozilla.org/docs/Web/API/Navigation"
+   ]
+  },
+  {
+   "title": "Stable scroll position as content changes: native scroll anchoring (now in Safari 27) and chat stick-to-bottom",
+   "what": "Scroll anchoring (overflow-anchor: auto) keeps the content you're reading in place when content is inserted or resized above it. Chat lists also need to stay pinned to the newest message when the reader is already at the bottom.",
+   "why": "Content that jumps when older messages or images load above it is a core web tell. Native lists keep the reading position perfectly still.",
+   "how": "const nativeAnchoring = CSS.supports('overflow-anchor', 'auto'); // Chrome 56+, Firefox 66+, Safari 27+\n\nexport function prependOlder(list: HTMLElement, render: () => void) {\n  const fromBottom = list.scrollHeight - list.scrollTop;\n  render();\n  // Compensate only without native anchoring; doing both shifts the content twice\n  if (!nativeAnchoring) list.scrollTop = list.scrollHeight - fromBottom;\n}\nexport function appendNewer(list: HTMLElement, render: () => void) {\n  const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;\n  render();\n  if (atBottom) list.scrollTop = list.scrollHeight;   // stay pinned to the newest message\n}\n/* Load older history before reaching the very top: anchoring is suppressed at scrollTop 0 */\n.chat { overflow-y: auto; overscroll-behavior-y: contain; }",
+   "support": "overflow-anchor and scroll anchoring: Chrome 56, Firefox 66, Safari 27.0 (released Sept 2026; it was missing from WebKit before that). There is no support in Safari 26 and earlier, which still make up a large share of iOS users in late 2026.",
+   "gotchas": "Changing scrollTop by hand during a momentum fling on iOS Safari stops the fling abruptly, and native anchoring in Safari 27 avoids that. Trigger 'load older' with an IntersectionObserver well before the top (rootMargin of about 800px), because anchoring doesn't apply at scrollTop 0. Field reports disagree on whether WebKit reports overflow-anchor through CSS.supports reliably, so test on Safari 26 and 27 devices. A consistent alternative is overflow-anchor: none on the chat with your own compensation everywhere, accepting the momentum stop. If you use flex-direction: column-reverse to stick to the bottom, scrollTop counts negatively from the bottom, and new messages arriving while the user reads history shift the view.",
+   "priority": "should",
+   "sources": [
+    "https://webkit.org/blog/18325/webkit-features-for-safari-27-0/",
+    "https://csswizardry.com/2026/09/web-perf-wednesday-010-safari-keeps-scrolled-content-in-place/",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/overflow-anchor",
+    "https://github.com/mdennis281/dispatch/pull/218"
+   ]
+  },
+  {
+   "title": "Instant navigation: Speculation Rules prerender for multi-page apps, intent-based preloading for SPAs",
+   "what": "<script type=\"speculationrules\"> lets Chromium prefetch or fully prerender likely next pages, triggered by hover or viewport heuristics. In an SPA, the equivalent is to start fetching a route's code and data on pointerdown or hover, roughly 100ms before the click.",
+   "why": "Prerendering turns a page navigation into a swap of an already-rendered page, which feels like a native push. Preloading on pointerdown hides chunk and data latency in SPAs.",
+   "how": "<script type=\"speculationrules\">\n{\n  \"prerender\": [{ \"where\": { \"and\": [{ \"href_matches\": \"/*\" }, { \"not\": { \"href_matches\": \"/logout\" } }] }, \"eagerness\": \"moderate\" }],\n  \"prefetch\": [{ \"where\": { \"href_matches\": \"/*\" }, \"eagerness\": \"conservative\" }]\n}\n</script>\n\n// SPA: warm route chunks on intent\nconst routeLoaders = new Map<string, () => Promise<unknown>>([\n  ['/settings', () => import('./routes/settings')],\n  ['/search', () => import('./routes/search')],\n]);\ndocument.addEventListener('pointerdown', (e) => {\n  const a = e.target instanceof Element ? e.target.closest('a[href]') : null;\n  const href = a?.getAttribute('href');\n  if (href) void routeLoaders.get(new URL(href, location.href).pathname)?.();\n}, { passive: true });",
+   "support": "Speculation rules are Chromium only: prefetch since Chrome 110, prerender since Chrome 109 (desktop), eagerness since Chrome 121, Speculation-Rules header since 121. Safari 26.2+ has prefetch behind a feature flag only. Firefox has none. Detect with HTMLScriptElement.supports('speculationrules'). prerender_until_script was an origin trial in Chrome 144-150 and has not shipped.",
+   "gotchas": "Prerendered pages run JS, so defer analytics and side effects until document.prerendering is false (listen for the prerenderingchange event). Never prerender URLs that change state on GET (logout, add to cart). Eagerness heuristics changed: on desktop, 'eager' now triggers after about 10ms of hover (Chrome 143). On mobile, 'moderate' uses viewport and pointer heuristics (Aug 2025), and 'eager' triggers 50ms after a link enters the viewport (Jan 2026). None of this helps in-app route changes in an SPA, which is what the pointerdown preload is for. Watch data usage on metered connections.",
+   "priority": "should",
+   "sources": [
+    "https://developer.chrome.com/docs/web-platform/prerender-pages",
+    "https://developer.mozilla.org/docs/Web/HTML/Reference/Elements/script/type/speculationrules",
+    "https://www.htmhell.dev/adventcalendar/2025/3/",
+    "https://developer.chrome.com/blog/prerender-until-script-origin-trial",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Keep pages back/forward-cache (bfcache) eligible",
+   "what": "The bfcache keeps a whole page (JS heap included) in memory when the user navigates away, so Back and Forward restore it instantly. Avoid anything that blocks it (unload handlers, open connections that are never closed), and refresh data when a page is restored.",
+   "why": "Back that's instant and keeps state is native behaviour. A full reload on back is a web tell. This matters for multi-page sites, and for SPAs whenever users leave and return (OAuth, payments, external links).",
+   "how": "addEventListener('pageshow', (e) => { if (e.persisted) void refreshStaleData(); });   // restored from bfcache\naddEventListener('pagehide', () => { flushPendingWrites(); socket?.close(); });          // instead of `unload`\naddEventListener('pageshow', (e) => { if (e.persisted) reconnect(); });\n\n// Debug in Chrome: DevTools > Application > Back/forward cache, or\nconst nav = performance.getEntriesByType('navigation')[0];\nif (nav && 'notRestoredReasons' in nav) console.log(nav.notRestoredReasons);",
+   "support": "bfcache exists in all engines. pageshow and PageTransitionEvent.persisted: Baseline. notRestoredReasons: Chrome 125 only. Chrome deprecated unload, with the rollout reaching 100% of page loads around Sept 2026, so unload handlers no longer fire there.",
+   "gotchas": "Since 2025, Chrome admits Cache-Control: no-store pages to the bfcache, but evicts them when cookies change, and their timeout is shorter (3 minutes instead of 10). Open WebSockets, WebRTC connections, IndexedDB connections that block versionchange, and window.opener references can block restoration depending on the engine, so close them on pagehide and reopen on pageshow. An installed SPA PWA is a single document, so this matters mostly for its entry points and external round-trips.",
+   "priority": "should",
+   "sources": [
+    "https://web.dev/articles/bfcache",
+    "https://developer.chrome.com/docs/web-platform/bfcache-ccns",
+    "https://developer.chrome.com/docs/web-platform/deprecating-unload",
+    "https://developer.mozilla.org/docs/Web/API/NotRestoredReasons"
+   ]
+  },
+  {
+   "title": "Native typography: the system-ui stack, Dynamic Type on iOS, and web fonts that don't shift",
+   "what": "Use each platform's UI font (SF on Apple, Segoe UI Variable on Windows, Roboto or Noto on Android and Linux). On iOS, opt into the user's Text Size setting with font: -apple-system-body. If you need a brand font, load it so it doesn't cause invisible text or a layout shift.",
+   "why": "The font is the first thing the eye uses to judge 'native or not'. The system font also costs zero bytes and zero load time.",
+   "how": ":root {\n  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Noto Sans', Ubuntu, Cantarell, 'Helvetica Neue', Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';\n  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;\n}\nbody { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }\n/* iOS only: 1rem follows Settings > Display & Brightness > Text Size (Dynamic Type) */\n@supports (font: -apple-system-body) and (-webkit-touch-callout: none) {\n  html { font: -apple-system-body; }\n}\n\n/* Brand font: swap without a visible reflow via a metric-matched fallback */\n@font-face { font-family: 'Brand'; src: url(/fonts/brand.woff2) format('woff2'); font-display: swap; }\n@font-face { font-family: 'Brand Fallback'; src: local('Arial'); size-adjust: 104%; }\nh1 { font-family: 'Brand', 'Brand Fallback', var(--font-ui); }\n<link rel=\"preload\" href=\"/fonts/brand.woff2\" as=\"font\" type=\"font/woff2\" crossorigin>",
+   "support": "system-ui: Chrome 56, Safari 11, Firefox 92 (-apple-system before that). font-display: Baseline. size-adjust: Chrome 92, Safari 17, Firefox 92. ascent-override and descent-override: Chrome 87 and Firefox 89; Safari only in Technology Preview. -apple-system-body: WebKit only (non-standard but long supported). -webkit-font-smoothing works on macOS only.",
+   "gotchas": "-apple-system-body also sets the font family on html, which body overrides above. Sizes must then be in rem to follow the setting. Dynamic Type can push form fields below 16px, so keep fields at max(16px, 1rem) or iOS zooms in on focus. Since macOS 10.14, subpixel antialiasing is off anyway, so `antialiased` mostly thins light-on-dark text, matching native dark mode. Drop it if text looks too thin. Use font-display: optional to avoid any swap at all, at the cost of sometimes showing the fallback on the first visit. Use tabular numbers for changing values (see the layout-stability item).",
+   "priority": "must",
+   "sources": [
+    "https://web.dev/articles/font-best-practices",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@font-face/size-adjust",
+    "https://furbo.org/2024/07/04/dynamic-type-on-the-web/",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "Layout stability craft: tabular numbers, scrollbar-gutter, reserved media space",
+   "what": "Small CSS rules that stop things jumping: tabular numerals for values that tick, a stable scrollbar gutter on desktop, intrinsic sizes or aspect-ratio on media and embeds, and min-heights for slots that load asynchronously.",
+   "why": "Native UIs never shift because a counter ticked from 9 to 10, a modal locked scrolling, or an avatar finished loading. These shifts are subtle web tells, and they add up to cumulative layout shift (CLS).",
+   "how": ".timestamp, .badge, .duration, .unread-count { font-variant-numeric: tabular-nums; }   /* digits keep the same width */\nhtml { scrollbar-gutter: stable; }   /* desktop: no sideways jump when a modal hides the scrollbar */\nimg, video { max-inline-size: 100%; block-size: auto; }   /* with width/height attributes: space reserved before load */\n.avatar { inline-size: 40px; aspect-ratio: 1; border-radius: 50%; }\n.embed { aspect-ratio: 16 / 9; }\n.link-preview-slot { min-block-size: 88px; }",
+   "support": "font-variant-numeric and aspect-ratio: Baseline. scrollbar-gutter: Chrome 94, Firefox 97, Safari 18.2. It has no effect with overlay scrollbars (phones, default macOS), where nothing shifts anyway.",
+   "gotchas": "If you hide a variable-width timer with tabular-nums but use a proportional font for everything else, letter spacing can look uneven; most system UI fonts handle it well. scrollbar-gutter: stable on html always reserves the gutter, including on short pages. Use `stable both-edges` if a centered layout looks off. CLS also comes from late-loading fonts (see typography) and injected banners.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/scrollbar-gutter",
+    "https://web.dev/articles/cls",
+    "https://developer.mozilla.org/docs/Web/CSS/font-variant-numeric"
+   ]
+  },
+  {
+   "title": "Image loading and decoding that never pops in half-painted",
+   "what": "Give the most important (LCP) image fetchpriority=high and no lazy loading. Lazy-load and asynchronously decode everything else. Before swapping one image for another, decode the new one with img.decode() so it appears complete. Fade in over a blurred placeholder.",
+   "why": "Native apps show an image whole, often with a short fade. Partly painted images, layout jumps and a late hero image make a page feel like a slow website.",
+   "how": "<img src=\"/hero.avif\" width=\"1200\" height=\"800\" alt=\"\" fetchpriority=\"high\">\n<img src=\"/avatar.webp\" width=\"40\" height=\"40\" alt=\"\" loading=\"lazy\" decoding=\"async\">\n\n// Swap without a half-decoded frame (avatar change, gallery next)\nexport async function swapImage(img: HTMLImageElement, src: string): Promise<void> {\n  const next = new Image(img.width, img.height);\n  next.alt = img.alt; next.className = img.className; next.src = src;\n  await next.decode().catch(() => {});   // decoded off the main thread before it's shown\n  img.replaceWith(next);\n}\n\n/* Fade in over a low-quality placeholder */\n.media { background: var(--lqip) center / cover; }\n.media img { opacity: 0; transition: opacity var(--dur-small); }\n.media img.loaded { opacity: 1; }   /* add .loaded in a load listener */",
+   "support": "loading=lazy: Chrome 77, Safari 15.4, Firefox 75. fetchpriority: Chrome 101, Safari 17.2, Firefox 132. decoding attribute and HTMLImageElement.decode(): Baseline (Safari 11.1+).",
+   "gotchas": "Never lazy-load the LCP or above-the-fold images. decode() rejects for broken images, so catch it. decoding=async can cause a one-frame flash when you change the src of an image already in the DOM, which is why the swap uses a new element. Always set width and height (or aspect-ratio) to avoid CLS. Cache avatars in the service worker so lists don't re-fetch them while scrolling. Large images on low-memory iOS devices can crash the tab, so serve sizes that fit the slot (srcset and sizes).",
+   "priority": "should",
+   "sources": [
+    "https://web.dev/articles/fetch-priority",
+    "https://developer.mozilla.org/docs/Web/API/HTMLImageElement/decode",
+    "https://web.dev/articles/browser-level-image-lazy-loading"
+   ]
+  },
+  {
+   "title": "prefers-reduced-motion done right: remove movement, keep the feedback",
+   "what": "Under prefers-reduced-motion: reduce, replace sliding, zooming, parallax and bouncing with instant changes or short cross-fades. Cover CSS, view-transition pseudo-elements, WAAPI and JS animations. Keep animations very short (1ms), not zero, so their end events still fire.",
+   "why": "iOS and Android swap motion for dissolves when Reduce Motion is on, and users with vestibular disorders depend on it (WCAG 2.3.3). An app that ignores the setting feels broken to them, and one that also removes all feedback feels dead.",
+   "how": "/* Opt in to big motion; everyone keeps state feedback */\n@media (prefers-reduced-motion: no-preference) {\n  .sheet[open] { transition: translate 500ms var(--spring-smooth); }\n}\n@media (prefers-reduced-motion: reduce) {\n  *, *::before, *::after {\n    animation-duration: 1ms !important; animation-iteration-count: 1 !important;\n    transition-duration: 1ms !important; scroll-behavior: auto !important;\n  }\n  /* `*` doesn't match view-transition pseudo-elements, so they need their own rule */\n  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }\n}\n\n// JS-driven motion (WAAPI, springs, scrollIntoView) ignores CSS overrides\nconst reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');\nexport const ms = (n: number) => (reduceMotion.matches ? 0 : n);\nel.scrollIntoView({ behavior: reduceMotion.matches ? 'auto' : 'smooth', block: 'nearest' });",
+   "support": "prefers-reduced-motion: Chrome 74, Safari 10.1, Firefox 63. Baseline. The system setting reaches the browser on iOS, Android, macOS and Windows.",
+   "gotchas": "These are Yurt lessons generalized. Yurt's global rule sets animation and transition durations to 0ms !important and its tokens collapse to 0ms with linear easing. That's right in spirit, but a transition whose combined duration and delay is 0s never starts, so `transitionend` never fires and any code waiting for it hangs. A 0s CSS animation still fires animationend. Use 1ms or 0.01ms. Gestures that track the finger directly are user-controlled and can stay, but turn off their fling and bounce continuations. Yurt also suppresses vibration (haptics) under reduced motion. Animation delays aren't shortened, so delayed loaders still work. Listen for `change` on the MediaQueryList if you cache the value. Consider an in-app 'Reduce motion' toggle that adds a class to <html> and overrides the OS setting.",
+   "priority": "must",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@media/prefers-reduced-motion",
+    "https://www.w3.org/WAI/WCAG22/Understanding/animation-from-interactions",
+    "https://drafts.csswg.org/css-transitions/#starting",
+    "https://developer.apple.com/design/human-interface-guidelines/motion"
+   ]
+  },
+  {
+   "title": "Translucent blurred bars (backdrop-filter), with reduced-transparency and contrast fallbacks",
+   "what": "A sticky nav or tab bar with a semi-transparent background and backdrop-filter: saturate() blur(), so content blurs as it scrolls underneath. It falls back to solid when blur is unsupported, or when the user asks for reduced transparency or more contrast.",
+   "why": "Frosted chrome is the defining look of iOS and macOS bars (and the closest web approximation of iOS 26's Liquid Glass). Flat opaque bars over scrolled content look like a website header.",
+   "how": ".bar {\n  position: sticky; top: 0; z-index: 10;\n  background: color-mix(in srgb, var(--surface) 72%, transparent);\n  -webkit-backdrop-filter: saturate(180%) blur(20px);   /* Safari 17 and earlier on iOS */\n  backdrop-filter: saturate(180%) blur(20px);\n  border-block-end: 0.5px solid color-mix(in srgb, var(--text) 15%, transparent);\n}\n@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .bar { background: var(--surface); } }\n@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {\n  .bar { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }\n}",
+   "support": "backdrop-filter: Chrome 76, Firefox 103, Safari 18 unprefixed (-webkit- prefix since Safari 9). color-mix(): Chrome 111, Safari 16.2, Firefox 113. prefers-reduced-transparency: Chromium 118+ only (Safari: no, so iOS 'Reduce Transparency' isn't visible to the web; Firefox: behind a flag). prefers-contrast: Chrome 96, Safari 14.1, Firefox 101.",
+   "gotchas": "Content has to actually scroll under the bar: the bar is sticky inside the scroller, or fixed with padding on the content. Otherwise there's nothing to blur. backdrop-filter makes the bar a containing block for position: fixed and absolute descendants, so dropdowns that are fixed inside the bar get positioned and clipped relative to it. Render menus in the top layer instead. Large or many blurred areas are costly on low-end Android, and animating the blur radius is very costly. Liquid Glass refraction can't be reproduced portably (backdrop-filter: url(#svg-filter) works only in Chromium), so don't chase it. Yurt's token is --blur-chrome: saturate(160%) blur(14px), reserved for floating chrome over content. The 0.5px hairline renders on high-DPI screens and rounds to 1px on 1x screens.",
+   "priority": "should",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/backdrop-filter",
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@media/prefers-reduced-transparency",
+    "https://github.com/mdn/browser-compat-data"
+   ]
+  },
+  {
+   "title": "120Hz-aware motion: time-based animation loops, and knowing when Safari caps you at 60fps",
+   "what": "Drive any JS animation from the rAF timestamp, not from a frame count, so speed is the same at 30, 60, 90, 120 or 144Hz. Prefer CSS and WAAPI on compositor-friendly properties, which scrolling and the compositor can run at the display's full rate. Know the throttling rules in each engine.",
+   "why": "ProMotion iPhones, iPads and many Android phones run at 120Hz, which leaves about 8.3ms per frame. Frame-count code runs twice as fast there, and main-thread animation stutters next to native scrolling.",
+   "how": "// Fling continuation after a drag, independent of frame rate.\n// 0.998 per ms is UIScrollView's 'normal' deceleration rate.\nexport function fling(el: HTMLElement, x0: number, v0: number /* px/ms */, onDone?: () => void) {\n  let x = x0, v = v0, last = performance.now();\n  const step = (now: number) => {\n    const dt = Math.min(now - last, 32); last = now;   // clamp long gaps (tab switch, jank)\n    v *= Math.pow(0.998, dt);\n    x += v * dt;\n    el.style.translate = `${x}px 0`;\n    if (Math.abs(v) > 0.02) requestAnimationFrame(step); else onDone?.();\n  };\n  requestAnimationFrame(step);\n}",
+   "support": "requestAnimationFrame: Baseline. Chrome (desktop and Android) and Firefox run rAF at the display refresh rate. Safari on ProMotion devices (iOS, iPadOS, macOS) limits page rendering updates, including rAF, to about 60fps by default: the 'Prefer Page Rendering Updates near 60fps' feature flag is on by default, and native scrolling still runs at 120Hz. In iOS Low Power Mode, WebKit throttles rAF and CSS animations to about 30fps. Cross-origin iframes are throttled until the user interacts with them.",
+   "gotchas": "Never hard-code 16.67ms or count frames. At 120Hz your JS budget per frame is roughly 4-6ms after the browser's own work. You can't opt into 120Hz from the page in Safari; only users who flip the feature flag get it, so don't build anything that only feels right at 120Hz. Background tabs pause rAF entirely, which is why dt is clamped. For anything that doesn't need per-frame logic, hand the motion to CSS or WAAPI, which the compositor runs smoothly even while the main thread is busy.",
+   "priority": "should",
+   "sources": [
+    "https://bugs.webkit.org/show_bug.cgi?id=173434",
+    "https://www.macrumors.com/how-to/enable-smoother-120hz-browsing-in-safari/",
+    "https://popmotion.io/blog/20180104-when-ios-throttles-requestanimationframe/",
+    "https://developer.apple.com/documentation/uikit/uiscrollview/decelerationrate-swift.struct",
+    "https://developer.mozilla.org/docs/Web/API/Window/requestAnimationFrame"
+   ]
+  },
+  {
+   "title": "Animate gradients, rings and counters with typed custom properties (@property)",
+   "what": "Registering a custom property with a syntax (<angle>, <percentage>, <color>, <number>) makes it animatable. Progress rings, conic gradients, color shifts and numeric counters can then transition in CSS.",
+   "why": "Native progress rings and activity indicators animate smoothly. Unregistered custom properties jump between values, so web progress indicators look like they're stepping.",
+   "how": "@property --progress { syntax: '<percentage>'; inherits: false; initial-value: 0%; }\n.ring {\n  inline-size: 28px; aspect-ratio: 1; border-radius: 50%;\n  background: conic-gradient(var(--accent) var(--progress), var(--track) 0);\n  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));\n  transition: --progress 300ms var(--ease-standard);\n}\n/* el.style.setProperty('--progress', `${pct}%`) */",
+   "support": "@property: Chrome 85, Safari 16.4, Firefox 128 (Baseline since July 2024). CSS.registerProperty() has the same support.",
+   "gotchas": "A custom property animation repaints the element every frame and isn't composited, which is fine for small elements like rings and badges. Don't use it for full-screen backgrounds. Set inherits: false unless children need the value, to avoid restyling whole subtrees.",
+   "priority": "nice",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@property",
+    "https://web.dev/articles/at-property"
+   ]
+  },
+  {
+   "title": "Theme and appearance switches without a transition storm",
+   "what": "Switching light and dark mode (or accent color) restarts every color transition on the page at once. Either cross-fade the whole page once with a view transition, or turn transitions off for the frame in which the theme changes.",
+   "why": "Native appearance changes are one clean cross-fade. Hundreds of staggered color transitions, plus the stutter they cause, is a web artifact.",
+   "how": "export function setTheme(next: 'light' | 'dark') {\n  const root = document.documentElement;\n  const apply = () => { root.dataset.theme = next; };\n  if ('startViewTransition' in document) { document.startViewTransition(apply); return; } // one composited cross-fade\n  const off = document.createElement('style');\n  off.textContent = '*,*::before,*::after{transition:none!important}';\n  document.head.append(off);\n  apply();\n  void getComputedStyle(document.body).color;   // commit the new styles while transitions are off\n  setTimeout(() => off.remove(), 1);\n}",
+   "support": "View Transitions (same-document): Chrome 111, Safari 18, Firefox 144. The fallback works everywhere.",
+   "gotchas": "Also update <meta name=\"theme-color\"> (one per color-scheme media query) and `color-scheme`, so the browser UI and form controls switch too. If the switch follows the OS (prefers-color-scheme changes while the app is open), the browser restyles at once. Guard against the transition storm there as well, by keeping color transitions off unless they're needed for a specific interaction.",
+   "priority": "nice",
+   "sources": [
+    "https://developer.mozilla.org/docs/Web/API/Document/startViewTransition",
+    "https://github.com/pacocoursey/next-themes"
+   ]
+  }
+ ]
+}
