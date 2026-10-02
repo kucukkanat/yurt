@@ -105,14 +105,18 @@ describe('conditions a conversation can be in', () => {
     const above = (row: string) => !!(divider().compareDocumentPosition(main().getByText(row).element()) & Node.DOCUMENT_POSITION_FOLLOWING);
     expect(above('arrived while reading history') && !above('filler 29')).toBe(true);
     await jump.click();
-    await expect.poll(() => log.scrollHeight - log.scrollTop - log.clientHeight).toBeLessThan(160);
+    // The scroll is smooth: wait for the app to see it's back at the bottom (the pill goes), not just the DOM getting
+    // there, or the next scroll can land before the app's scroll handler runs.
+    await expect.element(jump).not.toBeInTheDocument();
     // Back at the bottom: the count resets, and the divider settles where it was.
     log.scrollTop = 0;
     log.dispatchEvent(new Event('scroll'));
     await expect.element(jump).toHaveTextContent('Jump to latest');
     expect(above('arrived while reading history') && !above('filler 29')).toBe(true);
     await jump.click();
-    await expect.poll(() => log.scrollHeight - log.scrollTop - log.clientHeight).toBeLessThan(160);
+    // The scroll is smooth: wait for the app to see it's back at the bottom (the pill goes), not just the DOM getting
+    // there, or the next scroll can land before the app's scroll handler runs.
+    await expect.element(jump).not.toBeInTheDocument();
     // At the bottom of a hidden page, new messages still get the divider.
     Object.defineProperty(document, 'hidden', { configurable: true, value: true });
     document.dispatchEvent(new Event('visibilitychange'));
