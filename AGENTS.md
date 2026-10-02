@@ -14,7 +14,8 @@ Yurt is a serverless, end-to-end encrypted team chat with optional AI agents. A 
 | `apps/web` | `@yurt/web` | The React app (Vite, zustand), deployed to GitHub Pages |
 | `e2e` | | Playwright specs |
 
-Protocol details: `docs/PROTOCOL.md`. Product overview: `README.md`.
+Protocol details: `docs/PROTOCOL.md`. Product overview: `README.md`. Web Push options (design note, not built):
+`docs/PUSH.md`.
 
 Every workspace is a Nostr relay workspace: events and presence go over its relays, files over Blossom. WebRTC
 (Trystero, signaled over the workspace's relays) is only for calls: voice, video and screen sharing. The bridge never
