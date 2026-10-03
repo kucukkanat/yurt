@@ -87,7 +87,10 @@ for (const theme of ['dark', 'light'] as const) {
     await onboard(b, 'Bo', 'Join workspace');
     await expect(b.getByTestId('join-pending')).toBeVisible();
     await checkPage(b, 'join › waiting to be let in');
-    await page.getByRole('button', { name: /^Members/ }).first().click();
+    await page
+      .getByRole('button', { name: /^Members/ })
+      .first()
+      .click();
     await expect(page.getByTestId('join-request')).toBeVisible({ timeout: 30_000 });
     await checkPage(page, 'members › someone asks to join');
     await page.getByRole('button', { name: 'Close (Esc)' }).click();

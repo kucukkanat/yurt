@@ -64,7 +64,11 @@ export async function inviteLink(page: Page): Promise<string> {
 /** `admin` lets `name`, who asked to join, in from the members panel, then closes the panel. */
 export async function letIn(admin: Page, name: string) {
   const panel = admin.getByRole('complementary', { name: 'Members' });
-  if (!(await panel.isVisible())) await admin.getByRole('button', { name: /^Members/ }).first().click();
+  if (!(await panel.isVisible()))
+    await admin
+      .getByRole('button', { name: /^Members/ })
+      .first()
+      .click();
   await admin.getByTestId('join-request').filter({ hasText: name }).getByTestId('join-admit').click({ timeout: 30_000 });
   await admin.getByRole('button', { name: 'Close (Esc)' }).click();
 }
