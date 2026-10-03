@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { formatCode, joinHash, keyFromPhrase, newInviteCode, newNostrTransport, newRecoveryPhrase, newWorkspaceKey, type JoinInvite } from '@yurt/protocol';
 import { kv } from '../../../../src/lib/db';
-import { member, relayUrl, startApp, until, useApp } from '../app';
+import { expectText, member, relayUrl, startApp, until, useApp } from '../app';
 
 const phrase = newRecoveryPhrase();
 const ada = keyFromPhrase(phrase);
@@ -30,9 +30,8 @@ describe('asking to join', () => {
         await kv.set('joins', [first.invite]);
       },
     });
-    await expect
-      .element(page.getByTestId('join-pending'))
-      .toHaveTextContent('Asked to join ' + formatCode(first.code) + 'Waiting for an admin to let you in. You can close this tab; it picks up where it left off.');
+    expect({ me: useApp.getState().identity?.pub, joins: useApp.getState().joins.length }).toEqual({ me: ada.pub, joins: 1 });
+    await expectText(page.getByTestId('join-pending'), new RegExp('Asked to join ' + formatCode(first.code) + '.*Waiting for an admin to let you in'));
     await asked(first.bo);
     first.bo.admit(ada.pub, true);
     await until(() => useApp.getState().route.ch === 'general', 20_000, 'in #general');

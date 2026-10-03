@@ -565,7 +565,7 @@ export function InviteBody() {
   );
 }
 
-const linkButton: React.CSSProperties = { padding: 0, border: 0, background: 'none', color: 'var(--accent)', font: 'inherit', textDecoration: 'underline', cursor: 'pointer' };
+const linkButton: React.CSSProperties = { padding: 0, border: 0, background: 'none', color: 'var(--text-link)', font: 'inherit', textDecoration: 'underline', cursor: 'pointer' };
 
 /** Admins: replace the workspace key. Two clicks, since it can't be undone. */
 function RotateKey({ code }: { code: string }) {

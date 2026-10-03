@@ -52,7 +52,7 @@ describe('onboarding, then the home screen', () => {
     await expect.element(page.getByRole('tablist', { name: 'Create or join' })).toBeVisible();
     await page.getByRole('button', { name: 'Create workspace' }).click();
     await expect.element(page.getByText('Give it a name people will recognize.')).toBeVisible();
-    await expect.element(page.getByText(/anyone with it can read the history/)).toBeVisible();
+    await expect.element(page.getByText(/you or another admin lets them in/)).toBeVisible();
     await expectText(page.getByTestId('create-net-summary'), /Relays: wss:\/\/nos\.lol · Files: default servers/);
     // Both fields validate; a bad URL opens the section with an error.
     await page.getByTestId('create-net-toggle').click();
