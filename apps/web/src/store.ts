@@ -9,9 +9,13 @@ import {
   sha256Buf,
   MAX_FILE_BYTES,
   parseInvite,
+  isJoinInvite,
+  JoinClient,
   newNostrTransport,
+  newWorkspaceKey,
   uploadFile,
   type WsTransport,
+  type JoinInvite,
   type WorkspacePeer,
   type WsState,
   type Ev,
@@ -51,6 +55,7 @@ import {
   DEFAULT_SETTINGS,
   legacyMutes,
   loadIdentity,
+  loadJoins,
   loadSettings,
   loadWorkspaces,
   uploadServers,
@@ -103,6 +108,8 @@ export interface AppData {
   ready: boolean;
   identity: Identity | null;
   workspaces: WsRecord[];
+  /** Workspaces this device asked to join, waiting for an admin to let me in. */
+  joins: JoinInvite[];
   settings: Settings;
   route: Route;
   states: Record<string, WsState>;
@@ -155,8 +162,18 @@ export interface AppState extends AppData {
   dismiss(id: number): void;
   /** A new workspace with its own network settings (the create step starts from `defaultNewNet`). */
   createWorkspace(name: string, net: NewWorkspaceNet): Promise<string>;
+  /** Joins with a link that carries the key, or asks to join with one that doesn't. False for anything else. */
   joinWorkspace(input: string): Promise<boolean>;
+  /** Stops waiting to be let into `code`. */
+  cancelJoin(code: string): void;
   leaveWorkspace(code: string): Promise<void>;
+  /** A new invite link in `code` (its join key): it lets people ask to join for a week. */
+  createInvite(code: string): string | undefined;
+  revokeInvite(code: string, jk: string): void;
+  /** Lets someone who asked into `code`, or turns them away. Admins only. */
+  admit(code: string, pub: string, on: boolean): void;
+  /** Replaces `code`'s key: anyone not in it now, and every link that carries the old key, can't read anything new. */
+  rotateKey(code: string): boolean;
   markRead(code: string, ch: string): void;
   /** How much `ch` alerts me (see levelOf in @yurt/protocol), for all my devices: published to myself. */
   setLevel(code: string, ch: string, level: NotifyLevel): void;
@@ -226,6 +243,7 @@ const initialState = (): AppData => ({
   ready: false,
   identity: null,
   workspaces: [],
+  joins: [],
   settings: DEFAULT_SETTINGS,
   route: parseHash(location.hash),
   states: {},
@@ -261,6 +279,14 @@ const readSynced = new Map<string, number>();
 const READ_SYNC_MS = 30_000;
 let readTimer: ReturnType<typeof setTimeout> | null = null;
 let toastId = 0;
+/** The running peer for `code`; throws for a workspace this device isn't in (e.g. just left). */
+const live = (code: string): WorkspacePeer => {
+  const p = getPeer(code);
+  if (!p) throw new Error('This device isn’t in that workspace.');
+  return p;
+};
+/** How long a new invite link takes requests. */
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const useApp = create<AppState>((set, get) => {
   // App-state writes run in the background, so a failure (e.g. a newer app version upgraded the database in another
@@ -392,6 +418,14 @@ export const useApp = create<AppState>((set, get) => {
       onKey: (code, key) => saveWs(get().workspaces.map((w) => (w.code === code ? { ...w, transport: { ...w.transport, key } } : w))),
       onBlob: (id) => set((st) => ({ blobVer: { ...st.blobVer, [id]: (st.blobVer[id] ?? 0) + 1 } })),
       onJoinError: (code, d) => report(code, 'join', d),
+      onJoinRequest: (code, r) => {
+        const ws = get().states[code]?.name || formatCode(code);
+        const review = () => {
+          get().go({ code });
+          get().setPanel({ type: 'members' });
+        };
+        get().toast({ key: 'join:' + code + ':' + r.pub, testId: 'join-toast', title: r.name + ' asks to join ' + ws, actionLabel: 'Review', onAction: review, duration: 15_000 });
+      },
       // Fail loud: a device that can't save or store files must say so, not just log it.
       onError: (code, msg) => {
         report(code, 'error', msg);
@@ -410,6 +444,38 @@ export const useApp = create<AppState>((set, get) => {
   const disconnectWs = (code: string) => {
     disconnect(code);
     profilePublished.delete(code);
+  };
+  // Asking to join (see JoinClient): one per waiting workspace, until an admin lets me in or I stop.
+  const asking = new Map<string, JoinClient>();
+  const saveJoins = (joins: JoinInvite[]) => {
+    set({ joins });
+    void persist('joins', joins);
+  };
+  const stopAsking = (code: string) => {
+    asking.get(code)?.leave();
+    asking.delete(code);
+  };
+  const letIn = (inv: JoinInvite, key: string) => {
+    stopAsking(inv.code);
+    saveJoins(get().joins.filter((j) => j.code !== inv.code));
+    if (get().workspaces.some((w) => w.code === inv.code)) return;
+    const rec: WsRecord = { code: inv.code, name: formatCode(inv.code), transport: { key, relays: [...inv.relays] }, creator: inv.creator, lastRead: {} };
+    saveWs([...get().workspaces, rec]);
+    connectWs(rec);
+    // Waiting on the home page: go straight in. Anywhere else, say so without pulling me away.
+    if (!get().route.code) return get().go({ code: inv.code });
+    get().toast({
+      tone: 'success',
+      testId: 'join-granted',
+      title: 'You’re in ' + formatCode(inv.code),
+      actionLabel: 'Open',
+      onAction: () => get().go({ code: inv.code }),
+      duration: 10_000,
+    });
+  };
+  const ask = (me: Identity, inv: JoinInvite) => {
+    if (asking.has(inv.code)) return;
+    asking.set(inv.code, new JoinClient({ invite: inv, kp: me, who: { name: me.name, handle: me.handle }, onGranted: (key) => letIn(inv, key) }));
   };
   const reconnect = async (codes: string[]) => {
     if (codes.includes(get().huddle.code ?? '')) await huddle.leave();
@@ -451,7 +517,7 @@ export const useApp = create<AppState>((set, get) => {
   let entry = true;
   const onRoute = async () => {
     const r = parseHash(location.hash);
-    if (location.hash.includes('/k/')) {
+    if (location.hash.includes('/k/') || location.hash.includes('/j/')) {
       pendingInvite = { code: r.code, hash: location.hash };
       history.replaceState(null, '', buildHash(r));
     }
@@ -465,10 +531,12 @@ export const useApp = create<AppState>((set, get) => {
     entry = false;
     if (!r.code || get().workspaces.some((w) => w.code === r.code)) return;
     if (await get().joinWorkspace(invite?.hash ?? location.hash)) return;
+    // Still waiting to be let in: the home page says so.
+    if (get().joins.some((j) => j.code === r.code)) return get().go({});
     // A keyless invite link (or an old code-only link someone opened) gets an explanation; in-app
     // navigation to a workspace you've left (history back, a stale link) just goes home.
     if (invite || fromOutside)
-      get().toast({ tone: 'danger', title: 'This link can’t be joined', description: 'It has no workspace key. Ask a member for a fresh invite link.', duration: 10_000 });
+      get().toast({ tone: 'danger', title: 'This link can’t be joined', description: 'Codes alone can’t be joined. Ask a member for an invite link.', duration: 10_000 });
     get().go({});
   };
 
@@ -476,18 +544,19 @@ export const useApp = create<AppState>((set, get) => {
     ...initialState(),
 
     async init({ clockMs = 30_000 } = {}) {
-      const [identity, rawWorkspaces, settings, savedLedger] = await Promise.all([
+      const [identity, rawWorkspaces, settings, savedLedger, joins] = await Promise.all([
         kv.get('identity').then(loadIdentity),
         kv.get('workspaces'),
         kv.get('settings').then(loadSettings),
         kv.get('backup'),
+        kv.get('joins').then(loadJoins),
       ]);
       const workspaces = loadWorkspaces(rawWorkspaces);
       // Before the backup existed nothing was recorded: everything this device has counts as joined now.
       if (savedLedger === undefined) saveLedger(record({}, [], workspaces, Date.now()));
       else ledger = ledgerOf(savedLedger);
       applyTheme(settings.theme);
-      set({ identity, workspaces, settings, ready: true });
+      set({ identity, workspaces, joins, settings, ready: true });
       // On each (re)connect, drop workspaces the bridge still runs but this app has left, e.g. while the bridge was down.
       let reconciled = false;
       const reconcile = (state: BridgeState) => {
@@ -525,6 +594,7 @@ export const useApp = create<AppState>((set, get) => {
       });
       if (identity) {
         get().workspaces.forEach(connectWs);
+        for (const j of joins) ask(identity, j);
         // Mutes from before alert levels were kept on this device only: they become the synced level "none", once.
         const mutes = legacyMutes(rawWorkspaces);
         for (const [code, chs] of mutes) for (const ch of chs) get().setLevel(code, ch, 'none');
@@ -580,6 +650,7 @@ export const useApp = create<AppState>((set, get) => {
     async resetDevice() {
       await huddle.leave();
       for (const w of get().workspaces) disconnectWs(w.code);
+      for (const code of [...asking.keys()]) stopAsking(code);
       // Wipe every store: identity, workspaces, settings, marks, the bridge token, history and files.
       await bridge.forget();
       await Promise.all([kv.clear(), eventsDb.clear(), blobsDb.clear()]);
@@ -651,6 +722,16 @@ export const useApp = create<AppState>((set, get) => {
     async joinWorkspace(input) {
       const inv = parseInvite(input);
       if (!inv) return false;
+      if (isJoinInvite(inv)) {
+        const me = get().identity;
+        if (get().workspaces.some((w) => w.code === inv.code)) get().go({ code: inv.code });
+        else if (me && !get().joins.some((j) => j.code === inv.code)) {
+          saveJoins([...get().joins, inv]);
+          ask(me, inv);
+          get().go({});
+        } else get().go({});
+        return true;
+      }
       const { code, transport } = inv;
       if (!get().workspaces.some((w) => w.code === code)) {
         // The link names the creator, so moderation trusts them from the start instead of whoever claims it first.
@@ -660,6 +741,38 @@ export const useApp = create<AppState>((set, get) => {
       }
       if (get().route.code !== code) get().go({ code });
       return true;
+    },
+
+    cancelJoin(code) {
+      stopAsking(code);
+      saveJoins(get().joins.filter((j) => j.code !== code));
+    },
+
+    createInvite(code) {
+      const jk = newWorkspaceKey();
+      return get().publish(code, { t: 'invite', b: { jk, on: true, exp: Date.now() + INVITE_TTL_MS } }) && jk;
+    },
+
+    revokeInvite(code, jk) {
+      get().publish(code, { t: 'invite', b: { jk, on: false } });
+    },
+
+    admit(code, pub, on) {
+      try {
+        live(code).admit(pub, on);
+      } catch (err) {
+        get().toast({ tone: 'danger', title: on ? 'Couldn’t let them in' : 'Couldn’t turn them away', description: errorText(err), duration: 10_000 });
+      }
+    },
+
+    rotateKey(code) {
+      try {
+        live(code).rotate();
+        return true;
+      } catch (err) {
+        get().toast({ tone: 'danger', title: 'The key wasn’t rotated', description: errorText(err), duration: 10_000 });
+        return false;
+      }
     },
 
     async leaveWorkspace(code) {

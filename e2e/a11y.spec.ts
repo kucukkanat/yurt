@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { checkPage, createWorkspace, inviteLink, onboard, pointAtLocalRelay } from './helpers';
+import { checkPage, createWorkspace, inviteLink, letIn, onboard, pointAtLocalRelay } from './helpers';
 
 // Every screen, in both themes (contrast differs), must pass axe (WCAG 2.1 A/AA + best practices) and html-validate.
 // checkPage uses soft assertions, so one run lists every failing screen.
@@ -85,6 +85,13 @@ for (const theme of ['dark', 'light'] as const) {
     await b.goto(link);
     await checkPage(b, 'join › onboarding');
     await onboard(b, 'Bo', 'Join workspace');
+    await expect(b.getByTestId('join-pending')).toBeVisible();
+    await checkPage(b, 'join › waiting to be let in');
+    await page.getByRole('button', { name: /^Members/ }).first().click();
+    await expect(page.getByTestId('join-request')).toBeVisible({ timeout: 30_000 });
+    await checkPage(page, 'members › someone asks to join');
+    await page.getByRole('button', { name: 'Close (Esc)' }).click();
+    await letIn(page, 'Bo');
     await expect(b.getByText('hello there')).toBeVisible({ timeout: 30_000 });
     await checkPage(b, 'joined channel (someone else’s message)');
     await b.getByRole('button', { name: 'Open profile: Ada' }).first().click();

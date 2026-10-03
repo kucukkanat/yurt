@@ -22,6 +22,7 @@ const handlers = {
   onKey: (_c: string, key: string) => void seen.keys.push(key),
   onBlob: (id: string) => void seen.blobs.push(id),
   onJoinError: (_c: string, d: unknown) => void seen.joinErrors.push(d),
+  onJoinRequest: () => {},
   onError: (_c: string, msg: string) => void seen.errors.push(msg),
 };
 const net = (p: Partial<NetSettings> = {}): NetSettings => ({ ...DEFAULT_SETTINGS, ...p });

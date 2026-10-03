@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { createWorkspace, inviteLink, onboard, pointAtLocalRelay } from './helpers';
+import { createWorkspace, inviteLink, joinVia, onboard, pointAtLocalRelay } from './helpers';
 
 // The installable app as GitHub Pages serves it: manifest and icons, the service worker's offline shell, and
 // notifications shown through that worker.
@@ -60,10 +60,8 @@ test('notifies through the service worker, and closes the notification once the 
   await expect(a).toHaveURL(/\/c\/side/);
 
   const b = await (await browser.newContext()).newPage();
-  await b.goto(await inviteLink(a));
-  await onboard(b, 'Bo', 'Join workspace');
+  await joinVia(a, b, await inviteLink(a), 'Bo');
   const composer = b.getByRole('textbox', { name: 'Message #general' });
-  await expect(composer).toBeVisible({ timeout: 30_000 });
   await composer.fill('hey @ada, look');
   await composer.press('Enter');
 

@@ -42,6 +42,42 @@ function Joining({ code, menu }: { code: string; menu: React.ReactNode }) {
   );
 }
 
+/** Workspaces I asked to join: an admin has to let me in. */
+function Waiting() {
+  const joins = useApp((s) => s.joins);
+  if (!joins.length) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {joins.map((j) => (
+        <div
+          key={j.code}
+          data-testid="join-pending"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '14px 16px',
+            borderRadius: 20,
+            border: '1px dashed var(--border-strong)',
+            background: 'var(--surface-card)',
+          }}
+        >
+          <span style={{ display: 'flex', color: 'var(--accent)', animation: 'ag-spin 1.2s linear infinite' }}>
+            <Icon name="loader" size={18} />
+          </span>
+          <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ font: '700 16px/1.2 var(--font-display)', color: 'var(--text-strong)' }}>Asked to join {formatCode(j.code)}</span>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Waiting for an admin to let you in. You can close this tab; it picks up where it left off.</span>
+          </span>
+          <Button size="sm" variant="ghost" data-testid="join-cancel" onClick={() => useApp.getState().cancelJoin(j.code)}>
+            Cancel
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Home({ narrow }: { narrow: boolean }) {
   const { route } = useCurrent();
   const workspaces = useApp((s) => s.workspaces);
@@ -61,6 +97,7 @@ export function Home({ narrow }: { narrow: boolean }) {
         <h1 style={{ margin: 0, font: '700 44px/1 var(--font-display)', letterSpacing: '-0.045em', color: 'var(--text-strong)', textWrap: 'balance' }}>
           {workspaces.length ? 'Where to?' : 'Start your first workspace.'}
         </h1>
+        <Waiting />
         {workspaces.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {workspaces.map((w) => (

@@ -1,7 +1,7 @@
 {
   "name": "yurt-bridge",
   "license": "MIT",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Connects Yurt workspaces to agent CLIs on your machine over ACP. One command, config in the browser.",
   "keywords": [
     "yurt",

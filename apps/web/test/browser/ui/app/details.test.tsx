@@ -144,7 +144,8 @@ describe('message details', () => {
     await page.getByTestId('ws-menu-button').click();
     await expectText(page.getByTestId('ws-online'), /No other members online/);
     await page.getByTestId('menu-settings').click();
-    await expect.element(page.getByText(/anyone with it can read the whole history/)).toBeVisible();
+    await page.getByTestId('invite-create').click();
+    await expect.element(page.getByText(/the link alone doesn’t open the workspace/)).toBeVisible();
     await expect.element(page.getByText(/history then comes back from the relays/)).toBeVisible();
     await userEvent.keyboard('{Escape}');
   });

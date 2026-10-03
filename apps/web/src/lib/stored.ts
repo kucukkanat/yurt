@@ -11,6 +11,7 @@ import {
   normalizeCode,
   parseOr,
   type Ev,
+  type JoinInvite,
   type KeyPair,
   type WsTransport,
 } from '@yurt/protocol';
@@ -117,6 +118,25 @@ export const WsRecordSchema: v.GenericSchema<unknown, WsRecord> = v.pipe(
   }),
   v.transform(({ name, blossom, ...r }): WsRecord => ({ ...r, name: name ?? formatCode(r.code), ...(blossom ? { blossom } : {}) })),
 );
+
+const JoinSchema: v.GenericSchema<unknown, JoinInvite> = v.object({
+  code: v.pipe(
+    text,
+    v.check((c) => normalizeCode(c) === c),
+  ),
+  join: workspaceKey,
+  relays: v.pipe(v.array(text), v.minLength(1)),
+  creator: v.pipe(text, v.regex(HEX64)),
+});
+
+/** Workspaces this device asked to join and waits to be let into: bad entries are skipped, and a code appears once. */
+export function loadJoins(raw: unknown): JoinInvite[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((x, i) => {
+    const j = parseOr(JoinSchema, x);
+    return j && raw.findIndex((y) => isRecord(y) && y.code === j.code) === i ? [j] : [];
+  });
+}
 
 /** Where a workspace's attachments are uploaded: its file servers, else the defaults. */
 export const uploadServers = (w: WsRecord): readonly string[] => (w.blossom?.length ? w.blossom : DEFAULT_BLOSSOM);

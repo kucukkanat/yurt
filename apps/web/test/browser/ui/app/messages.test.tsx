@@ -28,6 +28,7 @@ describe('a channel conversation', () => {
     code = await createWorkspace('Northwind');
     await expect.element(page.getByText('#general is ready')).toBeVisible();
     await page.getByRole('main').getByRole('button', { name: 'Invite people' }).first().click();
+    await page.getByTestId('invite-create').click();
     await expect.element(page.getByTestId('invite-link')).toBeVisible();
     await page.getByTestId('invite-link').click(); // selects the link for copying by hand
     await page.getByRole('button', { name: 'Copy link' }).click();

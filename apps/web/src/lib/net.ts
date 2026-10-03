@@ -1,5 +1,5 @@
 import { joinRoom, selfId } from 'trystero';
-import { WorkspacePeer, type KeyPair, type WsState, type Ev, type JoinRoom, type WsTransport } from '@yurt/protocol';
+import { WorkspacePeer, type KeyPair, type WsState, type Ev, type JoinReq, type JoinRoom, type WsTransport } from '@yurt/protocol';
 import { peerStore } from './db';
 import type { NetSettings } from './stored';
 
@@ -33,6 +33,8 @@ export interface NetHandlers {
   onBlob(id: string): void;
   /** A member's WebRTC handshake in a call was refused or failed (e.g. a banned member, or someone on an old key). */
   onJoinError(code: string, details: unknown): void;
+  /** Someone asked to join and I'm an admin who can let them in. */
+  onJoinRequest(code: string, r: JoinReq): void;
   /** Something failed that the user should know about (e.g. this device couldn't save). */
   onError(code: string, msg: string): void;
 }
@@ -56,6 +58,7 @@ export function connect(code: string, kp: KeyPair, creator: string | null, trans
     onKey: (key) => h.onKey(code, key),
     onBlob: h.onBlob,
     onJoinError: (d) => h.onJoinError(code, d),
+    onJoinRequest: (r) => h.onJoinRequest(code, r),
     onError: (msg) => h.onError(code, msg),
     devFileServers: isLocalHost(location.hostname),
   });

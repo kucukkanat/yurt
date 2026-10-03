@@ -134,7 +134,7 @@ describe('invite', () => {
   it('falls back to default relays when none are usable', () => {
     expect(newNostrTransport([])).toMatchObject({ relays: DEFAULT_RELAYS });
     const key = newWorkspaceKey();
-    expect(parseInvite(`#/w/K7QX2MPD/k/${key}/n/${encodeURIComponent('http://nope')}`)?.transport).toEqual({ key, relays: DEFAULT_RELAYS });
+    expect(parseInvite(`#/w/K7QX2MPD/k/${key}/n/${encodeURIComponent('http://nope')}`)).toMatchObject({ transport: { key, relays: DEFAULT_RELAYS } });
   });
 
   it('parses relay lists from free text', () => {

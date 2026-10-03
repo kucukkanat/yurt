@@ -113,6 +113,22 @@ export interface RekeyBody {
   keys: Record<string, string>;
   history: string;
 }
+/**
+ * An invite link's join key (`jk`): a link carries it instead of the workspace key, so holding a link only lets
+ * someone ask to join. Any member can make one (`on: true`); its maker or an admin revokes it (`on: false`).
+ * `exp` (ms): requests after it are ignored.
+ */
+export interface InviteBody {
+  jk: string;
+  on: boolean;
+  exp?: number | undefined;
+}
+/** An admin lets `target` in (`on: true`, and hands them the key) or turns them away, answering a request through invite `jk`. */
+export interface AdmitBody {
+  target: string;
+  jk?: string | undefined;
+  on: boolean;
+}
 export interface ReactBody {
   target: string;
   icon: string;

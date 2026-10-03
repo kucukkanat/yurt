@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_BLOSSOM, DEFAULT_RELAYS, formatCode, keyFromPhrase, makeEvent, newInviteCode, newRecoveryPhrase, newWorkspaceKey, normalizeCode } from '@yurt/protocol';
-import { DEFAULT_SETTINGS, legacyMutes, loadBlob, loadEvents, loadIdentity, loadMark, loadSettings, loadToken, loadWorkspaces, uploadServers } from '../src/lib/stored';
+import { DEFAULT_SETTINGS, legacyMutes, loadBlob, loadEvents, loadIdentity, loadJoins, loadMark, loadSettings, loadToken, loadWorkspaces, uploadServers } from '../src/lib/stored';
 import { anything, fc } from './fuzz';
 
 const code = newInviteCode();
 const key = newWorkspaceKey();
 const creator = 'ab'.repeat(32);
 const base = { code, name: 'Team', creator, lastRead: { general: 5 }, transport: { key, relays: ['wss://r.example'] } };
+
+describe('pending joins', () => {
+  it('load what the app writes, once per workspace, and skip anything unusable', () => {
+    const join = { code, join: key, relays: ['wss://r.example'], creator };
+    expect(loadJoins([join, { ...join, join: newWorkspaceKey() }, { ...join, code: 'nope' }, { ...join, code: newInviteCode(), relays: [] }, 'x'])).toEqual([join]);
+    expect(loadJoins(undefined)).toEqual([]);
+  });
+});
 
 describe('stored workspaces', () => {
   it('load what the app writes, and skip records without a usable transport', () => {

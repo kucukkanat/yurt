@@ -47,5 +47,6 @@ export const quiet = (): NetHandlers => ({
   onKey: () => {},
   onBlob: () => {},
   onJoinError: () => {},
+  onJoinRequest: () => {},
   onError: () => {},
 });

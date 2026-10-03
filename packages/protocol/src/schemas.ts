@@ -62,6 +62,9 @@ export const EV_TYPES = [
   'agent',
   'approve',
   'rekey',
+  // Join approval (see join.ts). Older peers reject the types, so to them invites and admissions don't exist.
+  'invite',
+  'admit',
   // Collaboration (see collab.ts). Peers that predate them reject the type, so they just never see these.
   'task',
   'task.set',
@@ -180,6 +183,8 @@ export const BODY_SCHEMAS = {
     ),
     history: v.string(),
   }),
+  invite: obj({ jk: v.pipe(v.string(), v.check(isWorkspaceKey)), on: v.boolean(), exp: lenient(int) }),
+  admit: obj({ target: v.pipe(v.string(), v.regex(HEX64)), jk: lenient(v.pipe(v.string(), v.check(isWorkspaceKey))), on: v.boolean() }),
   task: obj({ id: nonEmpty, title: shortText(300), ch: nonEmpty, src: lenient(v.string()), assignee: lenient(ActorSchema), due: lenient(int) }),
   'task.set': obj({
     id: nonEmpty,
@@ -252,6 +257,18 @@ export const HandshakeSchema = obj({ pub: v.string(), sig: v.string() });
 export const PrivateWrapperSchema = obj({ a: v.string(), to: v.string(), c: v.string() });
 /** Nostr presence: the presence JSON, when it was signed, and the signature. */
 export const PresenceEnvelopeSchema = obj({ j: v.string(), t: finite, s: v.string() });
+/** A join request in an invite's lobby: who asks (`p`), their name and handle, when (`t`) and their signature (`s`). */
+export const JoinRequestSchema = obj({
+  p: v.pipe(v.string(), v.regex(HEX64)),
+  n: shortText(64),
+  h: lenient(v.pipe(v.string(), v.maxLength(32))),
+  t: int,
+  s: v.string(),
+});
+/** A grant's outer layer names the admin, so the joiner knows which pair key opens `c`. */
+export const GrantWrapperSchema = obj({ a: v.pipe(v.string(), v.regex(HEX64)), c: v.string() });
+/** A grant's inner layer: the workspace key, and for an admin who isn't the creator, the creator's `role` event that made them one. */
+export const GrantSchema = obj({ key: v.pipe(v.string(), v.check(isWorkspaceKey)), proof: v.optional(v.unknown()) });
 /** A rekey's history: every earlier key and its epoch (null = unknown). Bad entries are skipped. */
 export const KeyHistorySchema = listOf(obj({ key: v.pipe(v.string(), v.check(isWorkspaceKey)), epoch: v.fallback(v.nullable(v.pipe(v.number(), v.safeInteger())), null) }));
 

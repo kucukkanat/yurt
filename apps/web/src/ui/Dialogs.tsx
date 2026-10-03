@@ -168,22 +168,20 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
           <Button type="submit" variant="primary" iconRight="arrow-right" fullWidth>
             Create workspace
           </Button>
-          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>
-            You get an invite link that carries the workspace key. Share it privately: anyone with it can read the history.
-          </span>
+          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>Then make invite links. Whoever opens one asks to join, and you or another admin lets them in.</span>
         </form>
       ) : (
         <form
           onSubmit={async (e) => {
             e.preventDefault();
-            if (!(await app.joinWorkspace(code))) return setErr('Paste the whole invite link. Codes alone can’t be joined: they carry no key.');
+            if (!(await app.joinWorkspace(code))) return setErr('Paste the whole invite link. Codes alone can’t be joined.');
             onDone?.();
           }}
           style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
         >
           <Input
             label="Invite link"
-            placeholder="https://…/#/w/K7QX2MPD/k/…"
+            placeholder="https://…/#/w/K7QX2MPD/j/…"
             data-testid="join-link"
             value={code}
             onChange={(e) => setCode(e.target.value)}
@@ -195,7 +193,7 @@ export function CreateJoin({ onDone }: { onDone?: () => void }) {
           <Button type="submit" variant="primary" iconRight="arrow-right" fullWidth>
             Join workspace
           </Button>
-          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>The link carries the workspace key, so keep it private.</span>
+          <span style={{ fontSize: 12.5, color: 'var(--text-subtle)' }}>You’re in once an admin of the workspace lets you in.</span>
         </form>
       )}
     </div>

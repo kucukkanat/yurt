@@ -21,7 +21,8 @@ describe('being a member of someone else’s workspace', () => {
     await page.getByTestId('ws-menu-button').click();
     await page.getByTestId('ws-menu').getByRole('button', { name: 'Invite people' }).click();
     await expect.element(page.getByRole('dialog', { name: 'Invite to ' + fallback })).toBeVisible();
-    expect((page.getByTestId('invite-link').element() as HTMLInputElement).value).not.toContain('/o/'); // no creator to pin
+    // No creator known: no link to check answers against yet.
+    await expect.element(page.getByText('Invite links appear once the workspace has synced.')).toBeVisible();
     await userEvent.keyboard('{Escape}');
     useApp.getState().openSettings('ws-general');
     await expect.element(page.getByRole('heading', { name: fallback + ' · General' })).toBeVisible();

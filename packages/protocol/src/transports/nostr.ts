@@ -8,9 +8,10 @@ import type { DataLink, LinkHost, LinkKeys, LinkTiming, Presence } from '../tran
 import { sign, verify } from '../crypto';
 import { open, seal, workspaceKeys, type WsKeys } from '../seal';
 import { errMsg } from '../util';
+import { lobbyEvent } from '../join';
 import { PresenceEnvelopeSchema, PresenceSchema, PrivateWrapperSchema, isRecord, parseBody, parseOr } from '../schemas';
 
-const KIND_EVENT = 4344; // regular: relays store it
+export const KIND_EVENT = 4344; // regular: relays store it
 const KIND_PRESENCE = 24344; // ephemeral: relays forward it, never store it
 
 const TIMING: LinkTiming = { beatMs: 60_000, presenceTtlMs: 150_000, retryMs: 15_000, sweepMs: 5_000 };
@@ -19,7 +20,7 @@ const PAGE = 500;
 const MAX_REFUSALS = 3;
 // created_at is backdated by a random 0–2 h so relay dumps don't show precise activity times.
 // (A relay operator still sees when events arrive.)
-const FUZZ_S = 7_200;
+export const FUZZ_S = 7_200;
 // Nostr created_at is the sender's (fuzzed, possibly skewed) clock. Re-fetching a day before our
 // last sync mark covers both; duplicates are dropped by event id.
 const SKEW_S = 86_400;
@@ -87,6 +88,8 @@ export class NostrData implements DataLink {
   private k: WsKeys;
   /** Every tag I listen on → the key its events are sealed with. */
   private byTag = new Map<string, WsKeys>();
+  /** Lobby tags of the invites I watch for join requests → their join key. */
+  private lobby = new Map<string, string>();
   private epochs = new Map<WsKeys, number>();
   private relays: string[];
   /** Events still being retried, as their wrapped copies. */
@@ -136,13 +139,14 @@ export class NostrData implements DataLink {
   }
 
   private get tags() {
-    return [...this.byTag.keys()];
+    return [...this.byTag.keys(), ...this.lobby.keys()];
   }
 
   /** Listens on every key's tags and returns the write key's derived keys (`write` is always one of `all`). */
   private adoptKeys(keys: LinkKeys): WsKeys {
     this.byTag.clear();
     this.epochs.clear();
+    this.lobby = new Map(keys.lobby.map((jk) => [workspaceKeys(jk).tag, jk]));
     for (const { key, epoch } of keys.all) {
       const k = workspaceKeys(key);
       this.byTag.set(k.tag, k).set(k.inbox(this.host.kp.pub), k);
@@ -157,9 +161,9 @@ export class NostrData implements DataLink {
     this.closeSub = () => sub.close();
   }
 
-  /** A rotation: listen on the new keys' tags too, and fetch their whole history (they're new to me). */
+  /** A rotation or a new invite: listen on the new tags too, and fetch their whole history (they're new to me). */
   setKeys(keys: LinkKeys) {
-    const before = new Set(this.byTag.keys());
+    const before = new Set(this.tags);
     this.k = this.adoptKeys(keys);
     const added = this.tags.filter((t) => !before.has(t));
     if (!added.length || this.closed) return;
@@ -194,6 +198,14 @@ export class NostrData implements DataLink {
       this.pending.set(e.id, nes);
       this.publish(e.id, nes);
     }
+  }
+
+  /** Hands an admitted joiner the key: a sealed grant (see join.ts) in their lobby inbox, retried like events. */
+  grant(jk: string, to: string, content: string) {
+    const id = 'grant:' + to;
+    const nes = [lobbyEvent(workspaceKeys(jk).inbox(to), content)];
+    this.pending.set(id, nes);
+    this.publish(id, nes);
   }
 
   setPresence(p: Presence) {
@@ -364,7 +376,10 @@ export class NostrData implements DataLink {
     if (ne.pubkey === this.self) return;
     // Which key sealed it follows from the tag it was published under.
     // nostr-tools only delivers events matching our filter, so a `y` tag names one of my keys.
-    const k = this.byTag.get(String(ne.tags.find((t) => t[0] === 'y')?.[1]));
+    const tag = String(ne.tags.find((t) => t[0] === 'y')?.[1]);
+    const jk = this.lobby.get(tag);
+    if (jk !== undefined) return this.host.joinRequest(jk, ne.content);
+    const k = this.byTag.get(tag);
     /* v8 ignore next -- unreachable while nostr-tools applies the subscription filter (it does, client side) */
     if (!k) return;
     const outer = parse(open(k.enc, k.tag, ne.content));

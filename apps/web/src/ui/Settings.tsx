@@ -1,7 +1,8 @@
 import type React from 'react';
 import { useEffect, useReducer, useState } from 'react';
 import { Dialog, Button, Input, Switch, Checkbox, Radio, Icon, Avatar, IconButton } from '@yurt/ui';
-import { fingerprint, inviteHash, parseRelays, parseServers, formatCode, agentPrefs } from '@yurt/protocol';
+import { fingerprint, joinHash, parseRelays, parseServers, formatCode, agentPrefs } from '@yurt/protocol';
+import { fmtDay } from '../lib/format';
 import { useApp, type SettingsSection, type WsRecord } from '../store';
 import { useCurrent, useMedia, prefsLine } from '../model';
 import { bridge } from '../lib/bridge';
@@ -498,35 +499,110 @@ const DangerZone = ({ children }: { children: React.ReactNode }) => (
   </div>
 );
 
-/** The workspace's invite link, also used by the quick Invite dialog. */
+/** A link that asks to join through invite `jk` (no workspace key in it). */
+const joinLink = (code: string, jk: string, relays: readonly string[], creator: string) => location.origin + location.pathname + joinHash({ code, join: jk, relays, creator });
+
+/**
+ * The workspace's invite links, also used by the quick Invite dialog. A link carries a join key, never the workspace
+ * key: whoever opens it asks to join, and an admin lets them in. Anyone in can make one; its maker or an admin revokes it.
+ */
 export function InviteBody() {
-  const { route, rec, peer } = useCurrent();
+  const { route, rec, state, identity } = useCurrent();
+  const app = useApp.getState();
   const code = route.code;
-  const t = rec?.transport;
-  if (!code || !t) return null;
-  // A rotation may have landed before the record caught up; the peer always knows the current key.
-  const link =
-    location.origin +
-    location.pathname +
-    inviteHash({ code, transport: { ...t, key: must(peer, 'every workspace record has a running peer').inviteKey }, ...(rec?.creator ? { creator: rec.creator } : {}) });
+  const creator = state?.creator ?? rec?.creator;
+  if (!code || !rec || !creator) return <Muted>Invite links appear once the workspace has synced.</Muted>;
+  const now = Date.now();
+  const open = [...(state?.invites.values() ?? [])].filter((i) => !i.off && (i.exp === undefined || now < i.exp)).sort((a, b) => b.ts - a.ts);
+  const mine = open.find((i) => i.by === identity.pub);
+  const admin = !!state?.admins.has(identity.pub);
+  const others = admin ? open.filter((i) => i !== mine) : [];
+  const link = mine && joinLink(code, mine.jk, rec.transport.relays, creator);
+  const until = (exp: number | undefined) => (exp === undefined ? 'never expires' : 'expires ' + fmtDay(exp));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-      <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <Input aria-label="Invite link" data-testid="invite-link" value={link} readOnly iconLeft="link" onFocus={(e) => e.target.select()} />
+      {link && mine ? (
+        <>
+          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Input aria-label="Invite link" data-testid="invite-link" value={link} readOnly iconLeft="link" onFocus={(e) => e.target.select()} />
+            </div>
+            <Button variant="primary" iconLeft="copy" onClick={() => copy(link, 'Link')}>
+              Copy link
+            </Button>
+            {'share' in navigator && <IconButton icon="share" label="Share link" variant="secondary" data-testid="invite-share" onClick={() => share(link, 'Join me on Yurt')} />}
+          </div>
+          <Muted>
+            Whoever opens it asks to join, and an admin lets them in: the link alone doesn’t open the workspace. It {until(mine.exp)}.{' '}
+            <button type="button" data-testid="invite-revoke" onClick={() => app.revokeInvite(code, mine.jk)} style={linkButton}>
+              Revoke it
+            </button>
+          </Muted>
+        </>
+      ) : (
+        <div>
+          <Button variant="primary" iconLeft="link" data-testid="invite-create" onClick={() => app.createInvite(code)}>
+            Create invite link
+          </Button>
         </div>
-        <Button variant="primary" iconLeft="copy" onClick={() => copy(link, 'Link')}>
-          Copy link
-        </Button>
-        {'share' in navigator && <IconButton icon="share" label="Share link" variant="secondary" data-testid="invite-share" onClick={() => share(link, 'Join me on Yurt')} />}
-      </div>
-      <Muted>The link contains the key that decrypts the workspace. Share it privately: anyone with it can read the whole history.</Muted>
+      )}
+      {others.length > 0 && (
+        <div data-testid="invite-others" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+          <Muted>Other open links</Muted>
+          {others.map((i) => (
+            <div key={i.jk} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--fs-body-sm)' }}>
+              <span style={{ flex: 1, minWidth: 0, color: 'var(--text-body)' }}>
+                By {state?.profiles.get(i.by)?.name || fingerprint(i.by)} · {until(i.exp)}
+              </span>
+              <Button size="sm" variant="secondary" data-testid="invite-revoke-other" onClick={() => app.revokeInvite(code, i.jk)}>
+                Revoke
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
+const linkButton: React.CSSProperties = { padding: 0, border: 0, background: 'none', color: 'var(--accent)', font: 'inherit', textDecoration: 'underline', cursor: 'pointer' };
+
+/** Admins: replace the workspace key. Two clicks, since it can't be undone. */
+function RotateKey({ code }: { code: string }) {
+  const app = useApp.getState();
+  const [sure, setSure] = useState(false);
+  const rotate = () => {
+    setSure(false);
+    if (app.rotateKey(code)) app.toast({ tone: 'success', testId: 'rotated', title: 'Workspace key rotated', description: 'Everyone here moved to the new key.' });
+  };
+  return (
+    <>
+      <Muted>
+        Rotating the key moves everyone here to a new one. Old links that carried the key, and anyone who got hold of it, can’t read anything new. Use it after a link or device may
+        have leaked.
+      </Muted>
+      <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+        {sure ? (
+          <>
+            <Button variant="danger" iconLeft="key-round" data-testid="rotate-key-confirm" onClick={rotate}>
+              Rotate the key
+            </Button>
+            <Button variant="ghost" onClick={() => setSure(false)}>
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <Button variant="secondary" iconLeft="key-round" data-testid="rotate-key" onClick={() => setSure(true)}>
+            Rotate key
+          </Button>
+        )}
+      </div>
+    </>
+  );
+}
+
 function GeneralSection() {
-  const { route, state, rec } = useCurrent();
+  const { route, state, rec, identity } = useCurrent();
   const app = useApp.getState();
   const [leaving, setLeaving] = useState(false);
   const code = must(route.code, WS_ONLY);
@@ -538,6 +614,7 @@ function GeneralSection() {
       <Fact k="Workspace id" v={formatCode(code)} />
       <SubHead>Invite</SubHead>
       <InviteBody />
+      {state?.admins.has(identity.pub) && <RotateKey code={code} />}
       <DangerZone>
         <Muted>Leaving makes this device forget the workspace and its history. To come back you need an invite link; history then comes back from the relays.</Muted>
         {leaving ? (

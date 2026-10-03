@@ -28,7 +28,7 @@ Optionally, `yurt-bridge` runs on your machine and brings your own coding agents
     <td width="33%" valign="top"><b>Works while you're away</b><br>End-to-end encrypted on Nostr relays, so messages arrive even when nobody else is online.</td>
   </tr>
   <tr>
-    <td valign="top"><b>Sealed by default</b><br>The invite link carries a 256-bit key; relays see only ciphertext. DMs get their own pairwise key.</td>
+    <td valign="top"><b>Sealed by default</b><br>A 256-bit key seals everything; relays see only ciphertext. Invite links don't carry it: an admin lets people in. DMs get their own pairwise key.</td>
     <td valign="top"><b>Everything a team chat needs</b><br>Channels, DMs, threads, reactions, pins, files up to 25 MB, huddles with video and screen share, plus tasks, polls, meetings, a decision log, and docs and boards everyone (agents too) writes in at once.</td>
     <td valign="top"><b>Installable</b><br>A PWA that opens offline, with touch gestures, haptics and an unread badge on the home-screen icon.</td>
   </tr>
@@ -55,12 +55,12 @@ flowchart LR
 | Messages and history | End-to-end encrypted on Nostr relays; they arrive even when nobody else is online |
 | Files | Encrypted on [Blossom](https://github.com/hzrd149/blossom) file servers (public ones by default, or your own) |
 | Voice, video, screen share | WebRTC between the people in the call, signaled over the workspace's relays. On by default; turn it off in **Settings → Connection** |
-| Invite | A link that carries the workspace key and its relays |
+| Invite | A link to ask to join: an admin lets you in. It carries the workspace's relays, never its key |
 
-Invites are links only: the 8-character code is just an id, and a 256-bit key in the link's `#` fragment is what lets people in. Relays can't read workspaces: every event is sealed with that key, private messages get a second, pairwise key, and sizes and timestamps are blurred. Details and the threat model are in [docs/PROTOCOL.md](docs/PROTOCOL.md#nostr-transport). **Settings** is one window, opened from the gear in the workspace rail (or <kbd>⌘/Ctrl ,</kbd>):
+Invites are links only: the 8-character code is just an id. Whoever opens a link asks to join, and an admin lets them in from the members panel (admins get a toast); only then does the 256-bit workspace key reach them, sealed to them alone. Any member can make a link (it lasts a week); its maker or an admin revokes it. Relays can't read workspaces: every event is sealed with that key, private messages get a second, pairwise key, and sizes and timestamps are blurred. Details and the threat model are in [docs/PROTOCOL.md](docs/PROTOCOL.md#nostr-transport). **Settings** is one window, opened from the gear in the workspace rail (or <kbd>⌘/Ctrl ,</kbd>):
 
 - **You**: profile, identity, preferences, **Connection** (this device only: whether it joins voice and video calls, and TURN for them) and **Agents & bridge**.
-- **The current workspace**: **General** (invite link, leave), **Network** (its relays with live status, and its file servers) and **Agents**. The workspace menu jumps straight into these.
+- **The current workspace**: **General** (invite links, rotating the key for admins, leave), **Network** (its relays with live status, and its file servers) and **Agents**. The workspace menu jumps straight into these.
 
 When you create a workspace, a collapsed *Network settings* row sets its relays and file servers, starting from what you used last (`wss://nos.lol` and the default Blossom servers the first time). Members need a relay in common; invite links carry the workspace's current relays. File servers stay on each device: they're where *your* uploads go, and every file reference names the servers it's on.
 
@@ -109,7 +109,7 @@ Everything here works without the bridge and stays as private as the workspace (
 
 - **Call size.** In a huddle every member connects to every other member over WebRTC. Designed for 2–10 people.
 - **History** lives in IndexedDB, and comes from the relays: a new member fetches the whole encrypted history, even when nobody else is online.
-- **The invite link is the key.** Anyone holding it can join and read the full history, including messages from before they joined. Bans are signed by admins and enforced by every peer: all of a banned key's events are hidden and it's dropped from calls. A ban also rotates the workspace key, so the removed member can't read anything new (they keep what they already had), and old invite links stop letting anyone into new conversations.
+- **An invite link only lets people ask.** Someone an admin lets in gets the full history, including messages from before they joined. Links from older versions carried the workspace key itself and still let whoever holds one in; an admin's **Rotate key** (Settings → General) ends that, and also helps after a device may have leaked the key. Bans are signed by admins and enforced by every peer: all of a banned key's events are hidden and it's dropped from calls. A ban also rotates the workspace key, so the removed member can't read anything new (they keep what they already had).
 - **DMs** are sealed with a key only the two participants can derive (and your own bridge, which shares your key); other members, including later joiners, can't read them.
 - **Files** (≤25 MB) are content-addressed (SHA-256) and sealed with a per-file key on Blossom servers. The defaults are free public servers; set your own per workspace under its **Network** settings, or when you create it.
 - **Huddles** are audio-first per channel, with video for up to 4 people and screen share.
@@ -142,7 +142,7 @@ bun run test         # unit/integration tests (Vitest; local relay, Blossom serv
 bun run e2e          # Playwright against the production build, a local relay and Blossom server
 ```
 
-Open two browser profiles (or one normal + one private window), create a workspace in one and paste its invite link into the other.
+Open two browser profiles (or one normal + one private window), create a workspace in one, paste its invite link into the other, and let the newcomer in from the first one's members panel.
 
 ### Deploy to GitHub Pages
 

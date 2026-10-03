@@ -12,9 +12,10 @@ Version 1. All code in `packages/protocol`.
 - Workspace id: 8 chars from `ABCDEFGHJKMNPQRSTVWXYZ23456789`, shown as `K7QX-2MPD`. It is **not a secret** and can't be used to join.
 - Workspace key `wk`: 32 random bytes made at creation. Every secret below derives from it (see [Keys](#keys)).
 - A workspace's **transport** is its key and its Nostr relays: events are end-to-end encrypted and stored on the relays (see [Nostr transport](#nostr-transport)), files on Blossom servers (see [Files on Blossom](#files-on-blossom)). WebRTC is used only for calls (see [Calls](#calls)).
-- Invites are links only: `…/#/w/<id>/k/<key>/n/<relays>`, optionally followed by `/o/<creator pub>`. `<key>` is `wk` in base64url; `<relays>` is a URI-encoded comma list, or `-` for the defaults (`wss://nos.lol`). Links without a valid key or without `/n/` are refused.
-- `/o/` pins the creator: joiners take the creator from the link instead of trusting the first `ws.create` they see, so a forged or backdated `ws.create` can't make someone else the creator. Links without it fall back to trust on first use.
-- The key lives only in the `#` fragment, which browsers never send to a server. On load the app keeps the invite in memory and removes it from the address bar and history (`history.replaceState`), so it can't end up in synced browser history.
+- Invites are links only: `…/#/w/<id>/j/<jk>/n/<relays>/o/<creator pub>`. `<jk>` is an invite's join key (32 random bytes, base64url), which only lets someone ask to join (see [Joining](#joining)); `<relays>` is a URI-encoded comma list, or `-` for the defaults (`wss://nos.lol`). Links without a valid join key, `/n/` or `/o/` are refused.
+- Older links carry the workspace key itself: `…/#/w/<id>/k/<wk>/n/<relays>`, optionally followed by `/o/<creator pub>`. They are still accepted and let whoever holds one in, with no approval, until an admin rotates the key. The app no longer makes them. A link with both `/k/` and `/j/` is read as this kind.
+- `/o/` pins the creator: joiners take the creator from the link instead of trusting the first `ws.create` they see, so a forged or backdated `ws.create` can't make someone else the creator. It's also how a joiner checks who answered its request. Older links without it fall back to trust on first use.
+- Keys live only in the `#` fragment, which browsers never send to a server. On load the app keeps the invite in memory and removes it from the address bar and history (`history.replaceState`), so it can't end up in synced browser history.
 - Call room (WebRTC via Trystero's Nostr strategy, signaled over the workspace's own relays): `appId = HKDF(wk, "app")`, `roomId = HKDF(wk, "room")`, `password = HKDF(wk, "room-pw")`, with `wk` the current write key. Nothing in the signaling identifies the app or the workspace, and the room can't be found or joined without the key.
 - Handshake (`onPeerHandshake`): each side sends `{pub, sig}` where `sig = sign("yurt-hs:" + code + ":" + selfId + ">" + remotePeerId)`. The receiver verifies against its own ids and rejects banned keys.
 
@@ -46,6 +47,8 @@ Every change is an immutable, signed event:
 | `agent` | `{id, name, handle, runtime, model?, replyIn, respondTo?, postIn?, discoverable?, removed?}` | Declares one of the author's agents. `respondTo {mentions, replies}`: what triggers it. `postIn {thread, channel}`: where it answers (both = a thread reply also in the channel). `discoverable`: other members may DM it. `replyIn` (`'thread'` when `postIn.thread`, else `'channel'`) is kept for older peers, which drop agent events without it; when the newer fields are missing or malformed they are derived from it (mentions on, replies off, not discoverable). |
 | `approve` | `{req, option}` | Owner's answer to an agent permission request (private, `to` = owner). |
 | `rekey` | `{epoch, keys, history}` | Replaces the workspace key (see [Key rotation](#key-rotation)). Counts when its author has ever been made an admin (or is the creator) and isn't banned; the earliest `(ts, id)` wins an epoch. |
+| `invite` | `{jk, on, exp?}` | An invite link's join key. `on: true` makes it (first per `jk` wins; any member); `on: false` revokes it (its maker or an admin). `exp` (ms): requests stop counting after it. The app makes links that last 7 days. |
+| `admit` | `{target, jk?, on}` | An answer to someone's request to join through invite `jk`: let in (`on: true`) or turned away. Counts when its author has ever been made an admin (or is the creator) and isn't banned; the latest per `target` wins. People let in are members for key rotations before they publish a profile. |
 | `task` | `{id, title, ch, src?, assignee?, due?}` | First per id wins; `ch` must be a channel. `assignee` is an actor: `pub`, or `pub/agentId` for an agent. `src` is the message it was made from. |
 | `task.set` | `{id, title?, assignee?, due?, status?, note?}` | Any member or agent. `status` ∈ `open`, `doing`, `blocked`, `done`; `assignee: null` / `due: null` clear them. Every change (and its `note`) is kept as the task's activity. |
 | `vote` | `{target, choices}` | On a `msg` with `poll`. Latest per actor wins; an empty list takes the vote back; one choice unless `poll.multi`. Votes with `ts ≥ poll.closes` don't count. |
@@ -122,11 +125,11 @@ Attachments live on [Blossom](https://github.com/hzrd149/blossom) servers (BUD-0
 
 ### Key rotation
 
-Banning someone also rotates the workspace key, so they can't read anything posted afterwards.
+Banning someone also rotates the workspace key, so they can't read anything posted afterwards. Admins can also rotate it on its own (Settings → General → Rotate key), e.g. to cut off links of the older kind that carry the key, or after a device may have leaked it.
 
 - **Chain.** A workspace's keys form a chain: the invite key, then one key per `rekey`. Each device rebuilds its chain from the key it holds plus the rekeys in its log; nothing else is stored.
 - **Rekey body.** The admin picks a fresh random key `wk'` and publishes `{epoch: n+1, keys, history}`:
-  - `keys[pub] = seal(pair(adminSec, pub; salt = current key), "yurt-rekey-v1", wk')` for every remaining member (`members(state)`: everyone with a profile who isn't banned, plus the admin).
+  - `keys[pub] = seal(pair(adminSec, pub; salt = current key), "yurt-rekey-v1", wk')` for every remaining member (`members(state)`: everyone with a profile or let in by an `admit`, who isn't banned, plus the admin).
   - `history = seal(enc(wk'), "yurt-rekey-history-v1", JSON([{key, epoch}…]))`: every earlier key, so whoever holds `wk'` can read the whole history.
 - **Publishing.** The rekey is sent under the key it replaces, so current members receive it, and under `wk'`, so someone who joins later with an invite carrying `wk'` finds it (and through `history`, every earlier key).
 - **Adopting.** A member opens its entry with the pair key salted by any key it holds, and accepts `wk'` only if `wk'` opens `history`. It then listens on the tags of every key it holds (fetching new tags' history in full) and writes with the key of the highest-epoch valid rekey it can open. Keys from rekeys that don't count are still used for reading, which is harmless.
@@ -134,6 +137,17 @@ Banning someone also rotates the workspace key, so they can't read anything post
 - **Removed.** A member who can't open a valid rekey newer than its write key is locked out (`WorkspacePeer.lockedOut`). The app says so; the fix is a fresh invite link.
 - **WebRTC.** The call room's credentials derive from the write key, so a rotation also moves calls to a room the removed member can't find.
 - **Limits.** Nothing takes back what a removed member already read or downloaded, and relays keep old ciphertext. Unbanning doesn't restore access; send a new invite.
+
+### Joining
+
+An invite link carries a join key `jk`, never the workspace key, so holding a link only lets someone ask. Every lobby secret derives from `jk` the way workspace secrets derive from `wk` ([Keys](#keys)): `enc(jk)`, the lobby tag `tag(jk)`, a person's lobby inbox `inbox(jk, pub)`, and pair keys salted with `jk`. Lobby events are kind `4344`, tagged `y`, sealed and padded like workspace events, backdated by up to 2 h, and signed by one-off keys.
+
+1. **Request.** The joiner posts `seal(enc(jk), JSON({p, n, h?, t, s}))` under `y = tag(jk)`: its key, display name, handle, time (ms) and `s = ed25519("yurt-join:" + code + ":" + tag(jk) + ":" + t + ":" + p + ":" + JSON([n, h ?? ""]))`. It retries every 15 s until a relay takes it; the request then stays on the relays.
+2. **Seeing it.** Admins' devices also listen on the lobby tags of the workspace's open invites (made, not revoked, not expired) and keep the newest valid request per key. A request waits while its invite is open and the person has no profile, isn't banned and has no `admit` at or after the request's time, so someone turned away can ask again.
+3. **Answer.** An admin publishes `admit {target, jk, on}`. Letting someone in also posts a grant under `y = inbox(jk, target)`: `seal(enc(jk), JSON({a: admin, c: seal(pair(adminSec, target; salt = jk), JSON({key, proof?}))}))`, with `key` the admin's current write key. An admin who isn't the creator adds `proof`, the creator's newest signed `role` event making them an admin.
+4. **Taking it.** The joiner listens on its lobby inbox. Anyone with the link can post there, so it takes a key only from the creator pinned by `/o/`, or from an admin whose `proof` is a valid `role` event in this workspace, signed by that creator, promoting them. It then joins with that key like any member and fetches the whole history. A rotation in between is covered: an `admit` makes them a member, so the rekey includes them.
+
+The app remembers pending joins on the device and keeps waiting across reloads until it gets in or the user cancels.
 
 ### Identity backup
 
@@ -152,7 +166,7 @@ replace it. It syncs on start, after importing a phrase, on reconnect, and short
 
 ### Threat model
 
-**A relay operator** sees IP addresses, when events arrive, coarse size buckets, backdated `created_at`, the workspace tag, inbox tags that receive private events, and throwaway pubkeys (one per session, one per private copy). It does **not** see the id or key, names, channels, contents, member identities, or which inboxes talk to each other, beyond what arrival timing suggests.
+**A relay operator** sees IP addresses, when events arrive, coarse size buckets, backdated `created_at`, the workspace tag, inbox tags that receive private events, lobby tags that receive requests and grants, and throwaway pubkeys (one per session, one per private copy, one per lobby event). It does **not** see the id or key, names, channels, contents, member identities, or which inboxes talk to each other, beyond what arrival timing suggests.
 
 **The backup relays** see one padded, encrypted note per identity, updated when its workspace list changes, under a
 pubkey that is in no workspace. Not the identity or its workspaces; the padded size hints only roughly at how many.
@@ -163,10 +177,14 @@ pubkey that is in no workspace. Not the identity or its workspaces; the padded s
 
 **The workspace's relays as signaling, and STUN/TURN servers** (WebRTC, only while a call needs the room) see IP addresses and connection timing. Signaling topics derive from the key and don't identify Yurt. TURN is off by default; the bridge never uses WebRTC. STUN servers (Trystero's defaults) see your IP address whenever a room is joined.
 
+**Anyone holding an invite link** can ask to join, read other requests through that link (names, keys and when they asked) and post junk in its lobby. They can't read the workspace or anyone's grant, and can't let themselves or anyone else in. Revoking the link ends requests through it.
+
 **Members** see everything in the workspace while they're members, and each other's IP addresses while in the same call room. A removed member keeps what it already had, but nothing written after its removal's key rotation. They can tell which inboxes receive private events and, by opening the outer wrapper, who the pair is, but never the contents. DM files only go to the pair.
 
 **Known limits.**
-- Removal is forward-only: a removed member keeps everything from before its ban, and the relays keep the old ciphertext. A member who never published a profile when a rotation happens isn't among the recipients and needs a new invite.
+- Removal is forward-only: a removed member keeps everything from before its ban, and the relays keep the old ciphertext. A member who joined with an older key-carrying link and never published a profile when a rotation happens isn't among the recipients and needs a new invite.
+- Joining needs an admin's device to come online at some point after the request: requests and grants wait on the relays, but nobody can be let in while every admin is away.
+- An admin can hand out the key without the protocol: approval only stops people who merely hold a link.
 - Relays see arrival times and IP addresses; use a VPN or Tor to hide the latter.
 - The kinds `4344`/`24344` are specific to Yurt, so a relay can tell that *some* Yurt workspace uses it, though not which or whose.
 - Relays can drop or withhold events. Use several; clients publish to all of them. Retention is up to each relay's and Blossom server's policy: a file can disappear even though its message remains.

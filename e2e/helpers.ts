@@ -46,13 +46,35 @@ export async function createWorkspace(page: Page, name: string) {
   await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
 }
 
-/** Reads the invite link from the Invite dialog, then closes it with Escape (handled while focus is inside). */
+/**
+ * Reads this member's invite link from the Invite dialog (making one if they have none yet), then closes it with
+ * Escape (handled while focus is inside). The link lets people ask to join; an admin lets them in (see `letIn`).
+ */
 export async function inviteLink(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'Invite people' }).first().click();
-  const link = await page.getByTestId('invite-link').inputValue();
-  await page.getByTestId('invite-link').press('Escape');
+  const field = page.getByTestId('invite-link');
+  await expect(field.or(page.getByTestId('invite-create'))).toBeVisible();
+  if (!(await field.isVisible())) await page.getByTestId('invite-create').click();
+  const link = await field.inputValue();
+  await field.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   return link;
+}
+
+/** `admin` lets `name`, who asked to join, in from the members panel, then closes the panel. */
+export async function letIn(admin: Page, name: string) {
+  await admin.getByRole('button', { name: /^Members/ }).first().click();
+  await admin.getByTestId('join-request').filter({ hasText: name }).getByTestId('join-admit').click({ timeout: 30_000 });
+  await admin.getByRole('button', { name: 'Close (Esc)' }).click();
+}
+
+/** A new person opens `link` in `page`, onboards as `name` and waits; `admin` lets them in, and they land in #general. */
+export async function joinVia(admin: Page, page: Page, link: string, name: string) {
+  await page.goto(link);
+  await onboard(page, name, 'Join workspace');
+  await expect(page.getByTestId('join-pending')).toBeVisible();
+  await letIn(admin, name);
+  await expect(page.getByRole('textbox', { name: 'Message #general' })).toBeVisible({ timeout: 30_000 });
 }
 
 // The rendered DOM of a single-page app, validated as HTML. Overrides only where React/SPA output can't comply:

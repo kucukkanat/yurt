@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { checkPage, createWorkspace, inviteLink, onboard, pointAtLocalRelay } from './helpers';
+import { checkPage, createWorkspace, inviteLink, letIn, onboard, pointAtLocalRelay } from './helpers';
 // Node's WebSocket for the in-process peer below (same polyfill as the protocol tests).
 import '../packages/protocol/test/setup';
 import { memStore } from '../packages/protocol/test/util';
-import { WorkspacePeer, keyFromPhrase, newRecoveryPhrase, parseInvite, guestDmChannel } from '../packages/protocol/src';
+import { WorkspacePeer, JoinClient, keyFromPhrase, newRecoveryPhrase, parseInvite, isJoinInvite, guestDmChannel } from '../packages/protocol/src';
 
 // Olu's agents are announced by a real WorkspacePeer in this process, the way yurt-bridge does it:
 // Harvey is discoverable, Mute is not. Bea, in the browser, should only be able to DM Harvey.
@@ -13,14 +13,17 @@ test('members can find and DM discoverable agents, and are told the owner can re
   await onboard(page, 'Bea');
   await createWorkspace(page, 'Agents');
   const invite = parseInvite(await inviteLink(page));
-  if (!invite) throw new Error('no invite link');
+  if (!invite || !isJoinInvite(invite)) throw new Error('no invite link');
 
+  // Olu asks to join with the link, like the app does, and Bea lets him in.
   const olu = keyFromPhrase(newRecoveryPhrase());
+  const key = new Promise<string>((resolve) => new JoinClient({ invite, kp: olu, who: { name: 'Olu', handle: 'olu' }, onGranted: resolve }));
+  await letIn(page, 'Olu');
   const owner = new WorkspacePeer({
     code: invite.code,
     kp: olu,
-    transport: invite.transport,
-    ...(invite.creator ? { creator: invite.creator } : {}),
+    transport: { key: await key, relays: invite.relays },
+    creator: invite.creator,
     store: memStore().store,
     onError: (m) => {
       throw new Error(m);

@@ -1,6 +1,6 @@
-import type { Ev, FileRef, RekeyBody } from './types';
+import type { AdmitBody, Ev, FileRef, RekeyBody } from './types';
 import { makeEvent, verifyEvent, visibleTo, isEventShape, type EventFields } from './events';
-import { reduce, members, parseRekey, type WsState, type ValidRekey } from './reduce';
+import { reduce, members, parseRekey, inviteOpen, type WsState, type ValidRekey } from './reduce';
 import { buildKeyring, makeRekey, type Keyring } from './rekey';
 import { sign, verify, type KeyPair } from './crypto';
 import { downloadFile } from './blossom';
@@ -10,6 +10,7 @@ import type { DataLink, LinkHost, LinkKeys, LinkTiming, Presence } from './trans
 import { NostrData } from './transports/nostr';
 import { errMsg } from './util';
 import { HandshakeSchema, HuddleStateSchema, parseBody, parseOr, type HuddleState } from './schemas';
+import { openJoinRequest, provesAdmin, sealGrant, type JoinReq } from './join';
 
 export type { Presence } from './transport';
 
@@ -88,6 +89,8 @@ export interface WorkspacePeerOpts {
   onError(msg: string): void;
   /** The key new events are written with changed (a rotation); invite links should use it. */
   onKey?: ((key: string) => void) | undefined;
+  /** Someone asked to join and an admin (me) can answer: see `joinRequests`. */
+  onJoinRequest?: ((r: JoinReq) => void) | undefined;
 }
 
 const hsMsg = (code: string, from: string, to: string) => `yurt-hs:${code}:${from}>${to}`;
@@ -171,6 +174,8 @@ export class WorkspacePeer implements LinkHost {
 
   /** The key chain (see rekey.ts). */
   private ring: Keyring;
+  /** The invites whose lobbies the data link watches, joined: a change resubscribes. */
+  private watching = '';
 
   /** The workspace key to put in invite links: after a rotation, the newest one. */
   get inviteKey(): string {
@@ -204,7 +209,60 @@ export class WorkspacePeer implements LinkHost {
   }
 
   private linkKeys(ring: Keyring): LinkKeys {
-    return { all: [...ring.keys.values()].map((k) => ({ key: k.key, epoch: k.epoch })), write: ring.write.key };
+    return { all: [...ring.keys.values()].map((k) => ({ key: k.key, epoch: k.epoch })), write: ring.write.key, lobby: this.lobby() };
+  }
+
+  /** Admins watch every open invite's lobby for requests to join. */
+  private lobby(): string[] {
+    const s = this.state;
+    const now = Date.now();
+    return s.admins.has(this.me) ? [...s.invites.keys()].filter((jk) => inviteOpen(s, jk, now)) : [];
+  }
+
+  /* ---------- join approval (see join.ts) ---------- */
+
+  /** The newest request per person, as it arrived; `joinRequests` says which still wait. */
+  private requests = new Map<string, JoinReq>();
+
+  joinRequest(jk: string, content: string) {
+    const r = openJoinRequest(this.o.code, jk, content);
+    const have = r && this.requests.get(r.pub);
+    if (!r || (have && have.ts >= r.ts)) return;
+    this.requests.set(r.pub, r);
+    if (this.waiting(r)) this.o.onJoinRequest?.(r);
+    this.o.onPeers?.();
+  }
+
+  /** Whether a request still needs an answer: its invite is open, and they aren't in, banned or answered since. */
+  private waiting(r: JoinReq): boolean {
+    const s = this.state;
+    const answered = s.admits.get(r.pub);
+    return inviteOpen(s, r.jk, Date.now()) && !s.profiles.has(r.pub) && !s.bans.has(r.pub) && !(answered && answered.ts >= r.ts);
+  }
+
+  /** Requests to join that wait for an admin, oldest first. */
+  get joinRequests(): JoinReq[] {
+    return [...this.requests.values()].filter((r) => this.waiting(r)).sort((x, y) => x.ts - y.ts);
+  }
+
+  /**
+   * Answers a request to join. Letting someone in records it (so other admins see it's handled, and key rotations
+   * include them) and hands them the current key, sealed to them in the invite's lobby. Admins only.
+   */
+  admit(pub: string, on: boolean): Ev<AdmitBody> {
+    const r = this.requests.get(pub);
+    if (!this.state.admins.has(this.me)) throw new Error('Only admins can let people in.');
+    if (!r) throw new Error('They haven’t asked to join.');
+    const e = this.publish<AdmitBody>({ t: 'admit', b: { target: pub, jk: r.jk, on } });
+    /* v8 ignore next -- requests only arrive through the data link, so it's there while one is answered */
+    if (on) this.data?.grant(r.jk, pub, sealGrant(this.o.kp, r.jk, pub, this.inviteKey, this.adminProof()));
+    return e;
+  }
+
+  /** For an admin who isn't the creator: the creator's newest signed event making me one, which joiners check. */
+  private adminProof(): Ev | undefined {
+    const { creator } = this.state;
+    return [...this.events.values()].filter((e) => provesAdmin(this.o.code, creator, this.me, e)).sort((x, y) => y.ts - x.ts)[0];
   }
 
   /** The key chain from the invite key and every rekey in the log (see rekey.ts). */
@@ -217,7 +275,10 @@ export class WorkspacePeer implements LinkHost {
     const before = this.ring;
     const ring = this.ringFor(this.transport);
     this.ring = ring;
-    if (before.write.key === ring.write.key && before.keys.size === ring.keys.size) return;
+    const lobby = this.lobby().join();
+    const lobbyChanged = lobby !== this.watching;
+    this.watching = lobby;
+    if (before.write.key === ring.write.key && before.keys.size === ring.keys.size && !lobbyChanged) return;
     this.data?.setKeys(this.linkKeys(ring));
     if (before.write.key !== ring.write.key) {
       // The WebRTC room's credentials derive from the write key; rejoin on the new one when needed.

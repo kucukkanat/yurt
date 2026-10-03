@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { checkPage, createWorkspace, inviteLink, onboard, pointAtLocalRelay } from './helpers';
+import { checkPage, createWorkspace, inviteLink, joinVia, onboard, pointAtLocalRelay } from './helpers';
 
 test('two members create, join, get history and chat', async ({ browser }) => {
   const a = await (await browser.newContext()).newPage();
@@ -9,16 +9,15 @@ test('two members create, join, get history and chat', async ({ browser }) => {
   await onboard(a, 'Ada', 'Start chatting');
   await createWorkspace(a, 'E2E');
   const link = await inviteLink(a);
-  // The link carries the key that lets people in, the workspace's relays, and /o/ to pin the creator.
-  expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/k\/[A-Za-z0-9_-]{43}\/n\/ws%3A%2F%2F127\.0\.0\.1%3A7777\/o\/[0-9a-f]{64}$/);
+  // The link carries a join key (never the workspace key), the workspace's relays, and /o/ to pin the creator.
+  expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/j\/[A-Za-z0-9_-]{43}\/n\/ws%3A%2F%2F127\.0\.0\.1%3A7777\/o\/[0-9a-f]{64}$/);
 
   // Written before anyone else is here: must arrive from the relay's history.
   const composerA = a.getByRole('textbox', { name: 'Message #general' });
   await composerA.fill('first, before you joined');
   await composerA.press('Enter');
 
-  await b.goto(link);
-  await onboard(b, 'Bo', 'Join workspace');
+  await joinVia(a, b, link, 'Bo');
   await expect(b.getByText('first, before you joined')).toBeVisible();
 
   await composerA.fill('hello from ada');

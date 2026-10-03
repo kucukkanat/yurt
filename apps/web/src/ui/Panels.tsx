@@ -63,7 +63,7 @@ export function RightPanel({ narrow }: { narrow: boolean }) {
         <IconButton icon="x" label="Close (Esc)" size="sm" onClick={close} />
       </header>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        {panel.type === 'members' && <Members />}
+        {panel.type === 'members' && <Members code={code} />}
         {panel.type === 'profile' && panel.id && <Profile id={panel.id} code={code} />}
         {panel.type === 'thread' && panel.id && <Thread id={panel.id} code={code} ch={must(route.ch, 'A thread route names its channel')} />}
         {panel.type === 'pinned' && <Pinned code={code} />}
@@ -83,7 +83,36 @@ function memberMeta(p: Person): string | undefined {
   return p.focus ? [role, 'Focusing'].filter(Boolean).join(' · ') : role;
 }
 
-function Members() {
+/** Admins: people who asked to join through an invite link, to let in or turn away. */
+function JoinRequests({ code }: { code: string }) {
+  const { state, peer, identity } = useCurrent();
+  const asking = state?.admins.has(identity.pub) ? (peer?.joinRequests ?? []) : [];
+  if (!asking.length) return null;
+  const app = useApp.getState();
+  return (
+    <div data-testid="join-requests" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '4px 10px 0' }}>
+      <div style={{ padding: '4px 0', fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>
+        Asking to join · {asking.length}
+      </div>
+      {asking.map((r) => (
+        <div key={r.pub} data-testid="join-request" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ flex: 1, minWidth: 120, fontSize: 13.5, color: 'var(--text-body)' }}>
+            {r.name}
+            <span style={{ marginLeft: 6, font: '400 12px var(--font-mono)', color: 'var(--text-subtle)' }}>{fingerprint(r.pub)}</span>
+          </span>
+          <Button size="sm" variant="primary" data-testid="join-admit" onClick={() => app.admit(code, r.pub, true)}>
+            Let in
+          </Button>
+          <Button size="sm" variant="ghost" data-testid="join-decline" onClick={() => app.admit(code, r.pub, false)}>
+            Turn away
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Members({ code }: { code: string }) {
   const { state, peer, identity } = useCurrent();
   const people = roster(state, peer, identity.pub);
   const open = (p: Person) => useApp.getState().setPanel({ type: 'profile', id: p.id });
@@ -100,6 +129,7 @@ function Members() {
     );
   return (
     <div style={{ overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <JoinRequests code={code} />
       {group(
         'People',
         people.filter((p) => p.kind === 'human'),
@@ -242,7 +272,7 @@ function Moderation({ p, code }: { p: Person; code: string }) {
       app.toast({
         tone: 'success',
         title: p.name + ' was removed',
-        description: 'The workspace key was rotated: they can’t read anything new, and old invite links no longer work.',
+        description: 'The workspace key was rotated: they can’t read anything new.',
       });
     } catch (err) {
       app.toast({ tone: 'danger', title: 'Banned, but the key wasn’t rotated', description: messageOf(err), duration: 10_000 });
@@ -278,7 +308,7 @@ function Moderation({ p, code }: { p: Person; code: string }) {
         {banButton}
         {confirmBan && (
           <span data-testid="ban-warning" style={{ flexBasis: '100%', fontSize: 12.5, color: 'var(--text-subtle)' }}>
-            They keep what they’ve already read. Everyone else moves to a new key; old invite links stop working.
+            They keep what they’ve already read. Everyone else moves to a new key.
           </span>
         )}
       </div>

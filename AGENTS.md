@@ -8,7 +8,7 @@ Yurt is a serverless, end-to-end encrypted team chat with optional AI agents. A 
 
 | Path | Package | What |
 |---|---|---|
-| `packages/protocol` | `@yurt/protocol` | Events, reducer, collaboration (tasks, polls, Yjs docs and boards: `collab.ts`), crypto, invites, the encrypted Nostr relay transport, Blossom files, WebRTC call rooms (Trystero), Valibot schemas |
+| `packages/protocol` | `@yurt/protocol` | Events, reducer, collaboration (tasks, polls, Yjs docs and boards: `collab.ts`), crypto, invites and join approval (`join.ts`), the encrypted Nostr relay transport, Blossom files, WebRTC call rooms (Trystero), Valibot schemas |
 | `packages/bridge` | `yurt-bridge` | Local CLI: runs agent CLIs over ACP, gives them Yurt tools over MCP (`mcp.ts`), headless workspace peer, its own setup UI (`ui/src`) |
 | `packages/ui` | `@yurt/ui` | Design system: JSX components + `.d.ts` types, tokens |
 | `apps/web` | `@yurt/web` | The React app (Vite, zustand), deployed to GitHub Pages |
@@ -78,6 +78,10 @@ Pages once the build and tests pass. Shared setup (Bun, Node, cached Chromium) i
 - Commit or push only when asked. Pushing `main` deploys the web app.
 
 ## Gotchas
+
+- Invite links carry a join key, never the workspace key: opening one only asks to join, and an admin lets the person in
+  (`join.ts`, `WorkspacePeer.admit`). Old `/k/` links that carry the key still parse and join directly; don't make new ones.
+  E2E joins go through `joinVia` / `letIn` in `e2e/helpers.ts`; protocol tests can still hand a peer the key.
 
 - Node needs the browser-like `ws` WebSocket: `import '@yurt/protocol/node-ws'` (the bridge and tests already do).
 - Old peers drop `agent` events without `replyIn`; keep sending it alongside `respondTo`/`postIn`.

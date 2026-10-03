@@ -34,6 +34,20 @@ export interface ValidRekey {
   keys: Record<string, string>;
   history: string;
 }
+/** An invite link's join key and who made it. `off` once revoked; `exp` (ms): requests after it don't count. */
+export interface Invitation {
+  jk: string;
+  by: string;
+  ts: number;
+  exp?: number | undefined;
+  off: boolean;
+}
+/** An admin's answer to someone asking to join: let in (`on`) or turned away. The latest answer per person wins. */
+export interface Admission {
+  by: string;
+  ts: number;
+  on: boolean;
+}
 export interface Channel {
   id: string;
   name: string;
@@ -127,6 +141,10 @@ export interface WsState {
   pins: Map<string, Set<string>>;
   approvals: Map<string, string>; // req → optionId
   rekeys: ValidRekey[]; // chronological
+  /** Invite links by join key. */
+  invites: Map<string, Invitation>;
+  /** People admins let in or turned away, by key. */
+  admits: Map<string, Admission>;
   tasks: Map<string, Task>;
   votes: Map<string, Map<Actor, number[]>>; // poll message → voter → choices
   rsvps: Map<string, Map<Actor, 'yes' | 'no' | 'maybe'>>; // meeting message → answer
@@ -158,6 +176,8 @@ export function emptyState(ws: string): WsState {
     pins: new Map(),
     approvals: new Map(),
     rekeys: [],
+    invites: new Map(),
+    admits: new Map(),
     tasks: new Map(),
     votes: new Map(),
     rsvps: new Map(),
@@ -221,8 +241,14 @@ export function reduce(ws: string, events: Ev[], opts: { creator?: string | null
         const r = parseRekey(e);
         if (r && everAdmins.has(e.a)) s.rekeys.push(r);
       });
+    // Like rekeys, an admission stays when its admin is later demoted: the person already holds the key.
+    else if (e.t === 'admit')
+      guarded(() => {
+        const b = parseBody('admit', e.b);
+        if (b && everAdmins.has(e.a)) s.admits.set(b.target, { by: e.a, ts: e.ts, on: b.on });
+      });
     else {
-      const t = e.t; // narrowed: role, ban, approve and rekey are handled above
+      const t = e.t; // narrowed: role, ban, approve, rekey and admit are handled above
       guarded(() => applyAs(s, e, t));
     }
   }
@@ -290,7 +316,7 @@ type Deferred = (typeof DEFERRED)[number];
 const isDeferred = (t: EvType): t is Deferred => (DEFERRED as readonly EvType[]).includes(t);
 
 // One handler per event type that changes state directly, given its body checked against the type's schema.
-type Applied = Exclude<EvType, 'role' | 'ban' | 'approve' | 'rekey'>;
+type Applied = Exclude<EvType, 'role' | 'ban' | 'approve' | 'rekey' | 'admit'>;
 type Handlers = { [T in Applied]: (s: WsState, e: Ev, b: ParsedBody<T>) => void };
 
 const APPLY: Handlers = {
@@ -299,6 +325,12 @@ const APPLY: Handlers = {
   },
   profile: (s, e, b) => {
     if (!e.ag) s.profiles.set(e.a, { name: b.name.slice(0, 64), handle: (b.handle ?? '').slice(0, 32), ts: e.ts });
+  },
+  // Anyone in the workspace may make an invite link: it only lets people ask. Its maker or an admin revokes it.
+  invite: (s, e, b) => {
+    const have = s.invites.get(b.jk);
+    if (!have && b.on) s.invites.set(b.jk, { jk: b.jk, by: e.a, ts: e.ts, exp: b.exp, off: false });
+    else if (have && !b.on && (have.by === e.a || s.admins.has(e.a))) have.off = true;
   },
   'ch.create': (s, e, b) => {
     if (!isPrivateChannel(b.id) && !s.channels.has(b.id)) s.channels.set(b.id, { id: b.id, name: b.name.slice(0, 60), topic: b.topic ?? '', ts: e.ts, a: e.a });
@@ -526,9 +558,16 @@ function applyAs<T extends Applied>(s: WsState, e: Ev, t: T) {
   if (b) APPLY[t](s, e, b);
 }
 
-/** People who have introduced themselves and aren't banned. */
+/** People who have introduced themselves or were let in, and aren't banned: who a key rotation hands the new key to. */
 export function members(s: WsState): string[] {
-  return [...s.profiles.keys()].filter((k) => !s.bans.has(k));
+  const admitted = [...s.admits].flatMap(([k, a]) => (a.on ? [k] : []));
+  return [...new Set([...s.profiles.keys(), ...admitted])].filter((k) => !s.bans.has(k));
+}
+
+/** An invite link that still takes requests at `now` (ms): made, not revoked, not expired. */
+export function inviteOpen(s: WsState, jk: string, now: number): boolean {
+  const i = s.invites.get(jk);
+  return !!i && !i.off && (i.exp === undefined || now < i.exp);
 }
 
 export function liveAgents(s: WsState): Agent[] {

@@ -33,7 +33,7 @@ describe('side panels', () => {
     await expect.element(p.getByText('Yours · working')).toBeVisible();
     await expect.element(p.getByText('Bo’s · machine off')).toBeVisible();
     await p.getByRole('button', { name: 'Invite people' }).click();
-    await expect.element(page.getByTestId('invite-link')).toBeVisible();
+    await expect.element(page.getByTestId('invite-link').or(page.getByTestId('invite-create'))).toBeVisible();
     await userEvent.keyboard('{Escape}');
     await members().click(); // toggles the panel closed
     await expect.element(p).not.toBeInTheDocument();

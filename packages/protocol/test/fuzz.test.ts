@@ -31,7 +31,7 @@ import {
   KeyHistorySchema,
   type Ev,
   type WsState,
-  type Invite,
+  type KeyInvite,
 } from '../src';
 
 // Property tests: every run checks the same inputs (fixed seed), so a failure reproduces exactly.
@@ -171,7 +171,7 @@ describe('wire formats, fuzzed', () => {
       fc.webUrl().map((u) => u.replace(/^https?/, 'wss')),
       { minLength: 1, maxLength: 3 },
     );
-    const invite: fc.Arbitrary<Invite> = fc.record({
+    const invite: fc.Arbitrary<KeyInvite> = fc.record({
       code,
       transport: fc.record({ key: fc.constant(newWorkspaceKey()), relays: relays.map((r) => [...new Set(r)]) }),
     });

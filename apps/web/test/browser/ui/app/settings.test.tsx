@@ -152,6 +152,7 @@ describe('Settings', () => {
 
   it('shows the workspace: name, invite, and a two-step leave', async () => {
     await open('ws-general');
+    await page.getByTestId('invite-create').click();
     await expect.element(page.getByTestId('invite-link')).toBeVisible();
     // Where the browser has a share sheet, the link can go straight to it. (Not pressed here: opening the system sheet
     // brings headless Chromium down on macOS.)

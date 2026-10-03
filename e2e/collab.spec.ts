@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { checkPage, createWorkspace, inviteLink, onboard, pointAtLocalRelay } from './helpers';
+import { checkPage, createWorkspace, inviteLink, joinVia, onboard, pointAtLocalRelay } from './helpers';
 
 // Collaboration between two people: tasks, polls, a shared doc and a board, as users do it.
 
@@ -10,9 +10,7 @@ async function twoMembers(browser: import('@playwright/test').Browser): Promise<
   await createWorkspace(a, 'Collab');
   const link = await inviteLink(a);
   const b = await (await browser.newContext()).newPage();
-  await b.goto(link);
-  await onboard(b, 'Bo', 'Join workspace');
-  await expect(b.getByRole('textbox', { name: 'Message #general' })).toBeVisible();
+  await joinVia(a, b, link, 'Bo');
   return [a, b];
 }
 

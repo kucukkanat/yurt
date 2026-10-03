@@ -32,6 +32,8 @@ export interface LinkHost {
   isBanned(pub: string): boolean;
   /** Untrusted input: the host validates every event before accepting it. */
   receive(evs: unknown): void;
+  /** A lobby event under invite `jk` (see join.ts): maybe a request to join. Untrusted. */
+  joinRequest(jk: string, content: string): void;
   /** These events reached someone else and no longer need "sends when you reconnect". */
   delivered(ids: readonly string[]): void;
   /** Presence or link connectivity changed. */
@@ -39,10 +41,11 @@ export interface LinkHost {
   error(msg: string): void;
 }
 
-/** Every workspace key a member holds (epoch null = not yet known), and the one new events use. */
+/** Every workspace key a member holds (epoch null = not yet known), the one new events use, and the invites to watch for requests. */
 export interface LinkKeys {
   readonly all: readonly { key: string; epoch: number | null }[];
   readonly write: string;
+  readonly lobby: readonly string[];
 }
 
 /** Carries events and presence for a workspace: encrypted on its Nostr relays (see transports/nostr.ts). */
@@ -55,7 +58,9 @@ export interface DataLink {
   setPresence(p: Presence): void;
   /** Each configured relay → connected. */
   relayStatus(): ReadonlyMap<string, boolean>;
-  /** The workspace keys changed (a rotation). Read with all of them, write with `write`. */
+  /** The workspace keys changed (a rotation), or the invites to watch did. Read with all of them, write with `write`. */
   setKeys(keys: LinkKeys): void;
+  /** Sends an admitted joiner their sealed grant (see join.ts). */
+  grant(jk: string, to: string, content: string): void;
   leave(): void;
 }

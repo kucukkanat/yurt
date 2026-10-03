@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { checkPage, createWorkspace, inviteLink, onboard, pointAtLocalRelay, RELAY, BLOSSOM } from './helpers';
+import { checkPage, createWorkspace, inviteLink, joinVia, onboard, pointAtLocalRelay, RELAY, BLOSSOM } from './helpers';
 
 test('relay workspace keeps encrypted history for members who join after everyone left', async ({ browser }) => {
   const actx = await browser.newContext();
@@ -9,9 +9,9 @@ test('relay workspace keeps encrypted history for members who join after everyon
   await createWorkspace(a, 'Relay');
   await a.getByRole('button', { name: 'Invite people' }).first().click();
   await expect(a.getByRole('button', { name: 'Copy code' })).toHaveCount(0); // relay invites are link-only
-  await a.getByTestId('invite-link').press('Escape');
+  await a.getByTestId('invite-create').press('Escape');
   const link = await inviteLink(a);
-  expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/k\/[A-Za-z0-9_-]{43}\/n\//);
+  expect(link).toMatch(/#\/w\/[A-Z0-9]{8}\/j\/[A-Za-z0-9_-]{43}\/n\//);
 
   // Calls are on by default (WebRTC is used for nothing else).
   await expect(a.getByTestId('huddle-button')).toBeEnabled();
@@ -22,17 +22,17 @@ test('relay workspace keeps encrypted history for members who join after everyon
   await composer.press('Enter');
   await expect(a.getByText('kept on the relay')).toBeVisible();
   await expect(a.getByText('Sends when you reconnect')).toHaveCount(0, { timeout: 15_000 });
-  await actx.close(); // nobody from the workspace is online any more
 
+  // Bo asks to join with the link; Ada lets him in, then leaves.
   const b = await (await browser.newContext()).newPage();
-  await b.goto(link);
-  await onboard(b, 'Bo', 'Join workspace');
+  await joinVia(a, b, link, 'Bo');
+  await actx.close(); // nobody from the workspace is online any more
   await expect(b.getByText('kept on the relay')).toBeVisible({ timeout: 30_000 });
   // The attachment comes from Blossom, decrypted in the browser: nobody who has it is online.
   const download = b.getByRole('link', { name: 'Download notes.txt' });
   await expect(download).toBeVisible({ timeout: 30_000 });
   expect(await download.evaluate((a: HTMLAnchorElement) => fetch(a.href).then((r) => r.text()))).toBe('file kept on blossom');
-  await expect(b).not.toHaveURL(/\/k\//); // the key doesn't linger in the address bar
+  await expect(b).not.toHaveURL(/\/j\//); // the join key doesn't linger in the address bar
 });
 
 test('the calls switch turns WebRTC off and on for this device', async ({ browser }) => {
@@ -61,6 +61,58 @@ test('bare codes and keyless links are refused', async ({ browser }) => {
   await onboard(page, 'Cy', 'Join workspace');
   await expect(page.getByText('This link can’t be joined')).toBeVisible();
   await expect(page).not.toHaveURL(/K7QX2MPD/);
+});
+
+test('an invite link only lets people ask: admins let them in or turn them away, revoke links and rotate the key', async ({ browser }) => {
+  const a = await (await browser.newContext()).newPage();
+  await pointAtLocalRelay(a);
+  await onboard(a, 'Ada', 'Start chatting');
+  await createWorkspace(a, 'Door');
+  const link = await inviteLink(a);
+
+  // Cy asks, Ada is told, and turns Cy away: Cy stays outside until giving up.
+  const c = await (await browser.newContext()).newPage();
+  await c.goto(link);
+  await onboard(c, 'Cy', 'Join workspace');
+  await expect(c.getByTestId('join-pending')).toBeVisible();
+  await checkPage(c, 'home › waiting to be let in');
+  await a.getByTestId('join-toast').getByRole('button', { name: 'Review' }).click({ timeout: 30_000 });
+  await expect(a.getByTestId('join-request')).toContainText('Cy');
+  await checkPage(a, 'members › someone asks to join');
+  await a.getByTestId('join-decline').click();
+  await expect(a.getByTestId('join-requests')).toHaveCount(0);
+  await expect(c.getByTestId('join-pending')).toBeVisible();
+  await c.getByTestId('join-cancel').click();
+  await expect(c.getByTestId('join-pending')).toHaveCount(0);
+
+  // A revoked link takes no more requests.
+  await a.getByRole('button', { name: 'Invite people' }).first().click();
+  await a.getByTestId('invite-revoke').click();
+  await expect(a.getByTestId('invite-create')).toBeVisible();
+  await a.getByTestId('invite-create').press('Escape');
+  const d = await (await browser.newContext()).newPage();
+  await d.goto(link);
+  await onboard(d, 'Di', 'Join workspace');
+  await expect(d.getByTestId('join-pending')).toBeVisible();
+  await d.waitForTimeout(2000); // time for a request to arrive, if one were taken
+  await expect(a.getByTestId('join-request')).toHaveCount(0);
+
+  // A new link works. Then Ada rotates the key, and Ed, now in, follows it.
+  const fresh = await inviteLink(a);
+  expect(fresh).not.toBe(link);
+  const e = await (await browser.newContext()).newPage();
+  await joinVia(a, e, fresh, 'Ed');
+  await a.getByTestId('ws-menu-button').click();
+  await a.getByTestId('menu-settings').click();
+  await a.getByTestId('rotate-key').click();
+  await checkPage(a, 'workspace settings › rotate key confirmation');
+  await a.getByTestId('rotate-key-confirm').click();
+  await expect(a.getByTestId('rotated')).toBeVisible();
+  await a.getByTestId('settings-section-ws-general').press('Escape');
+  const composer = a.getByRole('textbox', { name: 'Message #general' });
+  await composer.fill('after the rotation');
+  await composer.press('Enter');
+  await expect(e.getByText('after the rotation')).toBeVisible({ timeout: 30_000 });
 });
 
 async function relayWorkspace(page: Page, who: string) {
@@ -106,7 +158,9 @@ test('inside a workspace, Settings adds its own group, and the workspace menu ju
   await page.getByTestId('ws-menu-button').click();
   await page.getByTestId('menu-settings').click();
   await expect(page.getByTestId('settings-section-ws-general')).toBeVisible();
-  await expect(page.getByTestId('invite-link')).toHaveValue(/\/k\//);
+  await page.getByTestId('invite-create').click();
+  await expect(page.getByTestId('invite-link')).toHaveValue(/\/j\//);
+  await expect(page.getByTestId('rotate-key')).toBeVisible(); // the creator is an admin
   await page.getByTestId('settings-nav-ws-network').click();
   await expect(page.getByTestId('connection-relays')).toBeVisible();
   await expect(page.getByTestId('turn-fields')).toHaveCount(0); // device settings live under "you"
@@ -166,9 +220,7 @@ test('a relay workspace’s network settings show live relay status and edit rel
   await checkPage(page, 'network settings › live relay status');
   await page.getByTestId('connection-relays').press('Escape');
 
-  await page.getByRole('button', { name: 'Invite people' }).first().click();
-  expect(decodeURIComponent(await page.getByTestId('invite-link').inputValue())).toContain(dead);
-  await page.getByTestId('invite-link').press('Escape');
+  expect(decodeURIComponent(await inviteLink(page))).toContain(dead);
   // Still connected after the reconnect: a message goes out through the live relay.
   const composer = page.getByRole('textbox', { name: 'Message #general' });
   await composer.fill('after the relay change');
@@ -211,14 +263,11 @@ test('a failed upload keeps the text and the attachment in the composer', async 
 test('banning in a relay workspace rotates the key: the removed member gets nothing new', async ({ browser }) => {
   const a = await (await browser.newContext()).newPage();
   await relayWorkspace(a, 'Ada');
-  await a.getByRole('button', { name: 'Invite people' }).first().click();
-  const oldLink = await a.getByTestId('invite-link').inputValue();
-  await a.getByTestId('invite-link').press('Escape');
+  const link = await inviteLink(a);
 
   const join = async (name: string) => {
     const p = await (await browser.newContext()).newPage();
-    await p.goto(oldLink);
-    await onboard(p, name, 'Join workspace');
+    await joinVia(a, p, link, name);
     return p;
   };
   const b = await join('Bo');
@@ -244,11 +293,6 @@ test('banning in a relay workspace rotates the key: the removed member gets noth
   await expect(c.getByTestId('removed-banner')).toBeVisible({ timeout: 30_000 });
   await expect(c.getByText('after the ban')).toHaveCount(0);
   await checkPage(c, 'removed member banner');
-
-  // New invites carry the new key; the old link no longer gets anyone into new conversations.
-  await a.getByRole('button', { name: 'Invite people' }).first().click();
-  const newLink = await a.getByTestId('invite-link').inputValue();
-  expect(newLink.match(/\/k\/([^/]+)/)?.[1]).not.toBe(oldLink.match(/\/k\/([^/]+)/)?.[1]);
 });
 
 test('edit window: the Edit action counts down, then explains instead of doing nothing', async ({ browser }) => {
@@ -286,13 +330,8 @@ test('the tab icon shows unread messages on top of whatever favicon is set, and 
   // Wait until nothing is decorated (relays connected, nothing unread): that's the page's own icon.
   await expect.poll(icon, { timeout: 30_000 }).toMatch(/favicon\.ico$/);
   const original = await icon();
-  await a.getByRole('button', { name: 'Invite people' }).first().click();
-  const link = await a.getByTestId('invite-link').inputValue();
-  await a.getByTestId('invite-link').press('Escape');
   const b = await (await browser.newContext()).newPage();
-  await b.goto(link);
-  await onboard(b, 'Jo', 'Join workspace');
-  await expect(b.getByRole('textbox', { name: 'Message #general' })).toBeVisible({ timeout: 30_000 });
+  await joinVia(a, b, await inviteLink(a), 'Jo');
 
   // Ida looks at another channel while Jo writes in #general.
   await a.getByRole('button', { name: 'New channel' }).click();
@@ -343,9 +382,7 @@ test('the create step sets the new workspace’s own network settings', async ({
   await page.getByTestId('create-relays').fill(`${RELAY}, ws://127.0.0.1:7779`);
   await page.getByRole('button', { name: 'Create workspace' }).click();
   await expect(page).toHaveURL(/#\/w\/[A-Z0-9]{8}\/c\/general/);
-  await page.getByRole('button', { name: 'Invite people' }).first().click();
-  expect(decodeURIComponent(await page.getByTestId('invite-link').inputValue())).toContain(`/n/${RELAY},ws://127.0.0.1:7779`);
-  await page.getByTestId('invite-link').press('Escape');
+  expect(decodeURIComponent(await inviteLink(page))).toContain(`/n/${RELAY},ws://127.0.0.1:7779`);
   await openConnection(page);
   await expect(page.getByTestId('connection-relays')).toHaveValue(`${RELAY}, ws://127.0.0.1:7779`);
   await expect(page.getByTestId('connection-blossom')).toHaveValue(BLOSSOM);
